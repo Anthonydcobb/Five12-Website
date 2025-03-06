@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>🎚 {{ patch.name }}</h1>
+    <button id="addFixtureBtn" class="btn btn-primary">➕ Add Fixture</button>
+
+    <table id="patchTable" class="table table-bordered mt-3" data-patch-id="{{ patch.id }}">
+        <thead>
+            <tr>
+                <th>Set</th>
+                <th>Fix #</th>
+                <th>Uni</th>
+                <th>Add</th>
+                <th>Fix Type</th>
+                <th>Ch. Count</th>
+                <th>Location</th>
+                <th>Wattage</th>
+                <th>Weight</th>
+                <th>Firmware</th>
+            </tr>
+        </thead>
+        <tbody>
+        </tbody>
+    </table>
+</div>
+
+<!-- ✅ Fixture Modal -->
+<div class="modal fade" id="fixtureModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">➕ Add Fixture</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="fixtureSearch" class="form-control" placeholder="🔍 Search for a fixture...">
+                <ul id="fixtureList" class="list-group mt-3"></ul>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button id="addFixtureConfirm" class="btn btn-primary">Add Fixture</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/patch.js') }}"></script>
+{% endblock %}

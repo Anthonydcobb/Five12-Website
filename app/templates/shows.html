@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>Shows</h1>
+
+    <!-- ✅ "Edit Fixtures Database" Button -->
+    <button class="btn btn-secondary mb-3" onclick="window.location.href=`{{ url_for('main.edit_fixtures') }}`;">
+        🛠 Edit Fixtures Database
+    </button>
+
+    <!-- ✅ "Start New Show" Button -->
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newShowModal">
+        ➕ Start New Show
+    </button>
+
+    <ul class="list-group mt-3">
+        {% for show in shows %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <a href="{{ url_for('main.show_detail', show_id=show.id) }}">{{ show.name }}</a>
+            <div>
+                <!-- ✅ Edit Button -->
+                <button class="btn btn-warning btn-sm" onclick="editShow('{{ show.id }}', '{{ show.name }}')">✏ Edit</button>
+                
+                <!-- ✅ Delete Button -->
+                <button class="btn btn-danger btn-sm" onclick="deleteShow('{{ show.id }}')">🗑 Delete</button>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- New Show Modal -->
+<div class="modal fade" id="newShowModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create New Show</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form method="POST" action="{{ url_for('main.create_show') }}">
+                    <input type="text" name="show_name" class="form-control" placeholder="Show Name" required>
+                    <button type="submit" class="btn btn-success mt-2">Create</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ✅ Edit Show Modal -->
+<div class="modal fade" id="editShowModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Show</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editShowForm">
+                    <input type="hidden" id="editShowId">
+                    <input type="text" id="editShowName" class="form-control" required>
+                    <button type="submit" class="btn btn-warning mt-2">Save</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<script src="{{ url_for('static', filename='js/shows.js') }}"></script>
+
+{% endblock %}

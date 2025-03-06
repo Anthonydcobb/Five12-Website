@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>{{ show.name }}</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newPatchModal">➕ New Patch</button>
+
+    <ul class="list-group mt-3">
+        {% for patch in patches %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+            <!-- Clicking this takes you to the patch page -->
+            <a href="{{ url_for('main.edit_patch', patch_id=patch.id) }}" class="patch-link">
+                {{ patch.name }}
+            </a>
+            
+            <!-- Clicking this opens the edit modal -->
+            <button class="btn btn-sm btn-warning" onclick="editPatch('{{ patch.id }}', '{{ patch.name }}')">✏️ Edit</button>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+
+<!-- New Patch Modal -->
+<div class="modal fade" id="newPatchModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Create a New Patch</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="newPatchForm" data-show-id="{{ show.id }}">
+                    <div class="mb-3">
+                        <label for="newPatchName" class="form-label">Patch Name</label>
+                        <input type="text" class="form-control" id="newPatchName" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Patch</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Patch Modal -->
+<div class="modal fade" id="editPatchModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Patch</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editPatchForm">
+                    <input type="hidden" id="editPatchId">
+                    <div class="mb-3">
+                        <label for="editPatchName" class="form-label">Patch Name</label>
+                        <input type="text" class="form-control" id="editPatchName" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Save Changes</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ensure JavaScript is linked properly -->
+<script src="{{ url_for('static', filename='js/show_detail.js') }}"></script>
+
+{% endblock %}

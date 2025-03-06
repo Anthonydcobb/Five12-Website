@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container text-center mt-5">
+    <img src="{{ url_for('static', filename='F12L logo 1.png') }}" alt="Company Logo" class="img-fluid" style="max-width: 200px;">
+    
+    <h1 class="mt-4">
+        Welcome {% if current_user.is_authenticated %}{{ current_user.full_name }}{% else %}Guest{% endif %}
+    </h1>
+    <p>Your trusted partner for lighting and IT solutions.</p>
+
+    <div class="mt-4">
+        {% if current_user.is_authenticated %}
+            <a href="{{ url_for('main.logout') }}" class="btn btn-danger">Logout</a>
+            <a href="{{ url_for('main.shows') }}" class="btn btn-warning">Patch</a>
+            <a href="{{ url_for('main.inventory') }}" class="btn btn-info">Inventory</a>
+        {% else %}
+            <a href="{{ url_for('main.login') }}" class="btn btn-primary">Login</a>
+            <a href="{{ url_for('main.register') }}" class="btn btn-success">Register</a>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

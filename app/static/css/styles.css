@@ -1,0 +1,114 @@
+body {
+    background-color: #f8f9fa;
+}
+
+h1 {
+    color: #343a40;
+    font-weight: bold;
+}
+
+.table {
+    background-color: white;
+    box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.table thead {
+    background-color: #343a40;
+    color: white;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}
+
+button {
+    margin: 5px;
+}
+
+/* Keeps the header sticky while scrolling */
+.sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background-color: #343a40; /* Keeps the header color */
+    color: white;
+}
+
+/* Makes sure the table fits the full page */
+.table-container {
+    overflow-y: auto;
+    max-height: calc(100vh - 150px); /* Adjust height based on navbar */
+    border: 1px solid #ddd;
+}
+
+.serial-toggle {
+    cursor: pointer;
+    margin-left: 5px;
+}
+
+.serialized-dropdown {
+    background: #ffffff;
+    border: 1px solid #ccc;
+    padding: 10px;
+    position: absolute;
+    z-index: 100;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+    width: 250px;
+    display: none;
+}
+
+.serialized-list {
+    list-style: none;
+    padding: 0;
+}
+
+.serialized-list li {
+    padding: 5px;
+    border-bottom: 1px solid #ddd;
+}
+
+.serialized-list li:last-child {
+    border-bottom: none;
+}
+
+.serialized-dropdown {
+    width: 100%;
+}
+
+.serialized-dropdown th, .serialized-dropdown td {
+    padding: 5px;
+    text-align: left;
+}
+
+.serialized-row td {
+    padding: 10px;
+    background-color: #f8f9fa;
+}
+
+.serialized-dropdown table {
+    width: 100%;
+    font-size: 14px;
+}
+
+.serialized-dropdown .btn {
+    padding: 2px 6px;
+    font-size: 12px;
+}
+
+.checkboxColumn {
+    display: none; /* ✅ Hide checkboxes initially */
+    text-align: center;
+    width: 30px;
+}
+
+.delete-checkbox {
+    display: none; /* ✅ Hide checkboxes until delete mode is active */
+}
+
+#addFixtureModal {
+    position: relative !important;
+    display: block !important;
+    background: none !important;
+}
