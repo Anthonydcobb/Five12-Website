@@ -1,0 +1,28 @@
+# 🛑 Python Virtual Environment
+venv/
+.env
+
+# 🛑 Compiled Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 🛑 IDE and Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 🛑 Flask & Database
+instance/
+migrations/
+*.sqlite3
+*.db
+
+# 🛑 Log and Cache Files
+*.log
+*.cache
+
+# 🛑 Node Modules (if using frontend dependencies)
+node_modules/
