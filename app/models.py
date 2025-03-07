@@ -53,7 +53,12 @@ class PatchFixture(db.Model):
     patch_id = db.Column(db.Integer, db.ForeignKey("patch.id", ondelete="CASCADE"), nullable=False)
     fixture_id = db.Column(db.Integer, db.ForeignKey("fixture.id", ondelete="CASCADE"), nullable=False)
     quantity = db.Column(db.Integer, nullable=False, default=1)
-    notes = db.Column(db.Text, nullable=True)  # ✅ New Notes Column
+
+    # ✅ Add these fields
+    wattage = db.Column(db.Integer, nullable=True)
+    weight = db.Column(db.Float, nullable=True)
+    firmware = db.Column(db.String(255), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
 
     # Relationships
     patch = db.relationship("Patch", back_populates="fixtures")

@@ -354,3 +354,56 @@ def get_fixture_details(fixture_id):
             "firmware": fixture.firmware
         })
     return jsonify({"error": "Fixture not found"}), 404
+
+
+@main_bp.route("/get_patch_fixtures/<int:patch_id>")
+def get_patch_fixtures(patch_id):
+    patch_fixtures = PatchFixture.query.filter_by(patch_id=patch_id).all()
+
+    fixtures = [
+        {
+            "id": pf.fixture.id,
+            "name": pf.fixture.fixture_type,  # ✅ Fix this! Use fixture_type instead of name
+            "mode": pf.fixture.mode,
+            "dmx": f"{pf.fixture.channel_count}ch",
+            "wattage": pf.wattage,
+            "weight": pf.weight,
+            "firmware": pf.firmware,
+            "notes": pf.notes
+        }
+        for pf in patch_fixtures
+    ]
+
+    return jsonify(fixtures)
+
+@main_bp.route("/save_patch_fixtures", methods=["POST"])
+def save_patch_fixtures():
+    data = request.json  # Receive JSON from frontend
+
+    patch_id = data.get("patch_id")
+    fixtures = data.get("fixtures", [])
+
+    if not patch_id or not fixtures:
+        return jsonify({"error": "Missing patch_id or fixtures"}), 400  # ❌ Bad Request if data is missing
+
+    try:
+        # Loop through the received fixtures and save them
+        for fixture in fixtures:
+            new_patch_fixture = PatchFixture(
+                patch_id=patch_id,
+                fixture_id=fixture["fixture_id"],
+                quantity=1,  # Assuming quantity is always 1 per row for now
+                wattage=fixture.get("wattage"),
+                weight=fixture.get("weight"),
+                firmware=fixture.get("firmware"),
+                notes=fixture.get("notes")
+            )
+            db.session.add(new_patch_fixture)
+
+        db.session.commit()  # ✅ Save everything in the database
+
+        return jsonify({"message": "Fixtures saved successfully!"}), 200  # ✅ Success
+    except Exception as e:
+        db.session.rollback()  # Rollback on error
+        print(f"❌ ERROR saving fixtures: {e}")
+        return jsonify({"error": "Failed to save fixtures"}), 500
