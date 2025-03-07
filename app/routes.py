@@ -342,3 +342,15 @@ def get_fixtures():
         return jsonify(fixture_data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@main_bp.route('/get_fixture_details/<int:fixture_id>')
+def get_fixture_details(fixture_id):
+    fixture = Fixture.query.get(fixture_id)
+    if fixture:
+        return jsonify({
+            "wattage": fixture.wattage,
+            "weight": fixture.weight,
+            "firmware": fixture.firmware
+        })
+    return jsonify({"error": "Fixture not found"}), 404
