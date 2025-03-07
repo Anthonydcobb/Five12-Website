@@ -1,8 +1,10 @@
-from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify
+from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify, send_from_directory
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
-from app import db, login_manager
-from app.models import User, Show, Patch, Fixture, db, PatchFixture
+from app import login_manager, db  # ✅ Import ONLY login_manager and db, NOT app!
+from app.models import User, Show, Patch, Fixture, PatchFixture
+import os
+
 
 # ✅ Define Blueprint
 main_bp = Blueprint("main", __name__)
@@ -11,6 +13,12 @@ main_bp = Blueprint("main", __name__)
 @login_manager.user_loader
 def load_user(user_id):
     return User.query.get(int(user_id))
+
+
+
+@main_bp.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 
 
@@ -314,3 +322,23 @@ def delete_fixtures():
     except Exception as e:
         print(f"❌ Error in delete_fixtures: {e}")  # ✅ Log error for debugging
         return jsonify({"success": False, "error": str(e)}), 500  # ✅ Return JSON error response
+
+
+
+@main_bp.route("/get_fixtures", methods=["GET"])
+def get_fixtures():
+    try:
+        fixtures = Fixture.query.all()  # Fetch all fixtures from the database
+        fixture_data = [
+            {
+                "id": fixture.id,
+                "manufacturer": fixture.manufacturer,
+                "name": fixture.fixture_type,
+                "mode": fixture.mode if fixture.mode else "—",
+                "channel_count": f"{fixture.channel_count}ch" if fixture.channel_count else "—"
+            }
+            for fixture in fixtures
+        ]
+        return jsonify(fixture_data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

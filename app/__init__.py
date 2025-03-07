@@ -4,7 +4,7 @@ from flask_migrate import Migrate
 from flask_login import LoginManager
 
 db = SQLAlchemy()
-migrate = Migrate()  # ✅ Initialize Flask-Migrate
+migrate = Migrate()
 login_manager = LoginManager()
 
 def create_app():
@@ -14,10 +14,10 @@ def create_app():
     app.config['SECRET_KEY'] = 'your_secret_key'
 
     db.init_app(app)
-    migrate.init_app(app, db)  # ✅ Make sure migrations are initialized
+    migrate.init_app(app, db)
     login_manager.init_app(app)
 
-    from app.routes import main_bp  # ✅ Import the Blueprint
-    app.register_blueprint(main_bp)  # ✅ Register it properly
+    from app.routes import main_bp  # ✅ Import AFTER app is created
+    app.register_blueprint(main_bp)
 
-    return app
+    return app  # ✅ Return app properly

@@ -12,6 +12,8 @@ h1 {
     box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.1);
     border-radius: 5px;
     overflow: hidden;
+    table-layout: fixed; /* ✅ Fix column alignment */
+    width: 100%;
 }
 
 .table thead {
@@ -27,88 +29,120 @@ button {
     margin: 5px;
 }
 
-/* Keeps the header sticky while scrolling */
+/* ✅ Keeps table headers sticky */
 .sticky-header {
     position: sticky;
     top: 0;
     z-index: 1000;
-    background-color: #343a40; /* Keeps the header color */
+    background-color: #343a40;
     color: white;
 }
 
-/* Makes sure the table fits the full page */
+/* ✅ Ensures the table is scrollable */
 .table-container {
     overflow-y: auto;
-    max-height: calc(100vh - 150px); /* Adjust height based on navbar */
+    max-height: calc(100vh - 150px);
     border: 1px solid #ddd;
 }
 
-.serial-toggle {
+/* ✅ Manufacturer rows styling */
+.manufacturer {
+    font-weight: bold;
     cursor: pointer;
-    margin-left: 5px;
+    background-color: #f8f9fa;
+    padding: 8px;
+    border-bottom: 2px solid #ddd;
 }
 
-.serialized-dropdown {
-    background: #ffffff;
+.manufacturer:hover {
+    background-color: #e9ecef;
+}
+
+/* ✅ Expand/Collapse icons */
+.manufacturer::before {
+    content: "➕ ";
+    font-size: 16px;
+    margin-right: 5px;
+}
+
+.manufacturer.expanded::before {
+    content: "➖ ";
+}
+
+/* ✅ Hide fixture lists initially */
+.fixture-container {
+    display: none;
+    visibility: hidden;
+}
+
+/* ✅ Show when expanded */
+.manufacturer.expanded + .fixture-container {
+    display: table-row-group;
+    visibility: visible;
+}
+
+/* ✅ Align table columns */
+th, td {
+    text-align: left;
+    vertical-align: middle;
+    padding: 8px;
+    word-wrap: break-word;
+    white-space: nowrap;
+}
+
+th {
+    background-color: #343a40;
+    color: white;
+}
+
+.btn-outline-secondary {
+    border-radius: 0;
+}
+
+/* ✅ Fix for modal issues */
+#addFixtureModal {
+    position: relative !important;
+}
+
+/* ✅ Fix for modal input styling */
+#fixtureSearch {
+    border-radius: 4px;
     border: 1px solid #ccc;
-    padding: 10px;
-    position: absolute;
-    z-index: 100;
-    box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
-    width: 250px;
+    padding: 6px;
+    width: 100%;
+}
+
+.hidden-fixtures {
     display: none;
 }
 
-.serialized-list {
-    list-style: none;
-    padding: 0;
+.manufacturer-header {
+    background-color: #f8f9fa;
+    font-weight: bold;
+    cursor: pointer;
 }
 
-.serialized-list li {
-    padding: 5px;
+.manufacturer-header:hover {
+    background-color: #e0e0e0; /* Light hover effect */
+}
+
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    padding: 8px;
+    text-align: left;
     border-bottom: 1px solid #ddd;
 }
 
-.serialized-list li:last-child {
-    border-bottom: none;
-}
-
-.serialized-dropdown {
-    width: 100%;
-}
-
-.serialized-dropdown th, .serialized-dropdown td {
-    padding: 5px;
-    text-align: left;
-}
-
-.serialized-row td {
-    padding: 10px;
+th {
     background-color: #f8f9fa;
+    font-weight: bold;
 }
 
-.serialized-dropdown table {
-    width: 100%;
-    font-size: 14px;
-}
-
-.serialized-dropdown .btn {
-    padding: 2px 6px;
-    font-size: 12px;
-}
-
-.checkboxColumn {
-    display: none; /* ✅ Hide checkboxes initially */
+td input {
     text-align: center;
-    width: 30px;
-}
-
-.delete-checkbox {
-    display: none; /* ✅ Hide checkboxes until delete mode is active */
-}
-
-#addFixtureModal {
-    position: relative !important;
-    display: block !important;
-    background: none !important;
 }
