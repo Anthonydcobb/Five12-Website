@@ -34,14 +34,14 @@ document.addEventListener("DOMContentLoaded", function () {
             console.log("❌ ERROR: Fixture list not found! Skipping load.");
             return;
         }
-    
+
         console.log("✅ Loading fixture list...");
         fetch("/get_fixtures")
             .then(response => response.json())
             .then(data => {
                 fixtureList.innerHTML = ""; // Clear previous fixtures
                 let fixtureMap = {}; // Group fixtures by manufacturer
-    
+
                 // ✅ Group fixtures by manufacturer
                 data.forEach(fixture => {
                     if (!fixtureMap[fixture.manufacturer]) {
@@ -49,7 +49,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     }
                     fixtureMap[fixture.manufacturer].push(fixture);
                 });
-    
+
                 // ✅ Populate manufacturers first
                 Object.keys(fixtureMap).forEach(manufacturer => {
                     let manufacturerRow = document.createElement("tr");
@@ -61,16 +61,16 @@ document.addEventListener("DOMContentLoaded", function () {
                             <span class="toggle-icon" style="color: purple;">➕</span> ${manufacturer}
                         </td>
                     `;
-    
+
                     fixtureList.appendChild(manufacturerRow);
-    
+
                     // ✅ Create and append fixture rows, ensuring they are hidden initially
                     fixtureMap[manufacturer].forEach(fixture => {
                         let fixtureRow = document.createElement("tr");
                         fixtureRow.classList.add("fixture-row");
                         fixtureRow.setAttribute("data-manufacturer", manufacturer);
                         fixtureRow.style.display = "none"; // ✅ Hide on load
-    
+
                         fixtureRow.innerHTML = `
                             <td>${fixture.name}</td>
                             <td>${fixture.mode || "—"}</td>
@@ -80,30 +80,69 @@ document.addEventListener("DOMContentLoaded", function () {
                                        data-id="${fixture.id}" style="width: 60px;" placeholder="">
                             </td>
                         `;
-    
+
                         fixtureList.appendChild(fixtureRow);
                     });
-    
+
                     // ✅ Click handler for toggling visibility
                     manufacturerRow.addEventListener("click", function () {
                         let isExpanded = manufacturerRow.getAttribute("data-expanded") === "true";
-                        
+
                         // ✅ Toggle fixture visibility properly
                         document.querySelectorAll(`.fixture-row[data-manufacturer="${manufacturer}"]`).forEach(row => {
                             row.style.display = isExpanded ? "none" : "table-row";
                         });
-    
+
                         // ✅ Update the toggle icon and expanded state
                         manufacturerRow.setAttribute("data-expanded", isExpanded ? "false" : "true");
                         manufacturerRow.querySelector(".toggle-icon").textContent = isExpanded ? "➕" : "➖";
                     });
+
                 });
-    
+
+                // ✅ Live search functionality for the fixture modal
+                // ✅ Live search functionality for the fixture modal
+                if (fixtureSearch) {
+                    fixtureSearch.addEventListener("input", function () {
+                        let searchValue = this.value.trim().toLowerCase();
+
+                        document.querySelectorAll(".manufacturer-header").forEach(manufacturerRow => {
+                            let manufacturer = manufacturerRow.getAttribute("data-manufacturer");
+                            let anyMatch = false;
+
+                            // ✅ First, show all fixture rows temporarily to check matches
+                            document.querySelectorAll(`.fixture-row[data-manufacturer="${manufacturer}"]`).forEach(row => {
+                                let fixtureName = row.cells[0]?.textContent.trim().toLowerCase(); // Fixture Name
+
+                                if (fixtureName.includes(searchValue)) {
+                                    row.style.display = "table-row"; // ✅ Show matching row
+                                    anyMatch = true;
+                                } else {
+                                    row.style.display = "none"; // ❌ Hide non-matching row
+                                }
+                            });
+
+                            // ✅ Show or hide manufacturer headers based on matching fixtures
+                            manufacturerRow.style.display = anyMatch ? "table-row" : "none";
+                        });
+                    });
+                }
+
+                // ✅ Clear Search Functionality
+                if (clearSearchBtn) {
+                    clearSearchBtn.addEventListener("click", function () {
+                        fixtureSearch.value = "";
+                        loadFixtures(); // ✅ Reload the full fixture list
+                    });
+                }
+
+
+
                 console.log("✅ Fixture list loaded successfully!");
             })
             .catch(error => console.error("❌ Error loading fixtures:", error));
     }
-    
+
 
 
 
