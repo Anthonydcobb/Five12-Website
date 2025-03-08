@@ -62,63 +62,72 @@ document.addEventListener("DOMContentLoaded", function () {
 
     /** ✅ Toggle Delete Mode */
     let deleteMode = false;
-    toggleDeleteBtn.addEventListener("click", function () {
-        deleteMode = !deleteMode;
-        let deleteCols = document.querySelectorAll(".delete-col");
-        let checkboxes = document.querySelectorAll(".delete-checkbox");
 
-        console.log(`🟢 Toggle Delete Mode: ${deleteMode}`);
+    if (toggleDeleteBtn) {
+        toggleDeleteBtn.addEventListener("click", function () {
+            deleteMode = !deleteMode;
+            let deleteCols = document.querySelectorAll(".delete-col");
+            let checkboxes = document.querySelectorAll(".delete-checkbox");
 
-        deleteCols.forEach(col => col.style.display = deleteMode ? "table-cell" : "none");
-        removeFixtureBtn.style.display = deleteMode ? "inline-block" : "none";
-        toggleDeleteBtn.textContent = deleteMode ? "❌ Cancel" : "🗑 Remove Fixture";
+            console.log(`🟢 Toggle Delete Mode: ${deleteMode}`);
 
-        if (!deleteMode) {
-            checkboxes.forEach(cb => cb.checked = false);
-        }
-    });
+            deleteCols.forEach(col => col.style.display = deleteMode ? "table-cell" : "none");
+            removeFixtureBtn.style.display = deleteMode ? "inline-block" : "none";
+            toggleDeleteBtn.textContent = deleteMode ? "❌ Cancel" : "🗑 Remove Fixture";
+
+            if (!deleteMode) {
+                checkboxes.forEach(cb => cb.checked = false);
+            }
+        });
+    } else {
+        console.warn("⚠️ WARNING: #toggleDeleteBtn NOT FOUND. Skipping event listener.");
+    }
 
     /** ✅ Delete Selected Fixtures from SQL & Remove from DOM */
-    removeFixtureBtn.addEventListener("click", function () {
-        if (!deleteMode) return; // Ensure delete mode is active
+    if (removeFixtureBtn) {
+        removeFixtureBtn.addEventListener("click", function () {
+            if (!deleteMode) return; // Ensure delete mode is active
 
-        let selectedIds = [];
-        document.querySelectorAll(".delete-checkbox:checked").forEach(cb => {
-            selectedIds.push(cb.value);
-        });
+            let selectedIds = [];
+            document.querySelectorAll(".delete-checkbox:checked").forEach(cb => {
+                selectedIds.push(cb.value);
+            });
 
-        console.log("🟢 Selected Fixtures for Deletion:", selectedIds);
+            console.log("🟢 Selected Fixtures for Deletion:", selectedIds);
 
-        if (selectedIds.length === 0) {
-            alert("❌ No fixtures selected!");
-            return;
-        }
-
-        if (!confirm(`❌ Are you sure you want to delete ${selectedIds.length} fixture(s)?`)) return;
-
-        fetch("/delete_fixtures", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fixture_ids: selectedIds })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert("✅ Selected fixtures deleted.");
-                selectedIds.forEach(id => {
-                    let row = document.querySelector(`tr[data-id='${id}']`);
-                    if (row) row.remove();
-                });
-
-                // ✅ Reset Delete Mode
-                deleteMode = false;
-                toggleDeleteBtn.textContent = "🗑 Remove Fixture";
-                removeFixtureBtn.style.display = "none";
-                document.querySelectorAll(".delete-col").forEach(col => col.style.display = "none");
-            } else {
-                alert(`❌ Error deleting fixtures: ${data.error}`);
+            if (selectedIds.length === 0) {
+                alert("❌ No fixtures selected!");
+                return;
             }
-        })
-        .catch(error => console.error("❌ Error:", error));
-    });
+
+            if (!confirm(`❌ Are you sure you want to delete ${selectedIds.length} fixture(s)?`)) return;
+
+            fetch("/delete_fixtures", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ fixture_ids: selectedIds })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert("✅ Selected fixtures deleted.");
+                    selectedIds.forEach(id => {
+                        let row = document.querySelector(`tr[data-id='${id}']`);
+                        if (row) row.remove();
+                    });
+
+                    // ✅ Reset Delete Mode
+                    deleteMode = false;
+                    toggleDeleteBtn.textContent = "🗑 Remove Fixture";
+                    removeFixtureBtn.style.display = "none";
+                    document.querySelectorAll(".delete-col").forEach(col => col.style.display = "none");
+                } else {
+                    alert(`❌ Error deleting fixtures: ${data.error}`);
+                }
+            })
+            .catch(error => console.error("❌ Error:", error));
+        });
+    } else {
+        console.warn("⚠️ WARNING: #removeFixtureBtn NOT FOUND. Skipping event listener.");
+    }
 });

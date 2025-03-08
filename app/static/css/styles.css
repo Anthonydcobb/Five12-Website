@@ -146,3 +146,11 @@ th {
 td input {
     text-align: center;
 }
+
+/* 🔵 Ensure the focus effect applies */
+table td.focused-cell {
+    border: 3px solid blue !important;
+    background-color: rgba(0, 123, 255, 0.3) !important;
+    outline: none !important;
+    transition: all 0.2s ease-in-out !important;
+}

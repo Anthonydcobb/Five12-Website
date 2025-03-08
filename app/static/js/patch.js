@@ -1,6 +1,7 @@
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ patch.js loaded!");
 
+    // 🔹 Define all elements first
     let patchTable = document.getElementById("patchTable");
     let addFixtureBtn = document.getElementById("addFixtureBtn");
     let fixtureList = document.getElementById("fixtureList");
@@ -9,8 +10,55 @@ document.addEventListener("DOMContentLoaded", function () {
     let clearSearchBtn = document.getElementById("clearSearch");
     let addFixtureConfirmBtn = document.getElementById("addFixtureConfirm");
     let patchId = patchTable ? patchTable.getAttribute("data-patch-id") : null;
-
+    
     let fixtureModal = fixtureModalElement ? new bootstrap.Modal(fixtureModalElement) : null;
+
+    // ✅ Ensure table exists before adding event listeners
+    if (patchTable) {
+        console.log("✅ patchTable found!");
+
+        // ✅ Add click event for table cells
+        patchTable.addEventListener("click", function (event) {
+            let cell = event.target.closest("td"); // Ensure we get a table cell
+            if (!cell) return;
+
+            console.log("✅ Cell clicked:", cell.textContent.trim());
+
+            // ✅ If the clicked cell is already focused, remove focus
+            if (cell.classList.contains("focused-cell")) {
+                cell.classList.remove("focused-cell");
+                cell.style.border = ""; // Remove custom border
+                cell.style.backgroundColor = ""; // Remove highlight
+            } else {
+                // ✅ Remove focus from other cells before adding to the new one
+                document.querySelectorAll(".focused-cell").forEach(c => {
+                    c.classList.remove("focused-cell");
+                    c.style.border = ""; // Remove border from previous focused cell
+                    c.style.backgroundColor = ""; // Remove highlight from previous focused cell
+                });
+
+                // ✅ Apply focus class to clicked cell
+                cell.classList.add("focused-cell");
+                cell.style.border = "3px solid blue"; // Force highlight with JS
+                cell.style.backgroundColor = "rgba(0, 123, 255, 0.3)"; // Force background color
+            }
+        });
+
+        // ✅ Remove focus when clicking outside the table
+        document.addEventListener("click", function (event) {
+            if (!patchTable.contains(event.target)) {
+                document.querySelectorAll(".focused-cell").forEach(c => {
+                    c.classList.remove("focused-cell");
+                    c.style.border = ""; // Remove border
+                    c.style.backgroundColor = ""; // Remove highlight
+                });
+            }
+        });
+
+    } else {
+        console.log("❌ patchTable NOT FOUND! Check if #patchTable exists in HTML.");
+    }
+
 
     // ✅ Ensure function is declared BEFORE usage
     function addFixtureToPatch(id, name, mode, dmx, wattage, weight, firmware, notes) {
