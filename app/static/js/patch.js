@@ -12,6 +12,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
     let editableColumns = ["Set", "Fix #", "Uni", "Add", "Location", "Notes"];
     let isEditing = false;
+    let isDragging = false;
+    let selectedCells = new Set();
+    let currentColumnIndex = null;
 
     // 🔹 Create inline edit modal
     let editModal = document.createElement("div");
@@ -26,38 +29,64 @@ document.addEventListener("DOMContentLoaded", function () {
     document.body.appendChild(editModal);
 
     let editInput = document.getElementById("editInput");
-    let currentEditingCell = null;
 
     if (patchTable) {
         console.log("✅ patchTable found!");
 
-        // ✅ Click event for highlighting cells
-        patchTable.addEventListener("click", function (event) {
-            if (isEditing) return;
-
+        // ✅ Click & Drag to Select Multiple Cells (Same Column Only)
+        patchTable.addEventListener("mousedown", function (event) {
             let cell = event.target.closest("td");
-            if (!cell) return;
+            if (!cell || isEditing) return;
 
-            document.querySelectorAll(".focused-cell").forEach(c => {
+            let columnIndex = cell.cellIndex;
+            let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
+
+            if (!editableColumns.includes(header)) return; // ❌ Only allow editable columns
+
+            // ✅ Clear previous selection (on every new click)
+            selectedCells.forEach(c => {
                 c.classList.remove("focused-cell");
                 c.style.border = "";
                 c.style.backgroundColor = "";
             });
+            selectedCells.clear();
 
             cell.classList.add("focused-cell");
             cell.style.border = "3px solid blue";
             cell.style.backgroundColor = "rgba(0, 123, 255, 0.3)";
+            selectedCells.add(cell);
 
-            console.log("✅ Cell clicked:", cell.textContent.trim());
+            isDragging = true;
+            currentColumnIndex = columnIndex;
         });
 
-        // ✅ Listen for "I" key to open inline editing modal
+        // ✅ Only allow dragging in the same column
+        patchTable.addEventListener("mouseover", function (event) {
+            if (isDragging) {
+                let newCell = event.target.closest("td");
+                if (!newCell || selectedCells.has(newCell)) return;
+
+                let newHeader = patchTable.querySelector("thead tr").children[newCell.cellIndex].textContent.trim();
+                if (newCell.cellIndex !== currentColumnIndex || !editableColumns.includes(newHeader)) return;
+
+                newCell.classList.add("focused-cell");
+                newCell.style.border = "3px solid blue";
+                newCell.style.backgroundColor = "rgba(0, 123, 255, 0.3)";
+                selectedCells.add(newCell);
+            }
+        });
+
+        document.addEventListener("mouseup", function () {
+            isDragging = false;
+        });
+
+        // ✅ Listen for "I" key to open inline editing modal for all selected cells
         document.addEventListener("keydown", function (event) {
-            if (event.key.toLowerCase() === "i" && document.querySelector(".focused-cell") && !isEditing) {
+            if (event.key.toLowerCase() === "i" && selectedCells.size > 0 && !isEditing) {
                 event.preventDefault();
 
-                let cell = document.querySelector(".focused-cell");
-                let columnIndex = cell.cellIndex;
+                let firstCell = [...selectedCells][0]; // Get the first selected cell
+                let columnIndex = firstCell.cellIndex;
                 let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
 
                 if (!editableColumns.includes(header)) {
@@ -65,46 +94,132 @@ document.addEventListener("DOMContentLoaded", function () {
                     return;
                 }
 
-                console.log(`✅ Editing cell at column: ${header}`);
+                console.log(`✅ Editing ${selectedCells.size} cells in column: ${header}`);
 
-                let rect = cell.getBoundingClientRect();
+                let rect = firstCell.getBoundingClientRect();
                 editModal.style.top = `${rect.top + window.scrollY + 5}px`;
                 editModal.style.left = `${rect.left + window.scrollX + 5}px`;
                 editModal.style.display = "block";
 
-                editInput.value = cell.textContent.trim();
+                editInput.value = firstCell.textContent.trim();
                 editInput.focus();
                 isEditing = true;
-                currentEditingCell = cell;
             }
         });
 
-        // ✅ Save changes when pressing "Enter" in modal
+        // ✅ Save changes when pressing "Enter" in modal (Handles Fix # Auto-Increment)
         editInput.addEventListener("keydown", function (event) {
-            if (event.key === "Enter" && currentEditingCell) {
-                currentEditingCell.textContent = this.value;
-                editModal.style.display = "none";
-                currentEditingCell = null;
-                isEditing = false;
-            }
-        });
+            if (event.key === "Enter" && selectedCells.size > 0) {
+                let inputValue = editInput.value.trim();
+                let isFixColumn = patchTable.querySelector("thead tr").children[currentColumnIndex].textContent.trim() === "Fix #";
 
-        // ✅ Hide modal when clicking outside
-        document.addEventListener("click", function (event) {
-            if (!editModal.contains(event.target) && !patchTable.contains(event.target)) {
+                if (isFixColumn) {
+                    let values = calculateFixNumbers(inputValue, selectedCells.size);
+                    let index = 0;
+                    selectedCells.forEach(cell => {
+                        cell.textContent = values[index++];
+                    });
+                } else {
+                    selectedCells.forEach(cell => {
+                        cell.textContent = inputValue;
+                    });
+                }
+
                 editModal.style.display = "none";
                 isEditing = false;
-                document.querySelectorAll(".focused-cell").forEach(c => {
+                selectedCells.forEach(c => {
                     c.classList.remove("focused-cell");
                     c.style.border = "";
                     c.style.backgroundColor = "";
                 });
+                selectedCells.clear();
             }
         });
 
+        // ✅ Hide selection when clicking outside table
+        document.addEventListener("click", function (event) {
+            if (!patchTable.contains(event.target) && !editModal.contains(event.target)) {
+                editModal.style.display = "none";
+                isEditing = false;
+                selectedCells.forEach(c => {
+                    c.classList.remove("focused-cell");
+                    c.style.border = "";
+                    c.style.backgroundColor = "";
+                });
+                selectedCells.clear();
+            }
+        });
+
+        // ✅ Load saved fixtures when page loads
+        if (patchId) {
+            fetch(`/get_patch_fixtures/${patchId}`)
+                .then(response => response.json())
+                .then(data => {
+                    console.log("✅ Loaded saved fixtures:", data);
+                    data.forEach(fixture => {
+                        addFixtureToPatch(
+                            fixture.id, fixture.name, fixture.mode, fixture.dmx,
+                            fixture.wattage, fixture.weight, fixture.firmware, fixture.notes
+                        );
+                    });
+                })
+                .catch(error => console.error("❌ Error loading patch fixtures:", error));
+        }
+
+        // ✅ Ensure "Add Fixture" button works
+        if (addFixtureBtn) {
+            addFixtureBtn.addEventListener("click", function () {
+                console.log("✅ 'Add Fixture' button clicked!");
+                fixtureModal.show();
+            });
+        }
     } else {
         console.log("❌ patchTable NOT FOUND! Check if #patchTable exists in HTML.");
     }
+
+    // ✅ Function to calculate Fix # values
+    function calculateFixNumbers(startValue, count) {
+        let result = [];
+        let pointMode = startValue.includes("/");
+
+        if (pointMode) {
+            let [base, perGroup] = startValue.split("/");
+            perGroup = parseInt(perGroup, 10);
+            let [baseNum, point] = base.split(".").map(Number);
+
+            for (let i = 0; i < count; i++) {
+                let wholeNumber = baseNum + Math.floor(i / perGroup);
+                let pointNumber = (i % perGroup) + 1;
+                result.push(`${wholeNumber}.${pointNumber}`);
+            }
+        } else {
+            let startNum = parseInt(startValue, 10);
+            for (let i = 0; i < count; i++) {
+                result.push(startNum + i);
+            }
+        }
+        return result;
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // ✅ Function to add a fixture row to the patch sheet
     function addFixtureToPatch(id, name, mode, dmx, wattage, weight, firmware, notes) {
