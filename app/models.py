@@ -48,13 +48,19 @@ class Fixture(db.Model):
     # ✅ Add relationship to PatchFixture
     patches = db.relationship("PatchFixture", back_populates="fixture", cascade="all, delete-orphan")
 
+
+
+
+
 class PatchFixture(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     patch_id = db.Column(db.Integer, db.ForeignKey("patch.id", ondelete="CASCADE"), nullable=False)
     fixture_id = db.Column(db.Integer, db.ForeignKey("fixture.id", ondelete="CASCADE"), nullable=False)
+    mode = db.Column(db.String(50), nullable=True)  # ✅ Mode column
+    fix_number = db.Column(db.String(50), nullable=True)  # ✅ Fix Number column
     quantity = db.Column(db.Integer, nullable=False, default=1)
 
-    # ✅ Add these fields
+    # ✅ Additional fixture details
     wattage = db.Column(db.Integer, nullable=True)
     weight = db.Column(db.Float, nullable=True)
     firmware = db.Column(db.String(255), nullable=True)
@@ -63,3 +69,5 @@ class PatchFixture(db.Model):
     # Relationships
     patch = db.relationship("Patch", back_populates="fixtures")
     fixture = db.relationship("Fixture", back_populates="patches")
+
+

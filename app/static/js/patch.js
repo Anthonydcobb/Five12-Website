@@ -1,6 +1,8 @@
 document.addEventListener("DOMContentLoaded", function () {
     console.log("✅ patch.js loaded!");
 
+    /*** -------------------- 🔹 VARIABLE SETUP -------------------- ***/
+
     let patchTable = document.getElementById("patchTable");
     let addFixtureBtn = document.getElementById("addFixtureBtn");
     let fixtureList = document.getElementById("fixtureList");
@@ -16,7 +18,7 @@ document.addEventListener("DOMContentLoaded", function () {
     let selectedCells = new Set();
     let currentColumnIndex = null;
 
-    // 🔹 Create inline edit modal
+    /*** -------------------- 🔹 INLINE EDIT MODAL SETUP -------------------- ***/
     let editModal = document.createElement("div");
     editModal.id = "editModal";
     editModal.style.display = "none";
@@ -30,221 +32,239 @@ document.addEventListener("DOMContentLoaded", function () {
 
     let editInput = document.getElementById("editInput");
 
-    if (patchTable) {
-        console.log("✅ patchTable found!");
+    if (!patchId) {
+        console.error("❌ Patch ID not found on page!");
+        return;
+    }
 
-        // ✅ Click & Drag to Select Multiple Cells (Same Column Only)
-        patchTable.addEventListener("mousedown", function (event) {
-            let cell = event.target.closest("td");
-            if (!cell || isEditing) return;
-
-            let columnIndex = cell.cellIndex;
-            let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
-
-            if (!editableColumns.includes(header)) return; // ❌ Only allow editable columns
-
-            // ✅ Clear previous selection (on every new click)
-            selectedCells.forEach(c => {
-                c.classList.remove("focused-cell");
-                c.style.border = "";
-                c.style.backgroundColor = "";
-            });
-            selectedCells.clear();
-
-            cell.classList.add("focused-cell");
-            cell.style.border = "3px solid blue";
-            cell.style.backgroundColor = "rgba(0, 123, 255, 0.3)";
-            selectedCells.add(cell);
-
-            isDragging = true;
-            currentColumnIndex = columnIndex;
-        });
-
-        // ✅ Only allow dragging in the same column
-        patchTable.addEventListener("mouseover", function (event) {
-            if (isDragging) {
-                let newCell = event.target.closest("td");
-                if (!newCell || selectedCells.has(newCell)) return;
-
-                let newHeader = patchTable.querySelector("thead tr").children[newCell.cellIndex].textContent.trim();
-                if (newCell.cellIndex !== currentColumnIndex || !editableColumns.includes(newHeader)) return;
-
-                newCell.classList.add("focused-cell");
-                newCell.style.border = "3px solid blue";
-                newCell.style.backgroundColor = "rgba(0, 123, 255, 0.3)";
-                selectedCells.add(newCell);
-            }
-        });
-
-        document.addEventListener("mouseup", function () {
-            isDragging = false;
-        });
-
-        // ✅ Listen for "I" key to open inline editing modal for all selected cells
-        document.addEventListener("keydown", function (event) {
-            if (event.key.toLowerCase() === "i" && selectedCells.size > 0 && !isEditing) {
-                event.preventDefault();
-
-                let firstCell = [...selectedCells][0]; // Get the first selected cell
-                let columnIndex = firstCell.cellIndex;
-                let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
-
-                if (!editableColumns.includes(header)) {
-                    console.log("❌ Cannot edit this column!");
-                    return;
-                }
-
-                console.log(`✅ Editing ${selectedCells.size} cells in column: ${header}`);
-
-                let rect = firstCell.getBoundingClientRect();
-                editModal.style.top = `${rect.top + window.scrollY + 5}px`;
-                editModal.style.left = `${rect.left + window.scrollX + 5}px`;
-                editModal.style.display = "block";
-
-                editInput.value = firstCell.textContent.trim();
-                editInput.focus();
-                isEditing = true;
-            }
-        });
-
-        // ✅ Save changes when pressing "Enter" in modal (Handles Fix # Auto-Increment)
-        editInput.addEventListener("keydown", function (event) {
-            if (event.key === "Enter" && selectedCells.size > 0) {
-                let inputValue = editInput.value.trim();
-                let isFixColumn = patchTable.querySelector("thead tr").children[currentColumnIndex].textContent.trim() === "Fix #";
-
-                if (isFixColumn) {
-                    let values = calculateFixNumbers(inputValue, selectedCells.size);
-                    let index = 0;
-                    selectedCells.forEach(cell => {
-                        cell.textContent = values[index++];
-                    });
-                } else {
-                    selectedCells.forEach(cell => {
-                        cell.textContent = inputValue;
-                    });
-                }
-
-                editModal.style.display = "none";
-                isEditing = false;
-                selectedCells.forEach(c => {
-                    c.classList.remove("focused-cell");
-                    c.style.border = "";
-                    c.style.backgroundColor = "";
-                });
-                selectedCells.clear();
-            }
-        });
-
-        // ✅ Hide selection when clicking outside table
-        document.addEventListener("click", function (event) {
-            if (!patchTable.contains(event.target) && !editModal.contains(event.target)) {
-                editModal.style.display = "none";
-                isEditing = false;
-                selectedCells.forEach(c => {
-                    c.classList.remove("focused-cell");
-                    c.style.border = "";
-                    c.style.backgroundColor = "";
-                });
-                selectedCells.clear();
-            }
-        });
-
-        // ✅ Load saved fixtures when page loads
-        if (patchId) {
-            fetch(`/get_patch_fixtures/${patchId}`)
-                .then(response => response.json())
-                .then(data => {
-                    console.log("✅ Loaded saved fixtures:", data);
-                    data.forEach(fixture => {
-                        addFixtureToPatch(
-                            fixture.id, fixture.name, fixture.mode, fixture.dmx,
-                            fixture.wattage, fixture.weight, fixture.firmware, fixture.notes
-                        );
-                    });
-                })
-                .catch(error => console.error("❌ Error loading patch fixtures:", error));
+    /*** -------------------- 🔹 FIXTURE MODAL LOGIC -------------------- ***/
+    function loadFixtures() {
+        if (!fixtureList) {
+            console.error("❌ ERROR: Fixture list element not found!");
+            return;
         }
+    
+        console.log("✅ Loading fixture list...");
+    
+        fetch("/get_fixtures")
+            .then(response => response.json())
+            .then(data => {
+                fixtureList.innerHTML = "";  // ✅ Clear previous entries
+                let fixtureMap = {};  // ✅ Group by manufacturer
+    
+                // ✅ Organize fixtures by manufacturer
+                data.forEach(fixture => {
+                    if (!fixtureMap[fixture.manufacturer]) {
+                        fixtureMap[fixture.manufacturer] = [];
+                    }
+                    fixtureMap[fixture.manufacturer].push(fixture);
+                });
+    
+                Object.keys(fixtureMap).forEach(manufacturer => {
+                    // ✅ Create collapsible manufacturer row
+                    let manufacturerRow = document.createElement("tr");
+                    manufacturerRow.className = "manufacturer-header";
+                    manufacturerRow.innerHTML = `
+                        <td colspan="4" style="cursor: pointer; font-weight: bold; background-color: #f0f0f0;">
+                            ➕ ${manufacturer}
+                        </td>
+                    `;
+                    manufacturerRow.setAttribute("data-expanded", "false");
+                    fixtureList.appendChild(manufacturerRow);
+    
+                    // ✅ Toggle visibility on click
+                    manufacturerRow.addEventListener("click", function () {
+                        let isExpanded = manufacturerRow.getAttribute("data-expanded") === "true";
+                        document.querySelectorAll(`.fixture-row[data-manufacturer="${manufacturer}"]`).forEach(row => {
+                            row.style.display = isExpanded ? "none" : "table-row";
+                        });
+    
+                        manufacturerRow.setAttribute("data-expanded", isExpanded ? "false" : "true");
+                        manufacturerRow.innerHTML = `
+                            <td colspan="4" style="cursor: pointer; font-weight: bold; background-color: #f0f0f0;">
+                                ${isExpanded ? "➕" : "➖"} ${manufacturer}
+                            </td>
+                        `;
+                    });
+    
+                    // ✅ Add fixture rows under manufacturer
+                    fixtureMap[manufacturer].forEach(fixture => {
+                        let fixtureRow = document.createElement("tr");
+                        fixtureRow.classList.add("fixture-row");
+                        fixtureRow.setAttribute("data-manufacturer", manufacturer);
+                        fixtureRow.style.display = "none";  // ✅ Initially hidden
+    
+                        fixtureRow.innerHTML = `
+                            <td>${fixture.name}</td>
+                            <td>${fixture.mode || "—"}</td>
+                            <td>${fixture.channel_count || "—"}</td>
+                            <td><input type="number" min="0" class="form-control fixture-qty" placeholder="0"></td>
+                        `;
+    
+                        fixtureList.appendChild(fixtureRow);
+                    });
+                });
+    
+                console.log("✅ Fixture list loaded successfully!");
+            })
+            .catch(error => console.error("❌ Error loading fixtures:", error));
+    }
+    
 
-        // ✅ Ensure "Add Fixture" button works
-        if (addFixtureBtn) {
-            addFixtureBtn.addEventListener("click", function () {
-                console.log("✅ 'Add Fixture' button clicked!");
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    if (addFixtureBtn) {
+        addFixtureBtn.addEventListener("click", function () {
+            console.log("✅ 'Add Fixture' button clicked!");  // ✅ Debugging log
+            if (fixtureModal) {
+                console.log("✅ Fixture modal instance found!");
                 fixtureModal.show();
-            });
-        }
+                loadFixtures(); // ✅ Ensure fixtures are loaded when modal opens
+            } else {
+                console.error("❌ Fixture modal not found!");
+            }
+        });
     } else {
-        console.log("❌ patchTable NOT FOUND! Check if #patchTable exists in HTML.");
+        console.error("❌ 'Add Fixture' button NOT FOUND!");
     }
 
-    // ✅ Function to calculate Fix # values
-    function calculateFixNumbers(startValue, count) {
-        let result = [];
-        let pointMode = startValue.includes("/");
 
-        if (pointMode) {
-            let [base, perGroup] = startValue.split("/");
-            perGroup = parseInt(perGroup, 10);
-            let [baseNum, point] = base.split(".").map(Number);
 
-            for (let i = 0; i < count; i++) {
-                let wholeNumber = baseNum + Math.floor(i / perGroup);
-                let pointNumber = (i % perGroup) + 1;
-                result.push(`${wholeNumber}.${pointNumber}`);
+
+    // ✅ "OK" button in the fixture modal
+    addFixtureConfirmBtn.addEventListener("click", function () {
+        console.log("✅ 'OK' button clicked in fixture modal!");
+
+        let selectedFixtures = [];
+        document.querySelectorAll("#fixtureList tr").forEach(row => {
+            let countInput = row.querySelector(".fixture-qty");
+            if (!countInput) return;
+
+            let quantity = parseInt(countInput.value, 10);
+            if (quantity > 0) {
+                let fixtureName = row.children[0].textContent.trim();
+                let mode = row.children[1].textContent.trim();
+                let dmx = row.children[2].textContent.trim();
+
+                for (let i = 0; i < quantity; i++) {
+                    selectedFixtures.push({ fixture_name: fixtureName, mode: mode, dmx_footprint: dmx });
+                }
             }
-        } else {
-            let startNum = parseInt(startValue, 10);
-            for (let i = 0; i < count; i++) {
-                result.push(startNum + i);
-            }
+        });
+
+        console.log("📥 Fixtures selected:", selectedFixtures);
+
+        if (selectedFixtures.length === 0) {
+            console.warn("⚠️ No fixtures selected. Closing modal.");
+            fixtureModal.hide();
+            return;
         }
-        return result;
-    }
 
+        // ✅ Add selected fixtures to the patch table
+        selectedFixtures.forEach(fixture => addFixtureToPatch(fixture.fixture_name, fixture.mode, fixture.dmx_footprint));
 
+        fixtureModal.hide();
+    });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    // ✅ Function to add a fixture row to the patch sheet
-    function addFixtureToPatch(id, name, mode, dmx, wattage, weight, firmware, notes) {
+    /*** -------------------- 🔹 FUNCTION TO ADD FIXTURES TO PATCH TABLE -------------------- ***/
+    function addFixtureToPatch(name, mode, dmx) {
         let patchTableBody = document.querySelector("#patchTable tbody");
-
+    
+        let tempId = "new-" + Math.random().toString(36).substr(2, 9);
         let row = document.createElement("tr");
-
+        row.setAttribute("data-row-id", tempId);
+    
         row.innerHTML = `
-            <td></td>  <!-- Set -->
-            <td></td>  <!-- Fix # -->
-            <td></td>  <!-- Uni -->
-            <td></td>  <!-- Add -->
-            <td>${name}</td>  <!-- Fix Type -->
-            <td>${dmx}</td>  <!-- Ch. Count -->
-            <td></td>  <!-- Location -->
-            <td>${notes || ''}</td>  <!-- Notes -->
-            <td>${wattage}</td>  <!-- Wattage -->
-            <td>${weight}</td>  <!-- Weight -->
-            <td>${firmware}</td>  <!-- Firmware -->
+            <td contenteditable="true"></td>  <!-- Set -->
+            <td contenteditable="true"></td>  <!-- Fix # -->
+            <td contenteditable="true"></td>  <!-- Uni -->
+            <td contenteditable="true"></td>  <!-- Add -->
+            <td>${name}</td>  <!-- Fixture Name -->
+            <td>${mode}</td>  <!-- ✅ Mode Column -->
+            <td>${dmx}</td>  <!-- DMX Footprint -->
+            <td contenteditable="true"></td>  <!-- Location -->
+            <td contenteditable="true"></td>  <!-- Notes -->
+            <td>—</td>  <!-- Wattage -->
+            <td>—</td>  <!-- Weight -->
+            <td>—</td>  <!-- Firmware -->
         `;
-
+    
         patchTableBody.appendChild(row);
+        console.log(`🆕 Added fixture row for ${name} with mode: ${mode}`);
+    
+        // ✅ Auto-Save the new fixture
+        saveFixtureRow(row);
     }
 
-    // ✅ Load saved fixtures when page loads
+
+    function saveFixtureRow(row) {
+        let patchTable = document.getElementById("patchTable");
+        let patch_id = patchTable ? patchTable.getAttribute("data-patch-id") : null;
+        if (!patch_id) {
+            console.error("❌ Patch ID not found! Cannot save fixture.");
+            return;
+        }
+    
+        let fixtureData = {
+            patch_id: patch_id,
+            fixture_name: row.children[4].textContent.trim(),
+            mode: row.children[5].textContent.trim(),  // ✅ Ensure mode is included
+            dmx_footprint: row.children[6].textContent.trim(),
+            set_name: row.children[0].textContent.trim(),
+            fix_number: row.children[1].textContent.trim(),
+            uni: row.children[2].textContent.trim(),
+            address: row.children[3].textContent.trim(),
+            location: row.children[7].textContent.trim(),
+            notes: row.children[8].textContent.trim(),
+        };
+    
+        console.log("📤 Auto-saving fixture:", fixtureData);
+    
+        fetch("/save_patch_fixtures", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ patch_id, fixtures: [fixtureData] }),
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.error) {
+                console.error("❌ Error saving fixture:", result.error);
+            } else {
+                console.log("✅ Fixture saved successfully!", result);
+            }
+        })
+        .catch(error => console.error("❌ Fetch error:", error));
+    }
+    
+
+
+
+
+
+
+
+
+
+
+
+
+    
+
+    /*** -------------------- 🔹 LOADING FIXTURES FROM SERVER -------------------- ***/
     if (patchId) {
         fetch(`/get_patch_fixtures/${patchId}`)
             .then(response => response.json())
@@ -252,7 +272,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 console.log("✅ Loaded saved fixtures:", data);
                 data.forEach(fixture => {
                     addFixtureToPatch(
-                        fixture.id, fixture.name, fixture.mode, fixture.dmx,
+                        fixture.name, fixture.mode, fixture.dmx,
                         fixture.wattage, fixture.weight, fixture.firmware, fixture.notes
                     );
                 });
@@ -260,72 +280,96 @@ document.addEventListener("DOMContentLoaded", function () {
             .catch(error => console.error("❌ Error loading patch fixtures:", error));
     }
 
-    // ✅ Ensure "Add Fixture" button works
-    if (addFixtureBtn) {
-        addFixtureBtn.addEventListener("click", function () {
-            console.log("✅ 'Add Fixture' button clicked!");
-            fixtureModal.show();
-            loadFixtures();
-        });
-    }
+    /*** -------------------- 🔹 INLINE EDITING HANDLING -------------------- ***/
+    // ✅ Allow inline editing for specific columns
+    patchTable.addEventListener("mousedown", function (event) {
+        let cell = event.target.closest("td");
+        if (!cell || isEditing) return;
 
-    // ✅ Function to load fixtures in modal
-    function loadFixtures() {
-        if (!fixtureList) {
-            console.log("❌ ERROR: Fixture list not found! Skipping load.");
+        let columnIndex = cell.cellIndex;
+        let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
+
+        if (!editableColumns.includes(header)) return;
+
+        // ✅ Clear previous selections
+        selectedCells.forEach(c => {
+            c.classList.remove("focused-cell");
+            c.style.border = "";
+            c.style.backgroundColor = "";
+        });
+        selectedCells.clear();
+
+        cell.classList.add("focused-cell");
+        cell.style.border = "3px solid blue";
+        cell.style.backgroundColor = "rgba(0, 123, 255, 0.3)";
+        selectedCells.add(cell);
+        isDragging = true;
+        currentColumnIndex = columnIndex;
+    });
+
+    document.addEventListener("mouseup", function () {
+        isDragging = false;
+    });
+
+    // ✅ Handle inline edit modal behavior
+    document.addEventListener("keydown", function (event) {
+        if (event.key.toLowerCase() === "i" && selectedCells.size > 0 && !isEditing) {
+            event.preventDefault();
+
+            let firstCell = [...selectedCells][0]; 
+            let columnIndex = firstCell.cellIndex;
+            let header = patchTable.querySelector("thead tr").children[columnIndex].textContent.trim();
+
+            if (!editableColumns.includes(header)) {
+                console.log("❌ Cannot edit this column!");
+                return;
+            }
+
+            console.log(`✅ Editing ${selectedCells.size} cells in column: ${header}`);
+
+            let rect = firstCell.getBoundingClientRect();
+            editModal.style.top = `${rect.top + window.scrollY + 5}px`;
+            editModal.style.left = `${rect.left + window.scrollX + 5}px`;
+            editModal.style.display = "block";
+
+            editInput.value = firstCell.textContent.trim();
+            editInput.focus();
+            isEditing = true;
+        }
+    });
+
+    /*** -------------------- 🔹 SAVE FIXTURES FUNCTION -------------------- ***/
+    function saveFixtures() {
+        if (!patchId) {
+            console.error("❌ Missing patch_id! Aborting save.");
             return;
         }
 
-        console.log("✅ Loading fixture list...");
-        fetch("/get_fixtures")
-            .then(response => response.json())
-            .then(data => {
-                fixtureList.innerHTML = "";
-                let fixtureMap = {};
+        let fixtures = [];
+        document.querySelectorAll("#patchTable tbody tr").forEach(row => {
+            let fixture_name = row.children[4]?.textContent.trim();
 
-                data.forEach(fixture => {
-                    if (!fixtureMap[fixture.manufacturer]) {
-                        fixtureMap[fixture.manufacturer] = [];
-                    }
-                    fixtureMap[fixture.manufacturer].push(fixture);
-                });
+            if (!fixture_name) {
+                console.warn("⚠️ Skipping row: No fixture name found!", row);
+                return;
+            }
 
-                Object.keys(fixtureMap).forEach(manufacturer => {
-                    let manufacturerRow = document.createElement("tr");
-                    manufacturerRow.className = "manufacturer-header";
-                    manufacturerRow.innerHTML = `<td colspan="4" style="cursor: pointer; font-weight: bold; background-color: #f0f0f0;">➕ ${manufacturer}</td>`;
-                    manufacturerRow.setAttribute("data-expanded", "false");
-                    fixtureList.appendChild(manufacturerRow);
+            fixtures.push({ fixture_name });
+        });
 
-                    manufacturerRow.addEventListener("click", function () {
-                        let isExpanded = manufacturerRow.getAttribute("data-expanded") === "true";
-                        document.querySelectorAll(`.fixture-row[data-manufacturer="${manufacturer}"]`).forEach(row => {
-                            row.style.display = isExpanded ? "none" : "table-row";
-                        });
-
-                        manufacturerRow.setAttribute("data-expanded", isExpanded ? "false" : "true");
-                        manufacturerRow.innerHTML = `<td colspan="4" style="cursor: pointer; font-weight: bold; background-color: #f0f0f0;">${isExpanded ? "➕" : "➖"} ${manufacturer}</td>`;
-                    });
-
-                    fixtureMap[manufacturer].forEach(fixture => {
-                        let fixtureRow = document.createElement("tr");
-                        fixtureRow.classList.add("fixture-row");
-                        fixtureRow.setAttribute("data-manufacturer", manufacturer);
-                        fixtureRow.style.display = "none";
-
-                        fixtureRow.innerHTML = `
-                            <td>${fixture.name}</td>
-                            <td>${fixture.mode || "—"}</td>
-                            <td>${fixture.channel_count || "—"}</td>
-                            <td><input type="number" min="0" class="form-control fixture-qty" placeholder="0"></td>
-                        `;
-
-                        fixtureList.appendChild(fixtureRow);
-                    });
-                });
-
-                console.log("✅ Fixture list loaded successfully!");
-            })
-            .catch(error => console.error("❌ Error loading fixtures:", error));
+        fetch("/save_patch_fixtures", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ patch_id: patchId, fixtures })
+        })
+        .then(response => response.json())
+        .then(result => {
+            if (result.error) {
+                console.error("❌ Error saving fixtures:", result.error);
+            } else {
+                console.log("✅ Fixtures saved successfully!", result);
+            }
+        })
+        .catch(error => console.error("❌ Fetch error:", error));
     }
 });

@@ -1,63 +1,33 @@
-from flask import Blueprint, render_template, redirect, url_for, request, flash, jsonify, send_from_directory, current_app
+from flask import (
+    Blueprint, render_template, redirect, url_for, request, flash, jsonify,
+    send_from_directory, current_app
+)
 from flask_login import login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 from app import login_manager, db  # ✅ Import ONLY login_manager and db, NOT app!
 from app.models import User, Show, Patch, Fixture, PatchFixture
 import os
 
-
-# ✅ Define Blueprint
+# ✅ Define Blueprint for main routes
 main_bp = Blueprint("main", __name__)
 
-# ✅ Flask-Login User Loader
+# ---------------------------------------------------
+# 🔹 USER AUTHENTICATION ROUTES
+# ---------------------------------------------------
+
 @login_manager.user_loader
 def load_user(user_id):
+    """ Load user for Flask-Login """
     return User.query.get(int(user_id))
-
-
-
-@main_bp.route('/favicon.ico')
-def favicon():
-    return send_from_directory(os.path.join(current_app.root_path, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
-
-
-
 
 @main_bp.route('/register', methods=['GET', 'POST'])
 def register():
-    # Registration logic here
+    """ Render the registration page """
     return render_template("register.html")
-
-
-
-
-
-
-
-@main_bp.route('/inventory')
-@login_required
-def inventory():
-    return render_template('inventory.html')
-
-@main_bp.route('/edit_fixtures', methods=['GET'])
-@login_required
-def edit_fixtures():
-    if not current_user.is_admin:
-        flash("❌ Unauthorized access!", "danger")
-        return redirect(url_for('main.shows'))
-
-    fixtures = Fixture.query.all()
-    return render_template('edit_fixtures.html', fixtures=fixtures)
-
-
-# --------------------- USERS AND AUTH ---------------------
-
-@main_bp.route('/')
-def home():
-    return render_template('home.html', current_user=current_user)
 
 @main_bp.route('/login', methods=['GET', 'POST'])
 def login():
+    """ Handle user login """
     if request.method == 'POST':
         username = request.form['username']
         password = request.form['password']
@@ -75,6 +45,7 @@ def login():
 @main_bp.route('/logout')
 @login_required
 def logout():
+    """ Logout user and redirect to login """
     logout_user()
     flash('✅ Logged out successfully.', 'info')
     return redirect(url_for('main.login'))
@@ -82,6 +53,7 @@ def logout():
 @main_bp.route('/pending_users')
 @login_required
 def pending_users():
+    """ Display list of pending users (Admin Only) """
     if not current_user.is_admin:
         flash("❌ Unauthorized access!", "danger")
         return redirect(url_for('main.home'))
@@ -89,21 +61,42 @@ def pending_users():
     pending_users = User.query.filter_by(is_approved=False).all()
     return render_template('pending_users.html', pending_users=pending_users)
 
+# ---------------------------------------------------
+# 🔹 GENERAL ROUTES
+# ---------------------------------------------------
 
+@main_bp.route('/')
+def home():
+    """ Render the home page """
+    return render_template('home.html', current_user=current_user)
 
+@main_bp.route('/favicon.ico')
+def favicon():
+    """ Serve the favicon """
+    return send_from_directory(os.path.join(current_app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
+@main_bp.route('/inventory')
+@login_required
+def inventory():
+    """ Render the inventory page """
+    return render_template('inventory.html')
 
-# --------------------- SHOWS ---------------------
+# ---------------------------------------------------
+# 🔹 SHOW MANAGEMENT ROUTES
+# ---------------------------------------------------
 
 @main_bp.route('/shows')
 @login_required
 def shows():
+    """ Display all shows """
     all_shows = Show.query.all()
     return render_template('shows.html', shows=all_shows)
 
 @main_bp.route('/create_show', methods=['POST'])
 @login_required
 def create_show():
+    """ Create a new show """
     show_name = request.form.get('show_name')
     if show_name:
         new_show = Show(name=show_name)
@@ -115,6 +108,7 @@ def create_show():
 @main_bp.route('/show/<int:show_id>')
 @login_required
 def show_detail(show_id):
+    """ Display show details and its patches """
     show = Show.query.get_or_404(show_id)
     patches = Patch.query.filter_by(show_id=show_id).all()
     return render_template('show_detail.html', show=show, patches=patches)
@@ -122,6 +116,7 @@ def show_detail(show_id):
 @main_bp.route('/edit_show/<int:show_id>', methods=['POST'])
 @login_required
 def edit_show(show_id):
+    """ Edit a show (Admin Only) """
     if not current_user.is_admin:
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
@@ -135,6 +130,7 @@ def edit_show(show_id):
 @main_bp.route('/delete_show/<int:show_id>', methods=['POST'])
 @login_required
 def delete_show(show_id):
+    """ Delete a show (Admin Only) """
     if not current_user.is_admin:
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
@@ -144,70 +140,21 @@ def delete_show(show_id):
 
     return jsonify({"success": True})
 
-# --------------------- PATCHES ---------------------
+# ---------------------------------------------------
+# 🔹 PATCH MANAGEMENT ROUTES
+# ---------------------------------------------------
 
-### ✅ FIXED: CREATE PATCH (Uses JSON instead of `request.form.get()`)
-@main_bp.route('/create_patch/<int:show_id>', methods=['POST'])
-@login_required
-def create_patch(show_id):
-    if not current_user.is_admin:
-        return jsonify({"success": False, "error": "Unauthorized"}), 403
-
-    data = request.get_json()
-    patch_name = data.get("name", "").strip()  # Extract JSON data correctly
-
-    if not patch_name:
-        return jsonify({"success": False, "error": "Patch name is required"}), 400
-
-    new_patch = Patch(name=patch_name, show_id=show_id)
-    db.session.add(new_patch)
-    db.session.commit()
-
-    return jsonify({"success": True})  # Return success for frontend JS
-
-### ✅ FIXED: EDIT PATCH (Ensures correct template rendering)
 @main_bp.route('/patch/<int:patch_id>')
 @login_required
 def edit_patch(patch_id):
+    """ Render the patch editing page """
     patch = Patch.query.get_or_404(patch_id)
     return render_template('patch.html', patch=patch)
 
-### ✅ FIXED: UPDATE PATCH (Prevents 405 Method Not Allowed)
-@main_bp.route('/update_patch/<int:patch_id>', methods=['POST'])
+@main_bp.route('/create_patch/<int:show_id>', methods=['POST'])
 @login_required
-def update_patch(patch_id):
-    if not current_user.is_admin:
-        return jsonify({"success": False, "error": "Unauthorized"}), 403
-
-    data = request.get_json()
-    patch = Patch.query.get_or_404(patch_id)
-
-    patch_name = data.get("name", "").strip()
-    if not patch_name:
-        return jsonify({"success": False, "error": "Patch name cannot be empty"}), 400
-
-    patch.name = patch_name
-    db.session.commit()
-
-    return jsonify({"success": True})
-
-### ✅ FIXED: DELETE PATCH
-@main_bp.route('/delete_patch/<int:patch_id>', methods=['POST'])
-@login_required
-def delete_patch(patch_id):
-    if not current_user.is_admin:
-        return jsonify({"success": False, "error": "Unauthorized"}), 403
-
-    patch = Patch.query.get_or_404(patch_id)
-    db.session.delete(patch)
-    db.session.commit()
-
-    return jsonify({"success": True})
-
-### ✅ FIXED: ADD PATCH (Ensures correct JSON handling)
-@main_bp.route('/add_patch/<int:show_id>', methods=['POST'])
-@login_required
-def add_patch(show_id):
+def create_patch(show_id):
+    """ Create a new patch (Admin Only) """
     if not current_user.is_admin:
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
@@ -223,10 +170,35 @@ def add_patch(show_id):
 
     return jsonify({"success": True})
 
+@main_bp.route("/get_patch_fixtures/<int:patch_id>")
+def get_patch_fixtures(patch_id):
+    """ Retrieve all fixtures for a given patch """
+    patch_fixtures = PatchFixture.query.filter_by(patch_id=patch_id).all()
+
+    fixtures = [
+        {
+            "id": pf.fixture.id,
+            "name": pf.fixture.fixture_type,
+            "mode": pf.fixture.mode,
+            "dmx": f"{pf.fixture.channel_count}ch",
+            "wattage": pf.wattage,
+            "weight": pf.weight,
+            "firmware": pf.firmware,
+            "notes": pf.notes
+        }
+        for pf in patch_fixtures
+    ]
+
+    return jsonify(fixtures)
+
+# ---------------------------------------------------
+# 🔹 FIXTURE MANAGEMENT ROUTES
+# ---------------------------------------------------
 
 @main_bp.route('/add_fixture_to_patch/<int:patch_id>', methods=['POST'])
 @login_required
 def add_fixture_to_patch(patch_id):
+    """ Add selected fixtures to a patch (Admin Only) """
     if not current_user.is_admin:
         return jsonify({"success": False, "error": "Unauthorized"}), 403
 
@@ -248,99 +220,11 @@ def add_fixture_to_patch(patch_id):
     db.session.commit()
     return jsonify({"success": True})
 
-@main_bp.route('/add_fixture', methods=['POST'])
-@login_required
-def add_fixture():
-    if not current_user.is_admin:
-        return jsonify({"success": False, "error": "Unauthorized"}), 403
-
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"success": False, "error": "Invalid JSON data"}), 400
-
-        manufacturer = data.get("manufacturer", "").strip()
-        fixture_type = data.get("fixture_type", "").strip()
-        mode = data.get("mode", "").strip()
-        channel_count = int(data.get("channel_count")) if data.get("channel_count") else None
-        wattage = int(data.get("wattage")) if data.get("wattage") else None
-        weight = float(data.get("weight")) if data.get("weight") else None
-        firmware = data.get("firmware", "").strip() or None
-        notes = data.get("notes", "").strip() or None
-
-        # ✅ Ensure required fields are present
-        if not manufacturer or not fixture_type or not mode or not channel_count:
-            return jsonify({"success": False, "error": "Missing required fields"}), 400
-
-        # ✅ Create and save the fixture
-        new_fixture = Fixture(
-            manufacturer=manufacturer,
-            fixture_type=fixture_type,
-            mode=mode,
-            channel_count=channel_count,
-            wattage=wattage,
-            weight=weight,
-            firmware=firmware,
-            notes=notes
-        )
-        db.session.add(new_fixture)
-        db.session.commit()
-
-        # ✅ Return full fixture data
-        return jsonify({
-            "success": True,
-            "fixture": {
-                "id": new_fixture.id,
-                "manufacturer": new_fixture.manufacturer,
-                "fixture_type": new_fixture.fixture_type,
-                "mode": new_fixture.mode,
-                "channel_count": new_fixture.channel_count,
-                "wattage": new_fixture.wattage,
-                "weight": new_fixture.weight,
-                "firmware": new_fixture.firmware,
-                "notes": new_fixture.notes
-            }
-        })
-
-    except Exception as e:
-        print("❌ Error in add_fixture:", e)  # ✅ Log error for debugging
-        return jsonify({"success": False, "error": str(e)}), 500  # ✅ Return JSON error response
-
-
-
-
-@main_bp.route('/delete_fixtures', methods=['POST'])
-@login_required
-def delete_fixtures():
-    if not current_user.is_admin:
-        return jsonify({"success": False, "error": "Unauthorized"}), 403
-
-    try:
-        data = request.get_json()
-        fixture_ids = data.get("fixture_ids", [])
-
-        if not fixture_ids:
-            return jsonify({"success": False, "error": "No fixture IDs provided"}), 400
-
-        # ✅ Ensure all IDs are integers
-        fixture_ids = [int(id) for id in fixture_ids]
-
-        # ✅ Delete fixtures
-        db.session.query(Fixture).filter(Fixture.id.in_(fixture_ids)).delete(synchronize_session=False)
-        db.session.commit()
-
-        return jsonify({"success": True})
-
-    except Exception as e:
-        print(f"❌ Error in delete_fixtures: {e}")  # ✅ Log error for debugging
-        return jsonify({"success": False, "error": str(e)}), 500  # ✅ Return JSON error response
-
-
-
 @main_bp.route("/get_fixtures", methods=["GET"])
 def get_fixtures():
+    """ Retrieve all available fixtures """
     try:
-        fixtures = Fixture.query.all()  # Fetch all fixtures from the database
+        fixtures = Fixture.query.all()
         fixture_data = [
             {
                 "id": fixture.id,
@@ -356,66 +240,72 @@ def get_fixtures():
         return jsonify({"error": str(e)}), 500
 
 
-@main_bp.route('/get_fixture_details/<int:fixture_id>')
-def get_fixture_details(fixture_id):
-    fixture = Fixture.query.get(fixture_id)
-    if fixture:
-        return jsonify({
-            "wattage": fixture.wattage,
-            "weight": fixture.weight,
-            "firmware": fixture.firmware
-        })
-    return jsonify({"error": "Fixture not found"}), 404
 
-
-@main_bp.route("/get_patch_fixtures/<int:patch_id>")
-def get_patch_fixtures(patch_id):
-    patch_fixtures = PatchFixture.query.filter_by(patch_id=patch_id).all()
-
-    fixtures = [
-        {
-            "id": pf.fixture.id,
-            "name": pf.fixture.fixture_type,  # ✅ Fix this! Use fixture_type instead of name
-            "mode": pf.fixture.mode,
-            "dmx": f"{pf.fixture.channel_count}ch",
-            "wattage": pf.wattage,
-            "weight": pf.weight,
-            "firmware": pf.firmware,
-            "notes": pf.notes
-        }
-        for pf in patch_fixtures
-    ]
-
-    return jsonify(fixtures)
 
 @main_bp.route("/save_patch_fixtures", methods=["POST"])
 def save_patch_fixtures():
     data = request.json  # Receive JSON from frontend
-
     patch_id = data.get("patch_id")
     fixtures = data.get("fixtures", [])
 
     if not patch_id or not fixtures:
-        return jsonify({"error": "Missing patch_id or fixtures"}), 400  # ❌ Bad Request if data is missing
+        print("❌ ERROR: Missing patch_id or fixtures")
+        return jsonify({"error": "Missing patch_id or fixtures"}), 400
 
     try:
-        # Loop through the received fixtures and save them
         for fixture in fixtures:
+            fixture_name = fixture.get("fixture_name")
+            mode = fixture.get("mode")
+
+            # ✅ Get fixture_id from database
+            existing_fixture = Fixture.query.filter_by(fixture_type=fixture_name, mode=mode).first()
+
+            if not existing_fixture:
+                print(f"❌ ERROR: Fixture '{fixture_name}' with mode '{mode}' not found in database!")
+                return jsonify({"error": f"Fixture '{fixture_name}' with mode '{mode}' not found"}), 400
+
+            fixture_id = existing_fixture.id  # ✅ Extract fixture_id
+
+            # ✅ Insert into `patch_fixture`
             new_patch_fixture = PatchFixture(
                 patch_id=patch_id,
-                fixture_id=fixture["fixture_id"],
-                quantity=1,  # Assuming quantity is always 1 per row for now
-                wattage=fixture.get("wattage"),
-                weight=fixture.get("weight"),
-                firmware=fixture.get("firmware"),
-                notes=fixture.get("notes")
+                fixture_id=fixture_id,  # ✅ FIXED: Now we insert a real fixture_id
+                quantity=1,
+                wattage=None,
+                weight=None,
+                firmware=None,
+                notes=None
             )
             db.session.add(new_patch_fixture)
 
-        db.session.commit()  # ✅ Save everything in the database
+        db.session.commit()
+        print("✅ Fixtures saved successfully!")
+        return jsonify({"message": "Fixtures saved successfully!"}), 200
 
-        return jsonify({"message": "Fixtures saved successfully!"}), 200  # ✅ Success
     except Exception as e:
-        db.session.rollback()  # Rollback on error
+        db.session.rollback()
         print(f"❌ ERROR saving fixtures: {e}")
         return jsonify({"error": "Failed to save fixtures"}), 500
+
+
+
+
+
+
+
+
+
+
+
+
+@main_bp.route('/edit_fixtures', methods=['GET'])
+@login_required
+def edit_fixtures():
+    if not current_user.is_admin:
+        flash("❌ Unauthorized access!", "danger")
+        return redirect(url_for('main.shows'))
+
+    fixtures = Fixture.query.all()
+    return render_template('edit_fixtures.html', fixtures=fixtures)
+
+
