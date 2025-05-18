@@ -15,9 +15,18 @@ export default function PatchSheet() {
   const [selectedCells, setSelectedCells] = useState(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [command, setCommand] = useState('');
+  const commandRef = useRef(null);
+
   const [overflowDialog, setOverflowDialog] = useState(null);
   const overflowCallback = useRef(null);
   const tableRef = useRef(null);
+
+  // ─── Color-By Settings
+  const [colorBy, setColorBy] = useState('');
+  // a simple palette—feel free to tweak these
+  const palette = ['#F87171', '#60A5FA', '#34D399', '#FBBF24', '#A78BFA'];
+
+
 
   const cols = [
     'set', 'fixture', 'type', 'mode', 'channelCount',
@@ -40,6 +49,49 @@ export default function PatchSheet() {
       }
       return res.json();
     });
+
+
+  useEffect(() => {
+    const handleGlobalKey = e => {
+      if (commandRef.current && document.activeElement === commandRef.current) return;
+      if (selectedCells.size === 0 && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        const char = e.key === 'x' ? '>' : e.key;
+        const el = commandRef.current;
+        if (!el) return;
+        const { selectionStart, selectionEnd } = el;
+        const updated =
+          command.slice(0, selectionStart) +
+          char +
+          command.slice(selectionEnd);
+        setCommand(updated);
+        setTimeout(() => {
+          el.setSelectionRange(selectionStart + char.length, selectionStart + char.length);
+        }, 0);
+        el.focus();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKey);
+    return () => window.removeEventListener('keydown', handleGlobalKey);
+  }, [selectedCells, command]);
+
+
+  // ─── Clear selection on Escape key
+  useEffect(() => {
+    const clearOnEsc = e => {
+      if (e.key === 'Escape') {
+        setSelectedCells(new Set());
+      }
+    };
+    window.addEventListener('keydown', clearOnEsc);
+    return () => window.removeEventListener('keydown', clearOnEsc);
+  }, []);
+
+
+
+
+
+
 
   // ─── Load Data
   useEffect(() => {
@@ -110,6 +162,16 @@ export default function PatchSheet() {
       return nxt;
     });
   };
+
+  // derive unique values & assign colors
+  const colorValues = colorBy
+    ? Array.from(new Set(rows.map(r => r[colorBy])))
+    : [];
+  const colorMap = colorValues.reduce((acc, v, i) => {
+    acc[v] = palette[i % palette.length];
+    return acc;
+  }, {});
+
 
   // ─── Field Updates
 
@@ -235,101 +297,101 @@ export default function PatchSheet() {
 
 
 
-// File: src/pages/PatchSheet.jsx
+  // File: src/pages/PatchSheet.jsx
 
-// … earlier in the file …
+  // … earlier in the file …
 
-const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, selectedRows }) => {
-  // Sort & dedupe the IDs, but preserve the order the modal gave you
-  const ids = Array.from(new Set(selectedRows));
+  const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, selectedRows }) => {
+    // Sort & dedupe the IDs, but preserve the order the modal gave you
+    const ids = Array.from(new Set(selectedRows));
 
-  let curUniv = Number(initialUniv);
-  let curAddr = Number(initialAddr);
-  let idx     = 0;
+    let curUniv = Number(initialUniv);
+    let curAddr = Number(initialAddr);
+    let idx = 0;
 
-  // A recursive helper to process one row at a time
-  function processNext() {
-    // If we’ve run out of rows, finalize
-    if (idx >= ids.length) {
-      // close dialog & clear selection
-      setShowModal(false);
-      setIsRePatchMode(false);
-      setSelectedCells(new Set());
-      // reload to be sure
-      safeFetchJson(`/api/patch-sheets/${patchId}/rows`)
-        .then(fresh => setRows(fresh))
-        .catch(console.error);
-      return;
-    }
+    // A recursive helper to process one row at a time
+    function processNext() {
+      // If we’ve run out of rows, finalize
+      if (idx >= ids.length) {
+        // close dialog & clear selection
+        setShowModal(false);
+        setIsRePatchMode(false);
+        setSelectedCells(new Set());
+        // reload to be sure
+        safeFetchJson(`/api/patch-sheets/${patchId}/rows`)
+          .then(fresh => setRows(fresh))
+          .catch(console.error);
+        return;
+      }
 
-    const id   = ids[idx];
-    const row  = rows.find(r => r.id === id);
-    const ch   = Number(row.channelCount);
-    const end  = curAddr + ch - 1;
+      const id = ids[idx];
+      const row = rows.find(r => r.id === id);
+      const ch = Number(row.channelCount);
+      const end = curAddr + ch - 1;
 
-    // If this fixture would overflow channel 512 of the current universe...
-    if (end > 512) {
-      showOverflowConfirm(
-        `Universe ${curUniv} is full (would need channels ${curAddr}–${end}).\nPatch next universe?`,
-        ok => {
-          if (ok) {
-            // bump universe & reset address, then retry this same row
-            curUniv += 1;
-            curAddr = 1;
-            processNext();
-          } else {
-            // user said “stop here” → finalize without touching the rest
-            setShowModal(false);
-            setIsRePatchMode(false);
-            setSelectedCells(new Set());
-            // finally reload
-            safeFetchJson(`/api/patch-sheets/${patchId}/rows`)
-              .then(fresh => setRows(fresh))
-              .catch(console.error);
+      // If this fixture would overflow channel 512 of the current universe...
+      if (end > 512) {
+        showOverflowConfirm(
+          `Universe ${curUniv} is full (would need channels ${curAddr}–${end}).\nPatch next universe?`,
+          ok => {
+            if (ok) {
+              // bump universe & reset address, then retry this same row
+              curUniv += 1;
+              curAddr = 1;
+              processNext();
+            } else {
+              // user said “stop here” → finalize without touching the rest
+              setShowModal(false);
+              setIsRePatchMode(false);
+              setSelectedCells(new Set());
+              // finally reload
+              safeFetchJson(`/api/patch-sheets/${patchId}/rows`)
+                .then(fresh => setRows(fresh))
+                .catch(console.error);
+            }
           }
-        }
-      );
-      return;
+        );
+        return;
+      }
+
+      // Otherwise, we can patch this row
+      const payload = {
+        universe: curUniv,
+        address: curAddr,
+        endAddress: end
+      };
+
+      // Fire the PUT
+      safeFetchJson(`/api/patch-sheets/rows/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(() => {
+          // Optimistically update local state
+          setRows(rs =>
+            rs.map(r =>
+              r.id === id
+                ? { ...r, universe: curUniv, address: curAddr, endAddress: end }
+                : r
+            )
+          );
+          // Advance address: end + 1, then your extra offset
+          curAddr = end + 1 + (Number(offset) || 0);
+          idx += 1;
+          // Continue with the next row
+          processNext();
+        })
+        .catch(err => {
+          console.error(`Failed to re-patch row ${id}`, err);
+          // You might want to stop on error or skip to next
+          processNext();
+        });
     }
 
-    // Otherwise, we can patch this row
-    const payload = {
-      universe:   curUniv,
-      address:    curAddr,
-      endAddress: end
-    };
-
-    // Fire the PUT
-    safeFetchJson(`/api/patch-sheets/rows/${id}`, {
-      method:  'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload)
-    })
-    .then(() => {
-      // Optimistically update local state
-      setRows(rs =>
-        rs.map(r =>
-          r.id === id
-            ? { ...r, universe: curUniv, address: curAddr, endAddress: end }
-            : r
-        )
-      );
-      // Advance address: end + 1, then your extra offset
-      curAddr = end + 1 + (Number(offset) || 0);
-      idx += 1;
-      // Continue with the next row
-      processNext();
-    })
-    .catch(err => {
-      console.error(`Failed to re-patch row ${id}`, err);
-      // You might want to stop on error or skip to next
-      processNext();
-    });
-  }
-
-  // Kick off the sequence
-  processNext();
-};
+    // Kick off the sequence
+    processNext();
+  };
 
 
 
@@ -354,7 +416,7 @@ const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, 
       )
     );
 
-    setSelectedCells(new Set());
+
   };
 
   const handleRemoveFixture = () => {
@@ -366,30 +428,63 @@ const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, 
 
   // ─── Command‐Line Selection
   const handleCommandKey = e => {
+    // only act on Enter
     if (e.key !== 'Enter') return;
     e.preventDefault();
+
     const cmd = command.trim();
     const ids = new Set();
-    if (/^\d+\.\d+$/.test(cmd)) rows.forEach(r => r.fixture === cmd && ids.add(r.id));
+
+    // 1) Open‐ended range: "101 >"
+    const openRange = cmd.match(/^(\d+)\s*[<>]\s*$/);
+    if (openRange) {
+      const start = Number(openRange[1]);
+      const numToIds = new Map();
+      rows.forEach(r => {
+        const n = Math.floor(Number(r.fixture));
+        if (!numToIds.has(n)) numToIds.set(n, []);
+        numToIds.get(n).push(r.id);
+      });
+      let cur = start;
+      while (numToIds.has(cur)) {
+        numToIds.get(cur).forEach(id => ids.add(id));
+        cur++;
+      }
+    }
+    // 2) Exact fixture (e.g. "101.1")
+    else if (/^\d+\.\d+$/.test(cmd)) {
+      rows.forEach(r => r.fixture === cmd && ids.add(r.id));
+    }
+    // 3) Closed range (e.g. "101 > 105")
     else if (/^(\d+)\s*[<>]\s*(\d+)$/.test(cmd)) {
-      const [_, a, b] = cmd.match(/^(\d+)\s*[<>]\s*(\d+)$/);
+      const [, a, b] = cmd.match(/^(\d+)\s*[<>]\s*(\d+)$/);
       const [min, max] = [Number(a), Number(b)].sort((x, y) => x - y);
       rows.forEach(r => {
         const m = Math.floor(Number(r.fixture));
         if (m >= min && m <= max) ids.add(r.id);
       });
-    } else if (/^(\d+)\s*\+\s*(\d+)$/.test(cmd)) {
-      const [_, a, b] = cmd.match(/^(\d+)\s*\+\s*(\d+)$/);
+    }
+    // 4) Plus syntax (e.g. "101 + 105")
+    else if (/^(\d+)\s*\+\s*(\d+)$/.test(cmd)) {
+      const [, a, b] = cmd.match(/^(\d+)\s*\+\s*(\d+)$/);
       rows.forEach(r => {
         const m = Math.floor(Number(r.fixture));
         if (m === Number(a) || m === Number(b)) ids.add(r.id);
       });
-    } else if (/^\d+$/.test(cmd)) rows.forEach(r => Math.floor(Number(r.fixture)) === Number(cmd) && ids.add(r.id));
+    }
+    // 5) Single integer (e.g. "101")
+    else if (/^\d+$/.test(cmd)) {
+      const n = Number(cmd);
+      rows.forEach(r => Math.floor(Number(r.fixture)) === n && ids.add(r.id));
+    }
+
+    // build the full-cell selection
     const sel = new Set();
     ids.forEach(id => cols.forEach(f => sel.add(cellKey(id, f))));
     setSelectedCells(sel);
     setCommand('');
   };
+
 
   // ─── Render
   return (
@@ -405,23 +500,76 @@ const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, 
           </div>
         </div>
       )}
-      <header className="flex items-center justify-between mb-6">
+
+
+
+      <header className="flex items-center justify-between mb-6 space-x-4">
         <h1 className="text-3xl font-bold">{patchName}</h1>
-        <div className="flex items-start space-x-2">
-          <textarea
-            value={command}
-            onChange={e => setCommand(e.target.value)}
-            onKeyDown={handleCommandKey}
-            onMouseDown={e => e.stopPropagation()}
-            placeholder="Command line"
-            className="bg-gray-700 text-white p-2 rounded w-48 h-12"
-          />
-          <button onMouseDown={e => e.stopPropagation()} onClick={openPatch} className="px-4 py-2 bg-green-600 rounded">Patch</button>
-          <button onMouseDown={e => e.stopPropagation()} onClick={handleUnpatch} disabled={!anyFullRowSelected} className="px-4 py-2 bg-red-600 rounded disabled:opacity-50">Unpatch</button>
-          <button onMouseDown={e => e.stopPropagation()} onClick={openRePatch} disabled={!anyFullRowSelected} className="px-4 py-2 bg-blue-600 rounded disabled:opacity-50">Re-Patch</button>
-          <button onMouseDown={e => e.stopPropagation()} onClick={handleRemoveFixture} disabled={!anyFullRowSelected} className="px-4 py-2 bg-red-800 rounded disabled:opacity-50">Remove Fixture</button>
-        </div>
+        <textarea
+          ref={commandRef}
+          value={command}
+          onChange={e => setCommand(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'x' && !e.ctrlKey && !e.metaKey) {
+              e.preventDefault();
+              const el = commandRef.current;
+              const { selectionStart, selectionEnd } = el;
+              const updated =
+                command.slice(0, selectionStart) + '>' + command.slice(selectionEnd);
+              setCommand(updated);
+              setTimeout(() => {
+                el.setSelectionRange(
+                  selectionStart + 1,
+                  selectionStart + 1
+                );
+              }, 0);
+            } else {
+              handleCommandKey(e);
+            }
+          }}
+          placeholder="Command line"
+          className="w-64 bg-gray-800 text-white p-2 rounded"
+        />
+
+        <button onMouseDown={e => e.stopPropagation()} onClick={openPatch} className="px-4 py-2 bg-green-600 rounded">Patch</button>
+        <button onMouseDown={e => e.stopPropagation()} onClick={handleUnpatch} disabled={!anyFullRowSelected} className="px-4 py-2 bg-red-600 rounded disabled:opacity-50">Unpatch</button>
+        <button onMouseDown={e => e.stopPropagation()} onClick={openRePatch} disabled={!anyFullRowSelected} className="px-4 py-2 bg-blue-600 rounded disabled:opacity-50">Re-Patch</button>
+        <button onMouseDown={e => e.stopPropagation()} onClick={handleRemoveFixture} disabled={!anyFullRowSelected} className="px-4 py-2 bg-red-800 rounded disabled:opacity-50">Remove Fixture</button>
+        <label className="text-white flex items-center space-x-1">
+          <span>Color By:</span>
+          <select
+            value={colorBy}
+            onChange={e => setColorBy(e.target.value)}
+            className="bg-gray-800 text-white p-1 rounded"
+          >
+            <option value="">None</option>
+            <option value="type">Fixture Type</option>
+            <option value="universe">Universe</option>
+            <option value="location">Location</option>
+          </select>
+        </label>
+        {colorBy && (
+          <div className="flex flex-wrap space-x-2">
+            {colorValues.map(v => (
+              <span
+                key={v}
+                style={{ backgroundColor: colorMap[v] }}
+                className="px-2 py-1 rounded text-sm text-white"
+              >
+                {v}
+              </span>
+            ))}
+          </div>
+        )}
       </header>
+
+
+
+
+
+
+
+
       <div ref={tableRef} className="overflow-auto bg-gray-800 rounded">
         <table className="min-w-full table-auto">
           <thead>
@@ -432,24 +580,80 @@ const handleRePatch = ({ universe: initialUniv, startAddr: initialAddr, offset, 
           </thead>
           <tbody>
             {rows.map(r => {
-              const rowKeys = cols.map(f => cellKey(r.id, f)); const rowSel = rowKeys.every(k => selectedCells.has(k)); return (
-                <tr key={r.id} className={rowSel ? 'bg-blue-600' : (r.id % 2 === 0 ? 'bg-gray-800' : 'bg-gray-700')}>
+              const rowKeys = cols.map(f => cellKey(r.id, f));
+              const rowSel = rowKeys.every(k => selectedCells.has(k));
+              // determine row background based on colorBy
+              const bg = colorBy ? { backgroundColor: colorMap[r[colorBy]] } : {};
+
+              return (
+                <tr
+                  key={r.id}
+                  className={rowSel
+                    ? 'bg-blue-600'
+                    : (r.id % 2 === 0 ? 'bg-gray-800' : 'bg-gray-700')}
+                  style={bg}
+                >
                   <td className="px-2 py-2 border">
-                    <button onClick={e => { e.stopPropagation(); toggleRow(r.id); }} className="w-4 h-4 bg-gray-500 hover:bg-gray-600 rounded" />
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleRow(r.id); }}
+                      className="w-4 h-4 bg-gray-500 hover:bg-gray-600 rounded"
+                    />
                   </td>
                   {cols.map(field => {
-                    const key = cellKey(r.id, field); const sel = selectedCells.has(key); return (
-                      <td key={field} onMouseDown={() => onCellMouseDown(r.id, field)} onMouseEnter={() => onCellMouseEnter(r.id, field)} className={`px-4 py-2 border ${sel ? 'bg-blue-600' : ''}`}>
+                    const key = cellKey(r.id, field);
+                    const sel = selectedCells.has(key);
+
+                    return (
+                      <td
+                        key={field}
+                        onMouseDown={() => onCellMouseDown(r.id, field)}
+                        onMouseEnter={() => onCellMouseEnter(r.id, field)}
+                        className={`px-4 py-2 border ${sel ? 'bg-blue-600' : ''}`}
+                      >
                         {['set', 'location', 'notes', 'fixture'].includes(field) ? (
                           <input
                             type="text"
                             value={r[field] || ''}
-                            onChange={e => { const v = e.target.value; setRows(rs => rs.map(x => x.id === r.id ? { ...x, [field]: v } : x)); }}
-                            onBlur={e => { const v = e.target.value.trim(); if (field === 'fixture') { const keys = [...selectedCells].filter(k => k.endsWith('::fixture')); keys.length > 1 ? updateFixtureFields(v) : updateField(r.id, 'fixture', v); } else updateSelectedFields(v); }}
-                            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const v = e.target.value.trim(); if (field === 'fixture') { const keys = [...selectedCells].filter(k => k.endsWith('::fixture')); keys.length > 1 ? updateFixtureFields(v) : updateField(r.id, 'fixture', v); } else updateSelectedFields(v); } }}
+                            onChange={e => {
+                              const v = e.target.value;
+                              setRows(rs => rs.map(x =>
+                                x.id === r.id ? { ...x, [field]: v } : x
+                              ));
+                            }}
+                            onBlur={e => {
+                              const v = e.target.value.trim();
+                              if (field === 'fixture') {
+                                const keys = [...selectedCells].filter(k =>
+                                  k.endsWith('::fixture')
+                                );
+                                keys.length > 1
+                                  ? updateFixtureFields(v)
+                                  : updateField(r.id, 'fixture', v);
+                              } else {
+                                updateSelectedFields(v);
+                              }
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const v = e.target.value.trim();
+                                if (field === 'fixture') {
+                                  const keys = [...selectedCells].filter(k =>
+                                    k.endsWith('::fixture')
+                                  );
+                                  keys.length > 1
+                                    ? updateFixtureFields(v)
+                                    : updateField(r.id, 'fixture', v);
+                                } else {
+                                  updateSelectedFields(v);
+                                }
+                              }
+                            }}
                             className="w-full bg-transparent focus:outline-none text-white"
                           />
-                        ) : r[field]}
+                        ) : (
+                          r[field]
+                        )}
                       </td>
                     );
                   })}
