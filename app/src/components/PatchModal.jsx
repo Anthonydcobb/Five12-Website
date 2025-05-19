@@ -1,9 +1,10 @@
 // File: src/components/PatchModal.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export default function PatchModal({
   fixtures,
   onPatch,
+  onRePatch,
   isRePatch,
   selectedRows,
   onClose
@@ -11,40 +12,41 @@ export default function PatchModal({
   const [search, setSearch] = useState('');
   const [filtered, setFiltered] = useState([]);
   const [selectedFixture, setSelectedFixture] = useState(null);
-  const [startFix, setStartFix] = useState('');   // optional
-  const [count, setCount] = useState(1);
+  const [startFix, setStartFix] = useState('');
+  const [count, setCount] = useState(isRePatch ? selectedRows.length : 1);
   const [universe, setUniverse] = useState('1');
   const [startAddr, setStartAddr] = useState('1');
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useState('0');
 
-  // Filter fixtures if this is the initial Patch
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
   useEffect(() => {
     if (!isRePatch) {
       const term = search.trim().toLowerCase();
-      setFiltered(fixtures.filter(f =>
-        f.fixture.toLowerCase().includes(term)
-      ));
+      setFiltered(
+        fixtures.filter(f => f.fixture.toLowerCase().includes(term))
+      );
     }
   }, [search, fixtures, isRePatch]);
 
-  // When Re-Patch, force count to match selected rows
   useEffect(() => {
-    if (isRePatch) setCount(selectedRows.length);
+    if (isRePatch) {
+      setCount(selectedRows.length);
+    }
   }, [isRePatch, selectedRows]);
 
   const handleSubmit = () => {
     if (isRePatch) {
-      onPatch({
-        universe,
-        startAddr,
-        offset,
-        selectedRows
-      });
+      onRePatch({ universe, startAddr, offset, selectedRows });
     } else {
       if (!selectedFixture) return;
       onPatch({
-        fixture:        selectedFixture,
-        fixtureNumber:  startFix,    // may be blank
+        fixture: selectedFixture,
+        fixtureNumber: startFix,
         count,
         universe,
         startAddr,
@@ -56,21 +58,28 @@ export default function PatchModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-gray-900 text-white p-6 rounded-lg shadow-xl w-3/4 max-w-xl">
+      <div
+        className="bg-gray-900 text-white p-6 rounded-lg shadow-xl w-3/4 max-w-xl"
+        onClick={e => e.stopPropagation()}
+        onKeyDown={e => e.stopPropagation()}
+        tabIndex={0}
+      >
         <h2 className="text-2xl font-medium mb-4">
           {isRePatch ? 'Re-Patch Fixtures' : 'Patch Fixtures'}
         </h2>
 
         {!isRePatch ? (
           <>
-            {/* Search */}
             <label className="block mb-2">
               <span className="text-sm">Search Fixture</span>
-              <div className="flex">
+              <div className="flex mt-1">
                 <input
+                  ref={inputRef}
+                  type="text"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="flex-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded-l text-white focus:outline-none"
+                  placeholder="Type fixture name..."
                 />
                 <button
                   onClick={() => setSearch('')}
@@ -94,7 +103,6 @@ export default function PatchModal({
               </ul>
             </div>
 
-            {/* Start Fix & Count */}
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="block mb-1">Start Fix #</label>
@@ -102,7 +110,8 @@ export default function PatchModal({
                   type="text"
                   value={startFix}
                   onChange={e => setStartFix(e.target.value)}
-                  className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none"
+                  className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
+                  placeholder="e.g. 101"
                 />
               </div>
               <div>
@@ -112,13 +121,12 @@ export default function PatchModal({
                   value={count}
                   onChange={e => setCount(Number(e.target.value))}
                   min="1"
-                  className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white focus:outline-none"
+                  className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white"
                 />
               </div>
             </div>
           </>
         ) : (
-          /* Re-Patch UI: just row count */
           <div className="mb-4">
             <span className="text-sm">Rows Selected</span>
             <input
@@ -130,7 +138,6 @@ export default function PatchModal({
           </div>
         )}
 
-        {/* Universe / Start Addr / Offset */}
         <div className="grid grid-cols-3 gap-3 mb-6">
           <label>
             <span className="text-sm">Universe</span>
@@ -138,7 +145,7 @@ export default function PatchModal({
               type="number"
               value={universe}
               onChange={e => setUniverse(e.target.value)}
-              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white focus:outline-none"
+              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
             />
           </label>
           <label>
@@ -147,7 +154,7 @@ export default function PatchModal({
               type="number"
               value={startAddr}
               onChange={e => setStartAddr(e.target.value)}
-              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white focus:outline-none"
+              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
             />
           </label>
           <label>
@@ -155,13 +162,12 @@ export default function PatchModal({
             <input
               type="number"
               value={offset}
-              onChange={e => setOffset(Number(e.target.value))}
-              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white focus:outline-none"
+              onChange={e => setOffset(e.target.value)}
+              className="mt-1 block w-full bg-gray-800 border border-gray-700 rounded p-2 text-white"
             />
           </label>
         </div>
 
-        {/* Actions */}
         <div className="flex justify-end space-x-3">
           <button
             onClick={onClose}
@@ -179,5 +185,5 @@ export default function PatchModal({
         </div>
       </div>
     </div>
-);
+  );
 }
