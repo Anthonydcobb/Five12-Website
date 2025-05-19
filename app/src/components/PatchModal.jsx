@@ -97,7 +97,7 @@ export default function PatchModal({
                     className={`p-1 cursor-pointer ${selectedFixture?.id === f.id ? 'bg-blue-600' : ''}`}
                     onClick={() => setSelectedFixture(f)}
                   >
-                    {f.fixture} | {f.mode} | {f.channelCount} ch | {f.notes}
+                    {f.fixture} || {f.channelCount} ch | {f.notes}
                   </li>
                 ))}
               </ul>

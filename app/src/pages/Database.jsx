@@ -19,7 +19,6 @@ export default function Database() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         fixture: '',
-        mode: '',
         notes: '',
         channelCount: 0,
         wattage: 0,
@@ -44,13 +43,11 @@ export default function Database() {
     setRows(prev => {
       const updatedRows = prev.map(r => (r.id === id ? { ...r, [field]: value } : r));
       const updated = updatedRows.find(r => r.id === id);
-      // Persist update
       fetch(`/api/fixtures/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fixture: updated.fixture,
-          mode: updated.mode,
           notes: updated.notes,
           channelCount: Number(updated.channelCount),
           wattage: Number(updated.wattage),
@@ -62,11 +59,67 @@ export default function Database() {
     });
   };
 
-  // Sort rows alphabetically by fixture
+  const handleImportExcel = (e) => {
+    const file = e.target.files[0];
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/api/fixtures/import-excel', {
+      method: 'POST',
+      body: formData
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.error) {
+          alert(`Import error: ${data.error}`);
+          return;
+        }
+
+        if (data.duplicates && data.duplicates.length > 0) {
+          const names = data.duplicates.map(d => `• ${d.new.fixture}`).join('\n');
+          const shouldReplace = confirm(`The following fixtures already exist:\n\n${names}\n\nReplace existing fixtures?`);
+
+          if (shouldReplace) {
+            Promise.all(
+              data.duplicates.map(d =>
+                fetch(`/api/fixtures/${d.existing.id}`, { method: 'DELETE' }).then(() =>
+                  fetch('/api/fixtures', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      fixture: d.new.fixture,
+                      notes: d.new.notes || '',
+                      channelCount: Number(d.new.channel_count) || 0,
+                      wattage: Number(d.new.wattage) || 0,
+                      weight: Number(d.new.weight) || 0,
+                      firmware: d.new.firmware || ''
+                    })
+                  })
+                )
+              )
+            ).then(() => {
+              alert(`✅ Imported ${data.inserted} fixtures (duplicates replaced)`);
+              window.location.reload();
+            });
+          } else {
+            alert(`Skipped ${data.duplicates.length} duplicate rows.`);
+            window.location.reload();
+          }
+        } else {
+          alert(`✅ Imported ${data.inserted} fixtures.`);
+          window.location.reload();
+        }
+      })
+      .catch(err => {
+        console.error('Import failed:', err);
+        alert('Import failed. See console for details.');
+      });
+  };
+
   const sortedRows = useMemo(() => {
     return [...rows].sort((a, b) => {
-      const fa = a.fixture.trim().toLowerCase();
-      const fb = b.fixture.trim().toLowerCase();
+      const fa = a.fixture?.trim().toLowerCase();
+      const fb = b.fixture?.trim().toLowerCase();
       if (!fa && !fb) return 0;
       if (!fa) return 1;
       if (!fb) return -1;
@@ -78,19 +131,29 @@ export default function Database() {
     <div className="p-6 bg-gray-900 min-h-screen text-white">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Lighting Database</h1>
-        <button
-          onClick={addRow}
-          className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded"
-        >
-          + Add Row
-        </button>
+        <div className="flex gap-4">
+          <button
+            onClick={addRow}
+            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded"
+          >
+            + Add Row
+          </button>
+          <label className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded cursor-pointer text-sm">
+            Import Excel
+            <input
+              type="file"
+              accept=".xlsx"
+              className="hidden"
+              onChange={handleImportExcel}
+            />
+          </label>
+        </div>
       </div>
       <div className="overflow-auto">
         <table className="min-w-full table-auto bg-gray-800 rounded">
           <thead>
             <tr className="bg-gray-700">
               <th className="px-4 py-2 border">Fixture</th>
-              <th className="px-4 py-2 border">Mode</th>
               <th className="px-4 py-2 border">Channel Count</th>
               <th className="px-4 py-2 border">Wattage</th>
               <th className="px-4 py-2 border">Weight</th>
@@ -102,8 +165,7 @@ export default function Database() {
           <tbody>
             {sortedRows.map(row => (
               <tr key={row.id} className="even:bg-gray-800 odd:bg-gray-900">
-                {/* Text fields */}
-                {['fixture', 'mode'].map(field => (
+                {['fixture'].map(field => (
                   <td key={field} className="px-4 py-2 border">
                     <input
                       type="text"
@@ -113,7 +175,6 @@ export default function Database() {
                     />
                   </td>
                 ))}
-                {/* Numeric fields */}
                 {['channelCount', 'wattage', 'weight'].map(field => (
                   <td key={field} className="px-4 py-2 border">
                     <input
@@ -124,7 +185,6 @@ export default function Database() {
                     />
                   </td>
                 ))}
-                {/* Firmware */}
                 <td className="px-4 py-2 border">
                   <input
                     type="text"
@@ -133,7 +193,6 @@ export default function Database() {
                     className="w-full bg-transparent focus:outline-none text-white"
                   />
                 </td>
-                {/* Notes */}
                 <td className="px-4 py-2 border">
                   <input
                     type="text"
@@ -142,7 +201,6 @@ export default function Database() {
                     className="w-full bg-transparent focus:outline-none text-white"
                   />
                 </td>
-                {/* Actions */}
                 <td className="px-4 py-2 border text-center">
                   <button
                     onClick={() => deleteRow(row.id)}

@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import PatchModal from './PatchModal';
 
 export default function PatchTab({
+    patchId,
     rows,
     fixtures,
     updateField,
@@ -26,7 +27,7 @@ export default function PatchTab({
     const [colorBy, setColorBy] = useState('');
     const palette = ['#F87171', '#60A5FA', '#34D399', '#FBBF24', '#A78BFA'];
     const cols = [
-        'set', 'fixture', 'type', 'mode', 'channelCount',
+        'set', 'fixture', 'type', 'channelCount',
         'universe', 'address', 'endAddress', 'location',
         'notes', 'wattage', 'weight', 'firmware'
     ];
@@ -186,6 +187,32 @@ export default function PatchTab({
     const handleUnpatchClick = () => onUnpatch(selectedRowIds);
     const handleRemoveClick = () => { onRemoveFixture(selectedRowIds); setSelectedCells(new Set()); };
 
+    function handleFileUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch(`/api/patch-sheets/${patchId}/import-excel`, {
+            method: 'POST',
+            body: formData
+        })
+            .then(res => res.json())
+            .then(data => {
+                alert(`✅ Imported ${data.inserted} fixtures!`);
+                window.location.reload(); // or re-fetch rows
+            })
+            .catch(err => {
+                console.error('Import failed:', err);
+                alert('❌ Import failed');
+            });
+    }
+
+
+
+
+
     return (
         <div className="p-6 bg-gray-900 text-white min-h-screen relative">
             {overflowDialog && (
@@ -200,47 +227,68 @@ export default function PatchTab({
                 </div>
             )}
 
-            <header className="flex items-center space-x-4 mb-6">
-                <textarea
-                    ref={commandRef}
-                    value={command}
-                    onChange={e => setCommand(e.target.value)}
-                    onKeyDown={e => {
-                        if (e.key === 'x' && !e.ctrlKey && !e.metaKey) {
-                            e.preventDefault();
-                            const el = commandRef.current;
-                            const { selectionStart, selectionEnd } = el;
-                            const updated = command.slice(0, selectionStart) + '>' + command.slice(selectionEnd);
-                            setCommand(updated);
-                            setTimeout(() => el.setSelectionRange(selectionStart + 1, selectionStart + 1), 0);
-                        } else {
-                            handleCommandKey(e);
-                        }
-                    }}
-                    placeholder="Command line"
-                    className="w-64 bg-gray-800 text-white p-2 rounded"
-                />
-                <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(false); setShowModal(true); }} className="px-4 py-2 bg-green-600 rounded">Patch</button>
-                <button onMouseDown={e => e.stopPropagation()} onClick={handleUnpatchClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-600 rounded disabled:opacity-50">Unpatch</button>
-                <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(true); setShowModal(true); }} disabled={!selectedRowIds.length} className="px-4 py-2 bg-blue-600 rounded disabled:opacity-50">Re-Patch</button>
-                <button onMouseDown={e => e.stopPropagation()} onClick={handleRemoveClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-800 rounded disabled:opacity-50">Remove Fixture</button>
-                <label className="flex items-center space-x-1 text-white">
-                    <span>Color By:</span>
-                    <select value={colorBy} onChange={e => setColorBy(e.target.value)} className="bg-gray-800 text-white p-1 rounded">
-                        <option value="">None</option>
-                        <option value="type">Fixture Type</option>
-                        <option value="universe">Universe</option>
-                        <option value="location">Location</option>
-                    </select>
-                </label>
-                {colorBy && (
-                    <div className="flex flex-wrap space-x-2">
-                        {colorValues.map(v => (
-                            <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-1 rounded text-sm text-white">{v}</span>
-                        ))}
-                    </div>
-                )}
+            <header className="flex justify-between items-center mb-6">
+                {/* Left side: command line + controls */}
+                <div className="flex items-center space-x-4">
+                    <textarea
+                        ref={commandRef}
+                        value={command}
+                        onChange={e => setCommand(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'x' && !e.ctrlKey && !e.metaKey) {
+                                e.preventDefault();
+                                const el = commandRef.current;
+                                const { selectionStart, selectionEnd } = el;
+                                const updated = command.slice(0, selectionStart) + '>' + command.slice(selectionEnd);
+                                setCommand(updated);
+                                setTimeout(() => el.setSelectionRange(selectionStart + 1, selectionStart + 1), 0);
+                            } else {
+                                handleCommandKey(e);
+                            }
+                        }}
+                        placeholder="Command line"
+                        className="w-64 bg-gray-800 text-white p-2 rounded"
+                    />
+                    <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(false); setShowModal(true); }} className="px-4 py-2 bg-green-600 rounded">Patch</button>
+                    <button onMouseDown={e => e.stopPropagation()} onClick={handleUnpatchClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-600 rounded disabled:opacity-50">Unpatch</button>
+                    <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(true); setShowModal(true); }} disabled={!selectedRowIds.length} className="px-4 py-2 bg-blue-600 rounded disabled:opacity-50">Re-Patch</button>
+                    <button onMouseDown={e => e.stopPropagation()} onClick={handleRemoveClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-800 rounded disabled:opacity-50">Remove Fixture</button>
+                    <label className="flex items-center space-x-1 text-white">
+                        <span>Color By:</span>
+                        <select value={colorBy} onChange={e => setColorBy(e.target.value)} className="bg-gray-800 text-white p-1 rounded">
+                            <option value="">None</option>
+                            <option value="type">Fixture Type</option>
+                            <option value="universe">Universe</option>
+                            <option value="location">Location</option>
+                        </select>
+                    </label>
+                    {colorBy && (
+                        <div className="flex flex-wrap space-x-2">
+                            {colorValues.map(v => (
+                                <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-1 rounded text-sm text-white">{v}</span>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* Right side: Import Excel button */}
+                <div className="ml-auto relative">
+                    <button
+                        onClick={() => document.getElementById('file-upload-input').click()}
+                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+                    >
+                        Import Excel
+                    </button>
+                    <input
+                        type="file"
+                        accept=".xlsx"
+                        id="file-upload-input"
+                        onChange={handleFileUpload}
+                        className="hidden"
+                    />
+                </div>
             </header>
+
 
             <div ref={tableRef} className="overflow-auto bg-gray-800 rounded">
                 <table className="min-w-full table-auto">
