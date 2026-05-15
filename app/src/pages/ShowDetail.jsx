@@ -11,6 +11,22 @@ export default function ShowDetail() {
   const [showPatchModal, setShowPatchModal] = useState(false);
   const [newPatchName, setNewPatchName] = useState('');
 
+  const handleDeleteShow = () => {
+    const show = shows.find(s => s.id === parseInt(showId));
+    if (!window.confirm(`Delete show "${show?.name}"? This will delete all its patch sheets and cannot be undone.`)) return;
+    fetch(`/api/shows/${showId}`, { method: 'DELETE' })
+      .then(() => navigate('/patch'))
+      .catch(err => console.error('Error deleting show:', err));
+  };
+
+  const handleDeletePatch = (patchId, patchName, e) => {
+    e.stopPropagation();
+    if (!window.confirm(`Delete patch sheet "${patchName}"? This cannot be undone.`)) return;
+    fetch(`/api/patch-sheets/${patchId}`, { method: 'DELETE' })
+      .then(() => setPatches(prev => prev.filter(p => p.id !== patchId)))
+      .catch(err => console.error('Error deleting patch sheet:', err));
+  };
+
   useEffect(() => {
     fetch('/api/shows', { credentials: 'include' })
       .then(res => res.json())
@@ -72,20 +88,33 @@ export default function ShowDetail() {
           </button>
           <button
             onClick={() => navigate('/database')}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded mr-4"
           >
             Edit Database
+          </button>
+          <button
+            onClick={handleDeleteShow}
+            className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded text-white"
+          >
+            Delete Show
           </button>
         </div>
         <ul className="space-y-2 mb-6">
           {patches.length > 0 ? (
             patches.map(p => (
-              <li key={p.id}>
+              <li key={p.id} className="flex items-center gap-2">
                 <button
                   onClick={() => navigate(`/patch/${showId}/${p.id}`)}
-                  className="block px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded"
+                  className="flex-1 text-left px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded"
                 >
                   {p.name}
+                </button>
+                <button
+                  onClick={(e) => handleDeletePatch(p.id, p.name, e)}
+                  className="px-2 py-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded text-sm"
+                  title="Delete patch sheet"
+                >
+                  ✕
                 </button>
               </li>
             ))

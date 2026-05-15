@@ -1,373 +1,443 @@
-// File: src/components/PatchTab.jsx
-import React, { useState, useEffect, useRef } from 'react';
-import PatchModal from './PatchModal';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import PatchForm from './PatchForm';
+import RepatchForm from './RepatchForm';
+
+const COLS = [
+  { key: 'set',          label: 'Set',          editable: true,  sortable: true  },
+  { key: 'fixture',      label: 'Fix #',         editable: true,  sortable: true  },
+  { key: 'universe',     label: 'Universe',      editable: false, sortable: true  },
+  { key: 'address',      label: 'Address',       editable: false, sortable: true  },
+  { key: 'endAddress',   label: 'End Addr',      editable: false, sortable: false },
+  { key: 'type',         label: 'Fixture Type',  editable: false, sortable: true  },
+  { key: 'channelCount', label: 'CH Count',      editable: false, sortable: false },
+  { key: 'location',     label: 'Location',      editable: true,  sortable: true  },
+  { key: 'wattage',      label: 'Wattage',       editable: true,  sortable: false },
+  { key: 'weight',       label: 'Weight',        editable: true,  sortable: false },
+  { key: 'firmware',     label: 'Firmware',      editable: true,  sortable: false },
+  { key: 'notes',        label: 'Notes',         editable: true,  sortable: false },
+];
+
+const ALL_KEYS = COLS.map(c => c.key);
+const cellKey = (id, field) => `${id}::${field}`;
 
 export default function PatchTab({
-    patchId,
-    rows,
-    fixtures,
-    updateField,
-    onPatch,
-    onRePatch,
-    onUnpatch,
-    onRemoveFixture
+  patchId,
+  rows,
+  fixtures,
+  conflicts,
+  onPatch,
+  onRePatch,
+  onUnpatch,
+  onRemoveFixture,
+  updateField,
 }) {
-    // ─── Local UI state
-    const [showModal, setShowModal] = useState(false);
-    const [isRePatchMode, setIsRePatchMode] = useState(false);
-    const [selectedCells, setSelectedCells] = useState(new Set());
-    const [isDragging, setIsDragging] = useState(false);
-    const [command, setCommand] = useState('');
-    const commandRef = useRef(null);
-    const [overflowDialog, setOverflowDialog] = useState(null);
-    const overflowCallback = useRef(null);
-    const tableRef = useRef(null);
+  const [showPatchForm, setShowPatchForm] = useState(false);
+  const [showRepatchForm, setShowRepatchForm] = useState(false);
+  const [selectedCells, setSelectedCells] = useState(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [command, setCommand] = useState('');
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: null });
+  const [colorBy, setColorBy] = useState('');
 
-    // ─── Color-By settings
-    const [colorBy, setColorBy] = useState('');
-    const palette = ['#F87171', '#60A5FA', '#34D399', '#FBBF24', '#A78BFA'];
-    const cols = [
-        'set', 'fixture', 'type', 'channelCount',
-        'universe', 'address', 'endAddress', 'location',
-        'notes', 'wattage', 'weight', 'firmware'
-    ];
+  const commandRef = useRef(null);
+  const tableRef = useRef(null);
 
-    // derive colors
-    const colorValues = colorBy ? Array.from(new Set(rows.map(r => r[colorBy]))) : [];
-    const colorMap = colorValues.reduce((acc, v, i) => { acc[v] = palette[i % palette.length]; return acc; }, {});
+  const selectedRowIds = useMemo(() =>
+    Array.from(new Set([...selectedCells].map(k => Number(k.split('::')[0])))),
+    [selectedCells]
+  );
 
-    // helper to build cell key
-    const cellKey = (id, field) => `${id}::${field}`;
+  const sortedRows = useMemo(() => {
+    if (!sortConfig.key) return rows;
+    const sorted = [...rows].sort((a, b) => {
+      const va = a[sortConfig.key] ?? '';
+      const vb = b[sortConfig.key] ?? '';
+      return String(va).localeCompare(String(vb), undefined, { numeric: true });
+    });
+    return sortConfig.direction === 'desc' ? sorted.reverse() : sorted;
+  }, [rows, sortConfig]);
 
-    // compute selected row IDs
-    const selectedRowIds = Array.from(
-        new Set([...selectedCells].map(key => Number(key.split('::')[0])))
-    );
+  const palette = ['#93C5FD', '#86EFAC', '#FCD34D', '#F9A8D4', '#C4B5FD', '#6EE7B7', '#FCA5A5'];
+  const colorValues = colorBy ? [...new Set(rows.map(r => r[colorBy]))] : [];
+  const colorMap = colorValues.reduce((acc, v, i) => ({ ...acc, [v]: palette[i % palette.length] }), {});
 
-    const updateSelectedFields = (field, val) => {
-        const keys = [...selectedCells].filter(k => k.endsWith(`::${field}`));
-        const ids = keys.map(k => Number(k.split('::')[0]));
-        ids.forEach(id => updateField(id, field, val));
-    };
+  const conflictIds = useMemo(() => {
+    const ids = new Set();
+    conflicts.forEach(c => { ids.add(c.fixtureA.id); ids.add(c.fixtureB.id); });
+    return ids;
+  }, [conflicts]);
 
-    const updateFixtureFields = input => {
-        const keys = [...selectedCells].filter(k => k.endsWith('::fixture'));
-        if (!keys.length) return;
-        const ids = keys.map(k => Number(k.split('::')[0]));
-        const assigns = [];
-        if (input === '') {
-            ids.forEach(() => assigns.push(''));
-        } else if (input.includes('/')) {
-            let [maj, min] = input.split('/')[0].split('.').map(Number);
-            const minMax = Number(input.split('/')[1]);
-            for (let i = 0; i < ids.length; i++) {
-                assigns.push(`${maj}.${min}`);
-                min++;
-                if (min > minMax) { maj++; min = 1; }
-            }
-        } else {
-            let start = Number(input);
-            for (let i = 0; i < ids.length; i++) assigns.push(String(start + i));
-        }
-        ids.forEach((id, i) => updateField(id, 'fixture', assigns[i]));
-    };
+  // ─── Cell selection
+  const onCellMouseDown = (id, field) => {
+    setSelectedCells(new Set([cellKey(id, field)]));
+    setIsDragging(true);
+  };
+  const onCellMouseEnter = (id, field) => {
+    if (!isDragging) return;
+    setSelectedCells(prev => new Set([...prev, cellKey(id, field)]));
+  };
+  const toggleRow = (id) => {
+    const keys = ALL_KEYS.map(f => cellKey(id, f));
+    setSelectedCells(prev => {
+      const next = new Set(prev);
+      const allSel = keys.every(k => next.has(k));
+      keys.forEach(k => allSel ? next.delete(k) : next.add(k));
+      return next;
+    });
+  };
 
-    // ─── Global key for typing into command line
-    useEffect(() => {
-        const handleGlobalKey = e => {
-            if (document.activeElement === commandRef.current) return;
-            if (selectedCells.size === 0 && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-                e.preventDefault();
-                const char = e.key === 'x' ? '>' : e.key;
-                const el = commandRef.current;
-                const { selectionStart, selectionEnd } = el;
-                const updated = command.slice(0, selectionStart) + char + command.slice(selectionEnd);
-                setCommand(updated);
-                setTimeout(() => el.setSelectionRange(selectionStart + 1, selectionStart + 1), 0);
-                el.focus();
-            }
-        };
-        window.addEventListener('keydown', handleGlobalKey);
-        return () => window.removeEventListener('keydown', handleGlobalKey);
-    }, [selectedCells, command]);
+  // ─── Multi-cell update
+  const updateSelectedField = (field, val) => {
+    const ids = [...selectedCells]
+      .filter(k => k.endsWith(`::${field}`))
+      .map(k => Number(k.split('::')[0]));
+    ids.forEach(id => updateField(id, field, val));
+  };
 
-    // ─── Escape clears selection
-    useEffect(() => {
-        const clearOnEsc = e => { if (e.key === 'Escape') setSelectedCells(new Set()); };
-        window.addEventListener('keydown', clearOnEsc);
-        return () => window.removeEventListener('keydown', clearOnEsc);
-    }, []);
+  const updateFixtureNumbers = (input) => {
+    const ids = [...selectedCells]
+      .filter(k => k.endsWith('::fixture'))
+      .map(k => Number(k.split('::')[0]));
+    if (!ids.length) return;
+    const assigns = [];
+    if (input === '') {
+      ids.forEach(() => assigns.push(''));
+    } else if (input.includes('/')) {
+      let [maj, min] = input.split('/')[0].split('.').map(Number);
+      const minMax = Number(input.split('/')[1]);
+      for (let i = 0; i < ids.length; i++) {
+        assigns.push(`${maj}.${min}`);
+        min++;
+        if (min > minMax) { maj++; min = 1; }
+      }
+    } else {
+      let start = Number(input);
+      ids.forEach((_, i) => assigns.push(String(start + i)));
+    }
+    ids.forEach((id, i) => updateField(id, 'fixture', assigns[i]));
+  };
 
-    // ─── Drag end & click-outside
-    useEffect(() => {
-        const onUp = () => setIsDragging(false);
-        window.addEventListener('mouseup', onUp);
-        return () => window.removeEventListener('mouseup', onUp);
-    }, []);
+  // ─── Command line
+  const handleCommand = (e) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const cmd = command.trim();
+    const ids = new Set();
 
-    useEffect(() => {
-        const onDown = e => {
-            if (showModal) return;
-            if (tableRef.current && !tableRef.current.contains(e.target)) {
-                setSelectedCells(new Set());
-            }
-        };
-        document.addEventListener('mousedown', onDown);
-        return () => document.removeEventListener('mousedown', onDown);
-    }, [showModal]);
-
-    // ─── Cell selection
-    const onCellMouseDown = (id, field) => {
-        setSelectedCells(new Set([cellKey(id, field)]));
-        setIsDragging(true);
-    };
-    const onCellMouseEnter = (id, field) => {
-        if (!isDragging) return;
-        setSelectedCells(prev => new Set(prev).add(cellKey(id, field)));
-    };
-    const toggleRow = id => {
-        const keys = cols.map(f => cellKey(id, f));
-        setSelectedCells(prev => {
-            const nxt = new Set(prev);
-            const all = keys.every(k => nxt.has(k));
-            keys.forEach(k => all ? nxt.delete(k) : nxt.add(k));
-            return nxt;
-        });
-    };
-
-    // ─── Command-line parsing
-    const handleCommandKey = e => {
-        if (e.key !== 'Enter') return;
-        e.preventDefault();
-        const cmd = command.trim();
-        const ids = new Set();
-
-        // open-ended: "101 >"
-        const openMatch = cmd.match(/^(\d+)\s*[<>]\s*$/);
-        if (openMatch) {
-            let cur = Number(openMatch[1]);
-            const map = new Map();
-            rows.forEach(r => {
-                const n = Math.floor(Number(r.fixture));
-                if (!map.has(n)) map.set(n, []);
-                map.get(n).push(r.id);
-            });
-            while (map.has(cur)) { map.get(cur).forEach(id => ids.add(id)); cur++; }
-        }
-        // exact 101.1
-        else if (/^\d+\.\d+$/.test(cmd)) {
-            rows.forEach(r => r.fixture === cmd && ids.add(r.id));
-        }
-        // closed range 101 > 105
-        else if (/^(\d+)\s*[<>]\s*(\d+)$/.test(cmd)) {
-            const [, a, b] = cmd.match(/^(\d+)\s*[<>]\s*(\d+)$/);
-            const [min, max] = [Number(a), Number(b)].sort((x, y) => x - y);
-            rows.forEach(r => {
-                const m = Math.floor(Number(r.fixture));
-                if (m >= min && m <= max) ids.add(r.id);
-            });
-        }
-        // single number 101
-        else if (/^\d+$/.test(cmd)) {
-            const n = Number(cmd);
-            rows.forEach(r => Math.floor(Number(r.fixture)) === n && ids.add(r.id));
-        }
-
-        const sel = new Set();
-        ids.forEach(id => cols.forEach(f => sel.add(cellKey(id, f))));
-        setSelectedCells(sel);
-        setCommand('');
-    };
-
-    // ─── Overflow confirm
-    const showOverflow = (msg, cb) => { setOverflowDialog(msg); overflowCallback.current = cb; };
-    const handleOverflow = ok => { const cb = overflowCallback.current; setOverflowDialog(null); overflowCallback.current = null; if (cb) cb(ok); };
-
-    // ─── Local handlers
-    const handleUnpatchClick = () => onUnpatch(selectedRowIds);
-    const handleRemoveClick = () => { onRemoveFixture(selectedRowIds); setSelectedCells(new Set()); };
-
-    function handleFileUpload(e) {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const formData = new FormData();
-        formData.append('file', file);
-
-        fetch(`/api/patch-sheets/${patchId}/import-excel`, {
-            method: 'POST',
-            body: formData
-        })
-            .then(res => res.json())
-            .then(data => {
-                alert(`✅ Imported ${data.inserted} fixtures!`);
-                window.location.reload(); // or re-fetch rows
-            })
-            .catch(err => {
-                console.error('Import failed:', err);
-                alert('❌ Import failed');
-            });
+    if (/^(\d+)\s*[<>]\s*$/.test(cmd)) {
+      let cur = Number(cmd.match(/^(\d+)/)[1]);
+      const map = new Map();
+      rows.forEach(r => {
+        const n = Math.floor(Number(r.fixture));
+        if (!map.has(n)) map.set(n, []);
+        map.get(n).push(r.id);
+      });
+      while (map.has(cur)) { map.get(cur).forEach(id => ids.add(id)); cur++; }
+    } else if (/^\d+\.\d+$/.test(cmd)) {
+      rows.forEach(r => r.fixture === cmd && ids.add(r.id));
+    } else if (/^(\d+)\s*[<>]\s*(\d+)$/.test(cmd)) {
+      const [, a, b] = cmd.match(/^(\d+)\s*[<>]\s*(\d+)$/);
+      const [min, max] = [Number(a), Number(b)].sort((x, y) => x - y);
+      rows.forEach(r => {
+        const n = Math.floor(Number(r.fixture));
+        if (n >= min && n <= max) ids.add(r.id);
+      });
+    } else if (/^\d+$/.test(cmd)) {
+      const n = Number(cmd);
+      rows.forEach(r => Math.floor(Number(r.fixture)) === n && ids.add(r.id));
     }
 
+    const sel = new Set();
+    ids.forEach(id => ALL_KEYS.forEach(f => sel.add(cellKey(id, f))));
+    setSelectedCells(sel);
+    setCommand('');
+  };
 
+  // ─── Global keyboard
+  useEffect(() => {
+    const onKey = e => {
+      const tag = document.activeElement?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'Escape') { setSelectedCells(new Set()); return; }
+      if (selectedCells.size === 0 && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        setCommand(prev => prev + (e.key === 'x' ? '>' : e.key));
+        commandRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedCells]);
 
+  useEffect(() => {
+    const onUp = () => setIsDragging(false);
+    window.addEventListener('mouseup', onUp);
+    return () => window.removeEventListener('mouseup', onUp);
+  }, []);
 
+  useEffect(() => {
+    const onDown = e => {
+      if (showPatchForm || showRepatchForm) return;
+      if (tableRef.current && !tableRef.current.contains(e.target)) {
+        setSelectedCells(new Set());
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [showPatchForm, showRepatchForm]);
 
-    return (
-        <div className="p-6 bg-gray-900 text-white min-h-screen relative">
-            {overflowDialog && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                    <div className="bg-gray-800 p-6 rounded-lg w-80">
-                        <p className="text-white mb-4">{overflowDialog}</p>
-                        <div className="flex justify-end space-x-2">
-                            <button onClick={() => handleOverflow(true)} className="px-4 py-2 bg-green-600 rounded">Continue</button>
-                            <button onClick={() => handleOverflow(false)} className="px-4 py-2 bg-red-600 rounded">Cancel</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+  const handleSort = (key) => {
+    setSortConfig(prev => ({
+      key,
+      direction: prev.key === key
+        ? prev.direction === 'asc' ? 'desc' : prev.direction === 'desc' ? null : 'asc'
+        : 'asc',
+    }));
+  };
 
-            <header className="flex justify-between items-center mb-6">
-                {/* Left side: command line + controls */}
-                <div className="flex items-center space-x-4">
-                    <textarea
-                        ref={commandRef}
-                        value={command}
-                        onChange={e => setCommand(e.target.value)}
-                        onKeyDown={e => {
-                            if (e.key === 'x' && !e.ctrlKey && !e.metaKey) {
-                                e.preventDefault();
-                                const el = commandRef.current;
-                                const { selectionStart, selectionEnd } = el;
-                                const updated = command.slice(0, selectionStart) + '>' + command.slice(selectionEnd);
-                                setCommand(updated);
-                                setTimeout(() => el.setSelectionRange(selectionStart + 1, selectionStart + 1), 0);
-                            } else {
-                                handleCommandKey(e);
-                            }
-                        }}
-                        placeholder="Command line"
-                        className="w-64 bg-gray-800 text-white p-2 rounded"
-                    />
-                    <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(false); setShowModal(true); }} className="px-4 py-2 bg-green-600 rounded">Patch</button>
-                    <button onMouseDown={e => e.stopPropagation()} onClick={handleUnpatchClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-600 rounded disabled:opacity-50">Unpatch</button>
-                    <button onMouseDown={e => e.stopPropagation()} onClick={() => { setIsRePatchMode(true); setShowModal(true); }} disabled={!selectedRowIds.length} className="px-4 py-2 bg-blue-600 rounded disabled:opacity-50">Re-Patch</button>
-                    <button onMouseDown={e => e.stopPropagation()} onClick={handleRemoveClick} disabled={!selectedRowIds.length} className="px-4 py-2 bg-red-800 rounded disabled:opacity-50">Remove Fixture</button>
-                    <label className="flex items-center space-x-1 text-white">
-                        <span>Color By:</span>
-                        <select value={colorBy} onChange={e => setColorBy(e.target.value)} className="bg-gray-800 text-white p-1 rounded">
-                            <option value="">None</option>
-                            <option value="type">Fixture Type</option>
-                            <option value="universe">Universe</option>
-                            <option value="location">Location</option>
-                        </select>
-                    </label>
-                    {colorBy && (
-                        <div className="flex flex-wrap space-x-2">
-                            {colorValues.map(v => (
-                                <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-1 rounded text-sm text-white">{v}</span>
-                            ))}
-                        </div>
-                    )}
-                </div>
+  const handleExport = () => {
+    window.open(`/api/patch-sheets/${patchId}/export-excel`, '_blank');
+  };
 
-                {/* Right side: Import Excel button */}
-                <div className="ml-auto relative">
-                    <button
-                        onClick={() => document.getElementById('file-upload-input').click()}
-                        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-                    >
-                        Import Excel
-                    </button>
-                    <input
-                        type="file"
-                        accept=".xlsx"
-                        id="file-upload-input"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                    />
-                </div>
-            </header>
+  const handleImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    fetch(`/api/patch-sheets/${patchId}/import-excel`, { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(d => { alert(`Imported ${d.inserted} fixtures`); window.location.reload(); })
+      .catch(() => alert('Import failed'));
+    e.target.value = '';
+  };
 
+  return (
+    <div className="flex flex-col gap-4">
 
-            <div ref={tableRef} className="overflow-auto bg-gray-800 rounded">
-                <table className="min-w-full table-auto">
-                    <thead>
-                        <tr className="bg-gray-700">
-                            <th className="px-2 py-2"></th>
-                            {cols.map((f, i) => <th key={i} className="px-4 py-2 border text-left">{f}</th>)}
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {rows.map(r => {
-                            const rowKeys = cols.map(f => cellKey(r.id, f));
-                            const rowSel = rowKeys.every(k => selectedCells.has(k));
-                            const bgStyle = colorBy ? { backgroundColor: colorMap[r[colorBy]] } : {};
-                            return (
-                                <tr key={r.id} className={rowSel ? 'bg-blue-600' : ''} style={bgStyle}>
-                                    <td className="px-2 py-2 border">
-                                        <button onClick={e => { e.stopPropagation(); toggleRow(r.id); }} className="w-4 h-4 bg-gray-500 hover:bg-gray-600 rounded" />
-                                    </td>
-                                    {cols.map(field => {
-                                        const key = cellKey(r.id, field);
-                                        const sel = selectedCells.has(key);
-                                        return (
-                                            <td key={field} onMouseDown={() => onCellMouseDown(r.id, field)} onMouseEnter={() => onCellMouseEnter(r.id, field)} className={`px-4 py-2 border ${sel ? 'bg-blue-600' : ''}`}>{
-                                                ['set', 'location', 'notes', 'fixture'].includes(field) ? (
-                                                    <input
-                                                        type="text"
-                                                        value={r[field] || ''}
-                                                        onChange={e => {
-                                                            const value = e.target.value;
-                                                            updateField(r.id, field, value);
-                                                        }}
-                                                        onBlur={e => {
-                                                            const v = e.target.value.trim();
-                                                            if (field === 'fixture') {
-                                                                selectedCells.size > 1 ? updateFixtureFields(v) : updateField(r.id, 'fixture', v);
-                                                            } else if (selectedCells.size > 1) {
-                                                                updateSelectedFields(field, v);
-                                                            } else {
-                                                                updateField(r.id, field, v);
-                                                            }
-                                                        }}
-                                                        onKeyDown={e => {
-                                                            if (e.key === 'Enter') {
-                                                                e.preventDefault();
-                                                                const v = e.target.value.trim();
-                                                                if (field === 'fixture') {
-                                                                    selectedCells.size > 1 ? updateFixtureFields(v) : updateField(r.id, 'fixture', v);
-                                                                } else if (selectedCells.size > 1) {
-                                                                    updateSelectedFields(field, v);
-                                                                } else {
-                                                                    updateField(r.id, field, v);
-                                                                }
-                                                            }
-                                                        }}
-                                                        className="w-full bg-transparent focus:outline-none text-white"
-                                                    />
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <input
+          ref={commandRef}
+          type="text"
+          value={command}
+          onChange={e => setCommand(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'x' && !e.ctrlKey && !e.metaKey) {
+              e.preventDefault();
+              setCommand(prev => prev + '>');
+            } else {
+              handleCommand(e);
+            }
+          }}
+          placeholder="101 > 105  or  201"
+          className="w-48 px-3 py-1.5 bg-gray-700 border border-gray-600 text-white text-sm rounded placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+        />
 
-                                                ) : r[field]
-                                            }</td>
-                                        );
-                                    })}
-                                </tr>
-                            );
-                        })}
-                    </tbody>
-                </table>
-            </div>
-
-            {showModal && (
-                <PatchModal
-                    fixtures={fixtures}
-                    onPatch={isRePatchMode ? onRePatch : onPatch}
-                    onRePatch={onRePatch} // ✅ add this
-                    isRePatch={isRePatchMode}
-                    selectedRows={selectedRowIds}
-                    onClose={() => { setShowModal(false); setIsRePatchMode(false); }}
-                />
-            )}
+        <div className="flex items-center gap-2">
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={() => setShowPatchForm(true)}
+            className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded font-medium"
+          >
+            Patch
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={() => setShowRepatchForm(true)}
+            disabled={!selectedRowIds.length}
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded font-medium disabled:opacity-40"
+          >
+            Re-Patch
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={() => onUnpatch(selectedRowIds)}
+            disabled={!selectedRowIds.length}
+            className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded font-medium disabled:opacity-40"
+          >
+            Unpatch
+          </button>
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={() => { onRemoveFixture(selectedRowIds); setSelectedCells(new Set()); }}
+            disabled={!selectedRowIds.length}
+            className="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white text-sm rounded font-medium disabled:opacity-40"
+          >
+            Remove
+          </button>
         </div>
-    );
+
+        {selectedRowIds.length > 0 && (
+          <span className="text-gray-400 text-sm">{selectedRowIds.length} selected</span>
+        )}
+
+        <div className="ml-auto flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-gray-300">
+            Color by
+            <select
+              value={colorBy}
+              onChange={e => setColorBy(e.target.value)}
+              className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-2 py-1 focus:outline-none"
+            >
+              <option value="">None</option>
+              <option value="type">Fixture Type</option>
+              <option value="universe">Universe</option>
+              <option value="location">Location</option>
+            </select>
+          </label>
+
+          <label className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded cursor-pointer">
+            Import
+            <input type="file" accept=".xlsx" onChange={handleImport} className="hidden" />
+          </label>
+          <button onClick={handleExport} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded">
+            Export
+          </button>
+        </div>
+      </div>
+
+      {/* Color legend */}
+      {colorBy && colorValues.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {colorValues.map(v => (
+            <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-0.5 rounded text-xs text-gray-900 font-medium">
+              {v || 'Unset'}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Table */}
+      <div ref={tableRef} className="overflow-auto rounded border border-gray-600 shadow">
+        <table className="min-w-full text-sm border-collapse">
+          <thead>
+            <tr className="bg-gray-700 text-gray-200 sticky top-0">
+              <th className="w-9 px-2 py-2 border-b border-gray-600" />
+              {COLS.map(col => (
+                <th
+                  key={col.key}
+                  onClick={() => col.sortable && handleSort(col.key)}
+                  className={`px-3 py-2 border-b border-gray-600 text-left whitespace-nowrap text-xs font-semibold uppercase tracking-wide ${
+                    col.sortable ? 'cursor-pointer hover:bg-gray-600 select-none' : ''
+                  }`}
+                >
+                  {col.label}
+                  {sortConfig.key === col.key && sortConfig.direction && (
+                    <span className="ml-1 text-blue-400">
+                      {sortConfig.direction === 'asc' ? '▲' : '▼'}
+                    </span>
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.map((r, idx) => {
+              const rowKeys = ALL_KEYS.map(f => cellKey(r.id, f));
+              const rowSelected = rowKeys.every(k => selectedCells.has(k));
+              const hasConflict = conflictIds.has(r.id);
+              const bgColor = colorBy ? colorMap[r[colorBy]] : null;
+
+              let rowClass = idx % 2 === 0 ? 'bg-white' : 'bg-blue-50';
+              if (rowSelected) rowClass = 'bg-blue-200';
+              else if (hasConflict) rowClass = 'bg-red-100';
+              else if (bgColor) rowClass = '';
+
+              return (
+                <tr
+                  key={r.id}
+                  className={`border-b border-gray-200 ${rowClass}`}
+                  style={bgColor && !rowSelected && !hasConflict ? { backgroundColor: bgColor } : {}}
+                >
+                  <td className="px-2 py-1 border-r border-gray-200 text-center">
+                    <button
+                      onClick={e => { e.stopPropagation(); toggleRow(r.id); }}
+                      className={`w-4 h-4 rounded border flex items-center justify-center mx-auto text-xs ${
+                        rowSelected ? 'bg-blue-500 border-blue-500 text-white' : 'border-gray-400 hover:border-gray-600'
+                      }`}
+                    >
+                      {rowSelected && '✓'}
+                    </button>
+                  </td>
+                  {COLS.map(col => {
+                    const key = cellKey(r.id, col.key);
+                    const cellSel = selectedCells.has(key);
+                    return (
+                      <td
+                        key={col.key}
+                        onMouseDown={() => onCellMouseDown(r.id, col.key)}
+                        onMouseEnter={() => onCellMouseEnter(r.id, col.key)}
+                        className={`px-3 py-1 border-r border-gray-200 text-gray-900 ${
+                          cellSel ? 'bg-blue-300 outline outline-1 outline-blue-500' : ''
+                        }`}
+                      >
+                        {col.editable ? (
+                          <input
+                            type="text"
+                            value={r[col.key] ?? ''}
+                            onChange={e => updateField(r.id, col.key, e.target.value)}
+                            onBlur={e => {
+                              const v = e.target.value.trim();
+                              if (col.key === 'fixture' && selectedCells.size > 1) {
+                                updateFixtureNumbers(v);
+                              } else if (selectedCells.size > 1) {
+                                updateSelectedField(col.key, v);
+                              } else {
+                                updateField(r.id, col.key, v);
+                              }
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                const v = e.target.value.trim();
+                                if (col.key === 'fixture' && selectedCells.size > 1) {
+                                  updateFixtureNumbers(v);
+                                } else if (selectedCells.size > 1) {
+                                  updateSelectedField(col.key, v);
+                                } else {
+                                  updateField(r.id, col.key, v);
+                                }
+                                e.target.blur();
+                              }
+                            }}
+                            className="w-full bg-transparent focus:outline-none text-gray-900 min-w-0"
+                          />
+                        ) : (
+                          <span className="block select-none text-gray-900">
+                            {r[col.key] ?? ''}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={COLS.length + 1} className="px-4 py-10 text-center text-gray-400 bg-white">
+                  No fixtures patched yet. Click <span className="text-green-600 font-medium">Patch</span> to add fixtures.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {showPatchForm && (
+        <PatchForm
+          fixtures={fixtures}
+          onPatch={onPatch}
+          onClose={() => setShowPatchForm(false)}
+        />
+      )}
+      {showRepatchForm && (
+        <RepatchForm
+          selectedRows={selectedRowIds}
+          rows={rows}
+          onRePatch={onRePatch}
+          onClose={() => setShowRepatchForm(false)}
+        />
+      )}
+    </div>
+  );
 }

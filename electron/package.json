@@ -1,0 +1,12 @@
+{
+  "name": "five12-lighting",
+  "version": "1.0.0",
+  "description": "Five12 Lighting Playground",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { computeEffect } from '../utils/effectMath';
 
 const TABLES = [
@@ -18,19 +18,117 @@ const TABLES = [
 
 const TABLE_INFO = {
   sine:        { desc: 'Smooth S-curve — eases in and out at every peak. Acceleration is zero at the extremes.', use: 'Circles, breathing, color fades, organic motion.' },
-  tangent:     { desc: 'Moves slowly through center but snaps very fast near the edges. Creates a "crack-the-whip" feel.', use: 'Pan snap moves, dramatic intensity flashes.' },
-  sawtooth:    { desc: 'Linear ramp up, then instant reset back. One direction → snap → repeat.', use: 'Directional chases, spin effects, continuous sweeps.' },
+  tangent:     { desc: 'Slow through center, snaps very fast near edges. Creates a "crack-the-whip" feel.', use: 'Pan snap moves, dramatic intensity flashes.' },
+  sawtooth:    { desc: 'Linear ramp up, then instant snap back. One direction → snap → repeat.', use: 'Directional chases, spin effects, continuous sweeps.' },
   ramp:        { desc: 'Linear increase from low to high across the full cycle. No snap — just a steady climb.', use: 'Build effects, ascending chases, slow rises.' },
   inverseRamp: { desc: 'Linear decrease from high to low across the cycle.', use: 'Fade-down effects, descending chases.' },
   step:        { desc: 'Hard cut between high and low — zero transition time. Pure square wave.', use: 'Hard-cut chases, strobe, square pan sweeps.' },
-  markOn:      { desc: 'Holds fully ON for the active Length portion, then snaps back to base. Think: a top-hat pulse.', use: 'Beat pulses. Shorten Length for a quick hit — lengthen for a sustained peak.' },
-  markOff:     { desc: 'Holds fully OFF for the active Length portion, then snaps back to base. The inverse of Mark On.', use: 'Dip/blackout pulses on a beat, dropout accents.' },
-  spiral:      { desc: 'Two tangent curves per cycle: lingers at center, snaps to +extreme, returns to center, snaps to −extreme. Two hits per cycle.', use: 'Double-hit pan snaps, "zip-zap" moves, rapid whips.' },
-  random1:     { desc: 'Random values biased toward the BOTTOM of the range (below base). More low values than high.', use: 'Dim-biased flicker — candle, embers, distant stars.' },
-  random2:     { desc: 'Random values biased toward the TOP of the range (above base). More bright hits than dips.', use: 'Bright-biased sparkle — star field, glitter, camera flash.' },
-  random3:     { desc: 'Random values clustered near the base — very subtle variation. Almost feels like natural breathing.', use: 'Gentle color drift, soft intensity shimmer, naturalistic life.' },
+  markOn:      { desc: 'Holds fully ON for the active Length portion, then snaps back to base.', use: 'Beat pulses. Shorten Length for a quick hit.' },
+  markOff:     { desc: 'Holds fully OFF for the active Length portion, then snaps back to base.', use: 'Dip/blackout pulses on a beat, dropout accents.' },
+  spiral:      { desc: 'Double-tangent: two snap moments per cycle. Lingers at center, snaps to each extreme.', use: 'Double-hit pan snaps, "zip-zap" moves, rapid whips.' },
+  random1:     { desc: 'Random values biased toward the BOTTOM of the range (below base).', use: 'Dim-biased flicker — candle, embers, distant stars.' },
+  random2:     { desc: 'Random values biased toward the TOP of the range (above base).', use: 'Bright-biased sparkle — star field, glitter, camera flash.' },
+  random3:     { desc: 'Random values clustered near base — very subtle variation.', use: 'Gentle color drift, soft shimmer, naturalistic breathing.' },
 };
 
+// ─── Encoder Wheel ────────────────────────────────────────────────────────────
+function Encoder({ label, unit, value, min, max, step = 1, disabled, onChange, color = '#3b82f6' }) {
+  const SIZE = 62;
+  const cx = SIZE / 2, cy = SIZE / 2, r = 23;
+
+  const normalized = (value != null && max > min)
+    ? Math.max(0, Math.min(1, (value - min) / (max - min)))
+    : 0;
+
+  const toXY = (deg) => ({
+    x: +(cx + r * Math.sin(deg * Math.PI / 180)).toFixed(2),
+    y: +(cy - r * Math.cos(deg * Math.PI / 180)).toFixed(2),
+  });
+
+  const startPt  = toXY(-135);
+  const endPt    = toXY(135);
+  const curAngle = -135 + normalized * 270;
+  const curPt    = toXY(curAngle);
+  const span     = normalized * 270;
+  const bigArc   = span > 180 ? 1 : 0;
+
+  const trackD  = `M${startPt.x} ${startPt.y} A${r} ${r} 0 1 1 ${endPt.x} ${endPt.y}`;
+  const activeD = span > 0
+    ? `M${startPt.x} ${startPt.y} A${r} ${r} 0 ${bigArc} 1 ${curPt.x} ${curPt.y}`
+    : null;
+
+  const stateRef = useRef({ value, min, max, step, onChange });
+  stateRef.current = { value, min, max, step, onChange };
+
+  const elRef = useRef(null);
+
+  const handleMouseDown = useCallback((e) => {
+    if (disabled) return;
+    e.preventDefault();
+    const { value: sv, min: lo, max: hi, step: st, onChange: cb } = stateRef.current;
+    if (sv == null) return;
+    const startY = e.clientY;
+    const range  = hi - lo;
+    const onMove = (ev) => {
+      const dy  = startY - ev.clientY;
+      const raw = Math.max(lo, Math.min(hi, sv + dy * (range / 200)));
+      cb(Math.round(raw / st) * st);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [disabled]);
+
+  useEffect(() => {
+    const el = elRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (disabled) return;
+      const { value: v, min: lo, max: hi, step: st, onChange: cb } = stateRef.current;
+      if (v == null) return;
+      e.preventDefault();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      cb(Math.max(lo, Math.min(hi, Math.round((v + dir * st) / st) * st)));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [disabled]);
+
+  const hasVal = value != null && !disabled;
+
+  return (
+    <div className="flex flex-col items-center gap-0.5 select-none">
+      <div
+        ref={elRef}
+        onMouseDown={handleMouseDown}
+        className={`relative ${disabled ? 'opacity-20 cursor-not-allowed' : 'cursor-ns-resize hover:brightness-125'}`}
+        style={{ width: SIZE, height: SIZE }}
+        title={disabled ? '' : 'Drag ↑↓ or scroll wheel'}
+      >
+        <svg width={SIZE} height={SIZE}>
+          <circle cx={cx} cy={cy} r={r + 5} fill="#0c0c0c" />
+          <path d={trackD} fill="none" stroke="#222" strokeWidth="5" strokeLinecap="round" />
+          {activeD && (
+            <path d={activeD} fill="none" stroke={hasVal ? color : '#333'} strokeWidth="5" strokeLinecap="round" />
+          )}
+          {hasVal && span > 0 && (
+            <circle cx={curPt.x} cy={curPt.y} r={3.5} fill="white" opacity={0.9} />
+          )}
+          <circle cx={cx} cy={cy} r={8} fill="#181818" stroke="#2a2a2a" strokeWidth={1} />
+        </svg>
+      </div>
+      <div className={`text-[11px] font-mono tabular-nums leading-tight ${hasVal ? 'text-zinc-100' : 'text-gray-700'}`}>
+        {hasVal ? `${value}${unit || ''}` : '─'}
+      </div>
+      <div className="text-[8px] text-gray-600 uppercase tracking-widest leading-none">{label}</div>
+    </div>
+  );
+}
+
+// ─── Wave Preview ─────────────────────────────────────────────────────────────
 function WavePreview({ params }) {
   const canvasRef = useRef(null);
 
@@ -38,15 +136,14 @@ function WavePreview({ params }) {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = canvas.width, H = canvas.height;
 
-    ctx.fillStyle = '#111827';
+    ctx.fillStyle = '#080808';
     ctx.fillRect(0, 0, W, H);
 
     if (!params?.table) {
-      ctx.fillStyle = '#4b5563';
-      ctx.font = '11px sans-serif';
+      ctx.fillStyle = '#2a2a2a';
+      ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('No effect', W / 2, H / 2 + 4);
       return;
@@ -54,149 +151,124 @@ function WavePreview({ params }) {
 
     const size = params.size ?? 50;
     const halfRange = (size / 100) / 2;
-    const minRaw = 0.5 - halfRange;
-    const maxRaw = 0.5 + halfRange;
-    const clipsTop = maxRaw > 1;
-    const clipsBot = minRaw < 0;
-    const hasClip = clipsTop || clipsBot;
-
-    // Scale y-axis to show full unclipped wave + padding
+    const minRaw = 0.5 - halfRange, maxRaw = 0.5 + halfRange;
+    const clipsTop = maxRaw > 1, clipsBot = minRaw < 0;
     const pad = 0.1;
     const viewMin = Math.min(minRaw, 0) - pad;
     const viewMax = Math.max(maxRaw, 1) + pad;
     const viewRange = viewMax - viewMin;
     const toY = (v) => H - ((v - viewMin) / viewRange) * H;
 
-    // Clipping zone background (red tint)
-    if (clipsTop) {
-      ctx.fillStyle = 'rgba(239,68,68,0.12)';
-      ctx.fillRect(0, 0, W, toY(1));
-    }
-    if (clipsBot) {
-      ctx.fillStyle = 'rgba(239,68,68,0.12)';
-      ctx.fillRect(0, toY(0), W, H - toY(0));
-    }
+    if (clipsTop) { ctx.fillStyle = 'rgba(239,68,68,0.07)'; ctx.fillRect(0, 0, W, toY(1)); }
+    if (clipsBot) { ctx.fillStyle = 'rgba(239,68,68,0.07)'; ctx.fillRect(0, toY(0), W, H - toY(0)); }
 
-    // 100% and 0% boundary lines
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(0, toY(1)); ctx.lineTo(W, toY(1)); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, toY(0)); ctx.lineTo(W, toY(0)); ctx.stroke();
     ctx.setLineDash([]);
-
-    // Center (0.5 = base) line
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
     ctx.beginPath(); ctx.moveTo(0, toY(0.5)); ctx.lineTo(W, toY(0.5)); ctx.stroke();
 
-    // Label boundaries when clipping
-    if (hasClip) {
-      ctx.fillStyle = 'rgba(255,255,255,0.25)';
-      ctx.font = '8px sans-serif';
-      ctx.textAlign = 'left';
-      if (clipsTop) ctx.fillText('100%', 3, toY(1) - 2);
-      if (clipsBot) ctx.fillText('0%',   3, toY(0) + 9);
-    }
-
-    // Compute points
     const cycleDuration = 60 / (params.rate || 60);
-    const pts = Array.from({ length: W + 1 }, (_, x) => {
-      const t = (x / W) * cycleDuration;
-      return { x, raw: computeEffect(params.table, t, params) };
-    });
+    const pts = Array.from({ length: W + 1 }, (_, x) => ({
+      x, raw: computeEffect(params.table, (x / W) * cycleDuration, params),
+    }));
 
-    // Draw wave — blue in range, red when clipping
     for (let i = 0; i < pts.length - 1; i++) {
       const { x, raw } = pts[i];
       const next = pts[i + 1];
-      const clipping = raw > 1 || raw < 0;
-      ctx.strokeStyle = clipping ? 'rgba(239,68,68,0.85)' : '#60a5fa';
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = (raw > 1 || raw < 0) ? 'rgba(239,68,68,0.85)' : '#3b82f6';
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.moveTo(x, toY(raw));
       ctx.lineTo(next.x, toY(next.raw));
       ctx.stroke();
     }
 
-    // "CLIP" badge
-    if (hasClip) {
-      ctx.fillStyle = 'rgba(239,68,68,0.85)';
-      ctx.font = 'bold 8px sans-serif';
+    if (clipsTop || clipsBot) {
+      ctx.fillStyle = 'rgba(239,68,68,0.8)';
+      ctx.font = 'bold 7px sans-serif';
       ctx.textAlign = 'right';
-      ctx.fillText('CLIP', W - 3, 9);
+      ctx.fillText('CLIP', W - 3, 8);
     }
   }, [params]);
 
-  return <canvas ref={canvasRef} width={220} height={68} className="w-full rounded" />;
+  return <canvas ref={canvasRef} width={200} height={58} className="w-full rounded" />;
 }
 
-function NumInput({ label, value, min, max, step = 1, disabled, onChange, placeholder }) {
+// ─── Hog-style toggle button ──────────────────────────────────────────────────
+function HogBtn({ active, disabled, onClick, color = '#2563eb', children }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <label className="text-[10px] text-gray-500 uppercase tracking-wide">{label}</label>
-      <input
-        type="number"
-        min={min} max={max} step={step}
-        value={value ?? ''}
-        disabled={disabled}
-        placeholder={placeholder}
-        onChange={e => onChange(e.target.value === '' ? null : Number(e.target.value))}
-        className="w-full px-2 py-1 bg-gray-800 border border-gray-700 rounded text-white text-xs focus:border-blue-500 focus:outline-none disabled:opacity-30"
-      />
-    </div>
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      className={`px-2.5 py-1.5 text-[9px] font-bold tracking-widest rounded-sm border transition-all leading-none ${
+        active
+          ? 'text-white'
+          : 'bg-[#141414] border-[#2a2a2a] text-gray-500 hover:text-gray-300 hover:border-[#444]'
+      } disabled:opacity-15 disabled:cursor-not-allowed`}
+      style={active ? { backgroundColor: color, borderColor: color, boxShadow: `0 0 8px ${color}55` } : {}}
+    >
+      {children}
+    </button>
   );
 }
 
+// ─── Main Panel ───────────────────────────────────────────────────────────────
 export default function EffectAttributePanel({
   selectedCells, fixtures, defaultBases, onUpdateCells, onUpdateBase, onClearCells,
   onApplySpread, spread, onSpreadChange,
 }) {
   const firstCell = [...selectedCells][0];
   let currentParam = null;
-  let currentBase = null;
+  let currentBase  = null;
   if (firstCell) {
     const [fi, pk] = firstCell.split(':');
     const fix = fixtures[parseInt(fi)];
     currentParam = fix?.params[pk] || null;
-    currentBase = Math.round((fix?.bases?.[pk] ?? defaultBases?.[pk] ?? 1.0) * 100);
+    currentBase  = Math.round((fix?.bases?.[pk] ?? defaultBases?.[pk] ?? 1.0) * 100);
   }
 
   const hasSelection = selectedCells.size > 0;
   const val = (field, def) => currentParam?.[field] ?? def;
+  const activeTable = currentParam?.table;
 
-  // Swing range — unclipped raw bounds + clamped actual bounds
   const rangeInfo = (() => {
-    if (currentBase === null || !currentParam?.table) return null;
+    if (currentBase === null || !activeTable) return null;
     const base = currentBase / 100;
     const halfRange = (val('size', 50) / 100) / 2;
     const rawLow  = base - halfRange;
     const rawHigh = base + halfRange;
-    const low  = Math.round(Math.max(0, rawLow)  * 100);
-    const high = Math.round(Math.min(1, rawHigh) * 100);
-    const clipsLow  = rawLow  < 0;
-    const clipsHigh = rawHigh > 1;
-    return { low, high, base: currentBase, clipsLow, clipsHigh };
+    return {
+      low:  Math.round(Math.max(0, rawLow)  * 100),
+      high: Math.round(Math.min(1, rawHigh) * 100),
+      base: currentBase,
+      clipsLow:  rawLow  < 0,
+      clipsHigh: rawHigh > 1,
+    };
   })();
 
   const lengthPct = val('length', 100);
 
   return (
-    <div className="bg-gray-900 border-t border-gray-700 px-4 py-3 flex-shrink-0">
-      <div className="flex gap-5 items-start flex-wrap">
+    <div className="bg-[#0a0a0a] border-t-2 border-[#1c1c1c] px-3 py-2">
+      <div className="flex gap-4 items-start flex-wrap">
 
-        {/* Wave table picker */}
+        {/* ── Wave Table Selector ────────────────────────────────────────── */}
         <div className="flex-shrink-0">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wide mb-1.5">Wave Table</div>
-          <div className="grid grid-cols-4 gap-1 w-64">
+          <div className="text-[8px] text-gray-600 uppercase tracking-widest mb-1.5">Table</div>
+          <div className="grid grid-cols-3 gap-0.5 w-44">
             {TABLES.map(t => (
               <button
                 key={t.id}
                 disabled={!hasSelection}
                 onClick={() => onUpdateCells('table', t.id)}
-                className={`px-1.5 py-1 text-[10px] rounded transition-colors font-medium ${
-                  currentParam?.table === t.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed'
+                className={`py-1.5 text-[9px] font-medium rounded-sm transition-all leading-none border ${
+                  activeTable === t.id
+                    ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_6px_rgba(59,130,246,0.4)]'
+                    : 'bg-[#141414] border-[#252525] text-gray-400 hover:bg-[#1e1e1e] hover:text-gray-200 disabled:opacity-15 disabled:cursor-not-allowed'
                 }`}
               >
                 {t.label}
@@ -205,186 +277,181 @@ export default function EffectAttributePanel({
           </div>
         </div>
 
-        {/* Parameters */}
-        <div className="grid grid-cols-3 gap-2 flex-shrink-0 w-52">
-          <NumInput label="Base (%)" value={currentBase ?? 100} min={0} max={100} disabled={!hasSelection}
-            onChange={v => onUpdateBase(v ?? 100)} />
-          <NumInput label="Rate (CPM)" value={val('rate', 60)} min={1} max={600} disabled={!hasSelection}
-            onChange={v => onUpdateCells('rate', v ?? 60)} />
-          <NumInput label="Size (%)" value={val('size', 50)} min={0} max={400} disabled={!hasSelection}
-            onChange={v => onUpdateCells('size', v ?? 50)} />
-          <NumInput label="Offset (°)" value={val('offset', 0)} min={0} max={359} disabled={!hasSelection}
-            onChange={v => onUpdateCells('offset', v ?? 0)} />
-          <NumInput label="Length (%)" value={lengthPct} min={1} max={100} disabled={!hasSelection}
-            onChange={v => onUpdateCells('length', v ?? 100)} />
-          <NumInput label="N-Shot" value={val('nShot', null)} min={0} placeholder="∞" disabled={!hasSelection}
-            onChange={v => onUpdateCells('nShot', v)} />
-          <div className="flex flex-col gap-1 col-span-1">
-            <div className="text-[10px] text-gray-500 uppercase tracking-wide">Modifiers</div>
-            <button
-              disabled={!hasSelection}
-              onClick={() => onUpdateCells('bounce', !val('bounce', false))}
-              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${
-                val('bounce', false) ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-              } disabled:opacity-30`}
-            >
-              {val('bounce', false) ? 'Bounce ON' : 'Bounce'}
-            </button>
-            <button
-              disabled={!hasSelection}
-              onClick={() => onUpdateCells('direction', val('direction', 'forward') === 'forward' ? 'reverse' : 'forward')}
-              className={`px-2 py-1 text-[10px] rounded font-medium transition-colors ${
-                val('direction', 'forward') === 'reverse' ? 'bg-orange-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-              } disabled:opacity-30`}
-            >
-              {val('direction', 'forward') === 'forward' ? 'Forward' : 'Reverse'}
-            </button>
+        {/* ── Encoder Wheels ─────────────────────────────────────────────── */}
+        <div className="flex-shrink-0 flex flex-col gap-1">
+          <div className="text-[8px] text-gray-600 uppercase tracking-widest">Parameters</div>
+          <div className="flex items-center gap-1">
+            <Encoder
+              label="Base" unit="%" color="#f59e0b"
+              value={hasSelection ? currentBase : null}
+              min={0} max={100} step={1} disabled={!hasSelection}
+              onChange={v => onUpdateBase(v)}
+            />
+            {/* Divider */}
+            <div className="w-px self-stretch mx-1 bg-[#1e1e1e]" />
+            <Encoder
+              label="Rate" unit=" cpm" color="#3b82f6"
+              value={hasSelection ? val('rate', 60) : null}
+              min={1} max={600} step={1} disabled={!hasSelection}
+              onChange={v => onUpdateCells('rate', v)}
+            />
+            <Encoder
+              label="Size" unit="%" color="#22c55e"
+              value={hasSelection ? val('size', 50) : null}
+              min={0} max={400} step={1} disabled={!hasSelection}
+              onChange={v => onUpdateCells('size', v)}
+            />
+            <Encoder
+              label="Offset" unit="°" color="#a855f7"
+              value={hasSelection ? val('offset', 0) : null}
+              min={0} max={359} step={1} disabled={!hasSelection}
+              onChange={v => onUpdateCells('offset', v)}
+            />
+            <Encoder
+              label="Length" unit="%" color="#06b6d4"
+              value={hasSelection ? val('length', 100) : null}
+              min={1} max={100} step={1} disabled={!hasSelection}
+              onChange={v => onUpdateCells('length', v)}
+            />
           </div>
         </div>
 
-        {/* Spread */}
-        <div className="flex flex-col gap-1.5 flex-shrink-0 w-36">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wide">Spread</div>
+        {/* ── Modifiers ──────────────────────────────────────────────────── */}
+        <div className="flex flex-col gap-1.5 flex-shrink-0">
+          <div className="text-[8px] text-gray-600 uppercase tracking-widest">Modifiers</div>
+          <HogBtn
+            active={val('bounce', false)} disabled={!hasSelection}
+            onClick={() => onUpdateCells('bounce', !val('bounce', false))}
+            color="#2563eb"
+          >
+            BNCE
+          </HogBtn>
+          <HogBtn
+            active={val('direction', 'forward') === 'reverse'} disabled={!hasSelection}
+            onClick={() => onUpdateCells('direction', val('direction', 'forward') === 'forward' ? 'reverse' : 'forward')}
+            color="#ea580c"
+          >
+            {val('direction', 'forward') === 'reverse' ? '◀ REV' : '▶ FWD'}
+          </HogBtn>
+          <div className="flex flex-col gap-0.5 mt-0.5">
+            <div className="text-[8px] text-gray-600 uppercase tracking-widest">N-Shot</div>
+            <input
+              type="number" min={1} placeholder="∞"
+              value={val('nShot', null) ?? ''}
+              disabled={!hasSelection}
+              onChange={e => onUpdateCells('nShot', e.target.value === '' ? null : Number(e.target.value))}
+              className="w-14 px-2 py-1 bg-[#141414] border border-[#252525] rounded-sm text-zinc-200 text-[11px] font-mono text-center focus:border-blue-600 focus:outline-none disabled:opacity-20"
+            />
+          </div>
+        </div>
+
+        {/* ── Spread / Fan ───────────────────────────────────────────────── */}
+        <div className="flex flex-col gap-1.5 flex-shrink-0 w-28">
+          <div className="text-[8px] text-gray-600 uppercase tracking-widest">Fan / Spread</div>
           <input
             type="range" min="0" max="360" step="1"
             value={spread}
             onChange={e => onSpreadChange(Number(e.target.value))}
             className="w-full accent-purple-500"
           />
-          <div className="flex justify-between text-[10px] text-gray-500">
-            <span>0°</span>
-            <span className="text-purple-300 font-mono">{spread}°</span>
-            <span>360°</span>
+          <div className="flex justify-between text-[9px]">
+            <span className="text-gray-700">0°</span>
+            <span className="text-purple-400 font-mono">{spread}°</span>
+            <span className="text-gray-700">360°</span>
           </div>
-          <button
-            disabled={!hasSelection}
-            onClick={onApplySpread}
-            className="px-2 py-1.5 text-[10px] bg-purple-700 hover:bg-purple-600 rounded text-white font-medium disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            Apply Spread
-          </button>
+          <HogBtn disabled={!hasSelection} onClick={onApplySpread} color="#7c3aed">
+            APPLY FAN
+          </HogBtn>
         </div>
 
-        {/* Waveform preview + swing + length + learn */}
-        <div className="flex flex-col gap-1 flex-shrink-0 w-56">
-          <div className="text-[10px] text-gray-500 uppercase tracking-wide">Preview</div>
+        {/* ── Waveform + Educational ─────────────────────────────────────── */}
+        <div className="flex flex-col gap-1 flex-shrink-0 w-52">
+          <div className="text-[8px] text-gray-600 uppercase tracking-widest">Waveform</div>
           <WavePreview params={currentParam} />
 
-          {/* Swing range bar */}
-          {rangeInfo ? (
-            <div className="mt-0.5">
-              <div className="flex justify-between text-[10px] mb-0.5">
-                <span className={`font-mono ${rangeInfo.clipsLow ? 'text-red-400' : 'text-blue-300'}`}>
+          {/* Swing bar */}
+          {rangeInfo && (
+            <div>
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className={`font-mono ${rangeInfo.clipsLow ? 'text-red-400' : 'text-blue-400'}`}>
                   {rangeInfo.low}%{rangeInfo.clipsLow ? ' ⚠' : ''}
                 </span>
-                <span className="text-gray-600 text-[9px]">swing</span>
-                <span className={`font-mono ${rangeInfo.clipsHigh ? 'text-red-400' : 'text-blue-300'}`}>
+                <span className="text-gray-700 text-[8px]">swing</span>
+                <span className={`font-mono ${rangeInfo.clipsHigh ? 'text-red-400' : 'text-blue-400'}`}>
                   {rangeInfo.clipsHigh ? '⚠ ' : ''}{rangeInfo.high}%
                 </span>
               </div>
-              <div className="relative w-full h-2.5 bg-gray-800 rounded overflow-hidden">
-                {/* Swing range fill */}
-                <div
-                  className="absolute top-0 h-full bg-blue-600/50 rounded"
-                  style={{ left: `${rangeInfo.low}%`, width: `${rangeInfo.high - rangeInfo.low}%` }}
-                />
-                {/* Clip indicators */}
-                {rangeInfo.clipsLow  && <div className="absolute top-0 left-0 h-full w-1 bg-red-500" />}
-                {rangeInfo.clipsHigh && <div className="absolute top-0 right-0 h-full w-1 bg-red-500" />}
-                {/* Base tick */}
-                <div className="absolute top-0 w-px h-full bg-yellow-400" style={{ left: `${rangeInfo.base}%` }} />
+              <div className="relative w-full h-2 bg-[#111] rounded overflow-hidden">
+                <div className="absolute top-0 h-full bg-blue-600/35 rounded"
+                  style={{ left: `${rangeInfo.low}%`, width: `${rangeInfo.high - rangeInfo.low}%` }} />
+                {rangeInfo.clipsLow  && <div className="absolute top-0 left-0 h-full w-0.5 bg-red-500" />}
+                {rangeInfo.clipsHigh && <div className="absolute top-0 right-0 h-full w-0.5 bg-red-500" />}
+                <div className="absolute top-0 w-px h-full bg-amber-400/60" style={{ left: `${rangeInfo.base}%` }} />
               </div>
-              <div className="text-[9px] text-gray-600 text-center mt-0.5">
-                base <span className="text-yellow-600">{rangeInfo.base}%</span>
-                {' '}— low {rangeInfo.low}% — high {rangeInfo.high}%
-                {(rangeInfo.clipsLow || rangeInfo.clipsHigh) && (
-                  <span className="text-red-500 ml-1">clips!</span>
-                )}
+              <div className="text-[8px] text-gray-700 text-center mt-0.5">
+                base <span className="text-amber-600">{rangeInfo.base}%</span>
+                {(rangeInfo.clipsLow || rangeInfo.clipsHigh) && <span className="text-red-500 ml-1">clips</span>}
               </div>
-            </div>
-          ) : (
-            <div className="mt-0.5 text-[9px] text-gray-700 text-center">
-              {hasSelection ? 'assign an effect to see swing' : 'select a cell'}
             </div>
           )}
 
-          {/* Length duty-cycle bar */}
-          {currentParam?.table && (
-            <div className="mt-1">
-              <div className="flex justify-between text-[10px] mb-0.5">
-                <span className="text-gray-500 uppercase tracking-wide text-[9px]">Length</span>
-                <span className="text-gray-400 font-mono text-[9px]">{lengthPct}% active</span>
+          {/* Length bar */}
+          {activeTable && (
+            <div>
+              <div className="flex justify-between text-[9px] mb-0.5">
+                <span className="text-gray-700 text-[8px] uppercase tracking-wide">Length</span>
+                <span className="text-cyan-600 font-mono text-[8px]">{lengthPct}% active</span>
               </div>
-              <div className="relative w-full h-2.5 rounded overflow-hidden bg-gray-800 flex">
-                <div
-                  className="h-full bg-green-600/70 transition-all"
-                  style={{ width: `${lengthPct}%` }}
-                />
-                <div
-                  className="h-full bg-gray-600/30"
-                  style={{ width: `${100 - lengthPct}%` }}
-                />
-                {/* Divider tick */}
+              <div className="relative w-full h-2 rounded overflow-hidden bg-[#111] flex">
+                <div className="h-full bg-cyan-700/55" style={{ width: `${lengthPct}%` }} />
+                <div className="h-full bg-[#141414]" style={{ width: `${100 - lengthPct}%` }} />
                 {lengthPct < 100 && (
-                  <div className="absolute top-0 w-px h-full bg-gray-400/60" style={{ left: `${lengthPct}%` }} />
+                  <div className="absolute top-0 w-px h-full bg-gray-500/40" style={{ left: `${lengthPct}%` }} />
                 )}
-              </div>
-              <div className="flex justify-between text-[9px] mt-0.5 text-gray-600">
-                <span className="text-green-700">effect runs</span>
-                {lengthPct < 100 && <span>holds at base</span>}
               </div>
             </div>
           )}
 
-          {/* ── Educational section ── */}
-          {currentParam?.table && (() => {
+          {/* Educational section */}
+          {activeTable && (() => {
             const size   = val('size',   50);
             const rate   = val('rate',   60);
             const offset = val('offset', 0);
-            const length = val('length', 100);
             const bounce = val('bounce', false);
             const secsPerCycle = (60 / rate).toFixed(1);
-            const halfSize = (size / 2).toFixed(0);
-            const info = TABLE_INFO[currentParam.table];
+            const info = TABLE_INFO[activeTable];
 
             const tips = [
-              bounce && 'Bounce mirrors the wave — the effect reverses at the end of each cycle instead of resetting.',
-              length < 70 && length !== 100 && `Length ${length}%: wave fires for ${(secsPerCycle * length / 100).toFixed(1)}s then holds at base for the rest of the cycle.`,
-              size > 100 && 'Size >100%: the output exceeds 0–100% range and clips — creates flat-topped peaks.',
-              rate <= 10 && `Very slow (${rate} CPM = ${secsPerCycle}s/cycle) — long, sweeping motion.`,
-              rate >= 150 && `Very fast (${rate} CPM = ${secsPerCycle}s/cycle) — rapid flicker or strobe territory.`,
-              (offset === 90 || offset === 270) && '90° offset from a perpendicular axis (e.g. tilt) creates circular beam motion.',
+              bounce && 'Bounce: wave reverses each cycle instead of resetting.',
+              lengthPct < 70 && `Length ${lengthPct}%: effect fires for ${(secsPerCycle * lengthPct / 100).toFixed(1)}s then holds at base.`,
+              size > 100 && 'Size >100%: output clips at 0–100% — creates flat-topped peaks.',
+              rate <= 10 && `${rate} CPM = ${secsPerCycle}s/cycle — slow, sweeping motion.`,
+              rate >= 150 && `${rate} CPM — rapid flicker territory.`,
+              (offset === 90 || offset === 270) && '90° offset from a perpendicular axis → circular motion.',
             ].filter(Boolean);
 
             return (
-              <div className="mt-1 space-y-1">
-                {/* Formula */}
-                <div className="bg-gray-900 border border-gray-800 rounded px-2 py-1 font-mono text-[8px] leading-relaxed">
-                  <div>
-                    <span className="text-gray-500">out =</span>{' '}
-                    <span className="text-yellow-500">base</span>{' '}
-                    <span className="text-gray-500">±</span>{' '}
-                    <span className="text-blue-400">{currentParam.table}</span>
-                    <span className="text-gray-500">(t) ×</span>{' '}
-                    <span className="text-green-400">{halfSize}%</span>
-                  </div>
-                  <div className="text-gray-600">t = (sec × {rate}/60 + {offset}/360) mod 1</div>
+              <div className="mt-0.5 space-y-1">
+                <div className="bg-[#0d0d0d] border border-[#1e1e1e] rounded px-2 py-1 font-mono text-[8px] leading-relaxed">
+                  <span className="text-gray-600">out =</span>{' '}
+                  <span className="text-amber-400/80">base</span>{' '}
+                  <span className="text-gray-600">±</span>{' '}
+                  <span className="text-blue-400">{activeTable}</span>
+                  <span className="text-gray-600">(t) ×</span>{' '}
+                  <span className="text-green-400">{(size / 2).toFixed(0)}%</span>
+                  <div className="text-gray-700">t = (sec×{rate}/60 + {offset}/360) mod 1</div>
                 </div>
-
-                {/* Table description */}
                 {info && (
-                  <div className="bg-indigo-950/40 border border-indigo-900/30 rounded px-2 py-1 text-[9px] leading-relaxed">
-                    <div className="text-indigo-200">{info.desc}</div>
-                    <div className="text-indigo-500/80 mt-0.5">→ {info.use}</div>
+                  <div className="bg-[#0d0d14] border border-indigo-900/25 rounded px-2 py-1 text-[8px] leading-relaxed">
+                    <div className="text-indigo-300/90">{info.desc}</div>
+                    <div className="text-indigo-700 mt-0.5">→ {info.use}</div>
                   </div>
                 )}
-
-                {/* Contextual tips */}
                 {tips.length > 0 && (
                   <div className="space-y-0.5">
                     {tips.map((tip, i) => (
-                      <div key={i} className="flex gap-1 items-start text-[9px] text-purple-300/80">
-                        <span className="text-purple-500 flex-shrink-0 mt-px">✦</span>
+                      <div key={i} className="flex gap-1 text-[8px] text-purple-400/65">
+                        <span className="text-purple-700 flex-shrink-0">✦</span>
                         <span>{tip}</span>
                       </div>
                     ))}
@@ -395,19 +462,16 @@ export default function EffectAttributePanel({
           })()}
         </div>
 
-        {/* Actions */}
+        {/* ── Actions ────────────────────────────────────────────────────── */}
         <div className="ml-auto flex flex-col gap-2 flex-shrink-0 self-center">
-          <button
-            disabled={!hasSelection}
-            onClick={onClearCells}
-            className="px-4 py-1.5 text-xs bg-red-900 hover:bg-red-800 rounded text-white font-medium disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            Clear Effect
-          </button>
-          <div className="text-[10px] text-gray-600 text-center">
-            {selectedCells.size} cell{selectedCells.size !== 1 ? 's' : ''} selected
+          <HogBtn disabled={!hasSelection} onClick={onClearCells} color="#991b1b">
+            CLEAR
+          </HogBtn>
+          <div className="text-[9px] text-gray-700 text-center font-mono">
+            {selectedCells.size} sel
           </div>
         </div>
+
       </div>
     </div>
   );

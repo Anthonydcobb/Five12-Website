@@ -8,6 +8,11 @@ import ShowDetail from './pages/ShowDetail';
 import PatchSheet from './pages/PatchSheet';
 import Database from './pages/Database';
 import EffectPlayground from './pages/EffectPlayground';
+import LabelsPage from './pages/LabelsPage';
+import NetworkMonitor from './pages/NetworkMonitor';
+import IPConfig from './pages/IPConfig';
+import NodesPage from './pages/NodesPage';
+
 
 export default function App() {
   return (
@@ -20,7 +25,11 @@ export default function App() {
           <Route path="/patch/:showId" element={<ShowDetail />} />
           <Route path="/patch/:showId/:patchId" element={<PatchSheet />} />
           <Route path="/database" element={<Database />} />
+          <Route path="/labels" element={<LabelsPage />} />
           <Route path="/effects-playground" element={<EffectPlayground />} />
+          <Route path="/network" element={<NetworkMonitor />} />
+          <Route path="/ip-config" element={<IPConfig />} />
+          <Route path="/nodes" element={<NodesPage />} />
         </Routes>
       </main>
     </Router>

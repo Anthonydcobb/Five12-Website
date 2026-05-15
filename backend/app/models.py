@@ -85,3 +85,12 @@ class PatchRow(db.Model):
         }
 
     
+class LabelTemplate(db.Model):
+    __tablename__ = 'label_templates'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    name        = db.Column(db.String(100), nullable=False)
+    config_json = db.Column(db.JSON,   nullable=False)
+
+    def __repr__(self):
+        return f"<LabelTemplate {self.name!r}>"
