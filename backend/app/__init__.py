@@ -24,7 +24,14 @@ def create_app(test_config=None):
     # register blueprints
     from .routes import bp as routes_bp
     app.register_blueprint(routes_bp)
+
+    from .network_routes import net as network_bp
+    app.register_blueprint(network_bp)
+
     app.logger.setLevel(logging.INFO)
 
+    if not app.config.get('TESTING'):
+        from .scanner import start_scanner
+        start_scanner(app)
 
     return app
