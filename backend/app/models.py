@@ -94,3 +94,88 @@ class LabelTemplate(db.Model):
 
     def __repr__(self):
         return f"<LabelTemplate {self.name!r}>"
+
+
+from datetime import datetime
+
+class NetworkSubnet(db.Model):
+    __tablename__ = 'network_subnets'
+    id             = db.Column(db.Integer, primary_key=True)
+    label          = db.Column(db.String(100), nullable=False)
+    cidr           = db.Column(db.String(50), nullable=False)
+    interface_hint = db.Column(db.String(50), nullable=True)
+    color          = db.Column(db.String(20), nullable=False, default='#7dd3fc')
+    active         = db.Column(db.Boolean, nullable=False, default=True)
+    created_at     = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'label': self.label,
+            'cidr': self.cidr,
+            'interfaceHint': self.interface_hint,
+            'color': self.color,
+            'active': self.active,
+        }
+
+
+class NetworkDevice(db.Model):
+    __tablename__ = 'network_devices'
+    mac_address = db.Column(db.String(17), primary_key=True)
+    label       = db.Column(db.String(100), nullable=True)
+    device_type = db.Column(db.String(50), nullable=False, default='unknown')
+    subnet_id   = db.Column(db.Integer, db.ForeignKey('network_subnets.id'), nullable=True)
+    notes       = db.Column(db.Text, nullable=True)
+    last_ip     = db.Column(db.String(15), nullable=True)
+    last_seen   = db.Column(db.DateTime, nullable=True)
+    vendor_data = db.Column(db.JSON, nullable=True)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'macAddress': self.mac_address,
+            'label': self.label,
+            'deviceType': self.device_type,
+            'subnetId': self.subnet_id,
+            'notes': self.notes,
+            'lastIp': self.last_ip,
+            'lastSeen': self.last_seen.isoformat() if self.last_seen else None,
+            'vendorData': self.vendor_data,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class LocationSnapshot(db.Model):
+    __tablename__ = 'location_snapshots'
+    id         = db.Column(db.Integer, primary_key=True)
+    name       = db.Column(db.String(200), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    devices    = db.relationship('LocationDevice', back_populates='snapshot', cascade='all, delete-orphan')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'deviceCount': len(self.devices),
+        }
+
+
+class LocationDevice(db.Model):
+    __tablename__ = 'location_devices'
+    id                  = db.Column(db.Integer, primary_key=True)
+    location_id         = db.Column(db.Integer, db.ForeignKey('location_snapshots.id'), nullable=False)
+    mac_address         = db.Column(db.String(17), nullable=False)
+    ip_at_time          = db.Column(db.String(15), nullable=True)
+    online_at_time      = db.Column(db.Boolean, nullable=False, default=True)
+    vendor_data_at_time = db.Column(db.JSON, nullable=True)
+    snapshot            = db.relationship('LocationSnapshot', back_populates='devices')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'macAddress': self.mac_address,
+            'ipAtTime': self.ip_at_time,
+            'onlineAtTime': self.online_at_time,
+            'vendorDataAtTime': self.vendor_data_at_time,
+        }

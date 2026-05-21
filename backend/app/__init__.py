@@ -9,10 +9,13 @@ import logging
 db = SQLAlchemy()
 migrate = Migrate()                   # ← instantiate it
 
-def create_app():
+def create_app(test_config=None):
     app = Flask(__name__)
     cfg = 'config.DesktopConfig' if os.getenv('FLASK_CONFIG') == 'desktop' else 'config.DevelopmentConfig'
     app.config.from_object(cfg)
+
+    if test_config:
+        app.config.update(test_config)
 
     # initialize extensions
     db.init_app(app)
