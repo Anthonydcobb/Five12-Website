@@ -4,9 +4,15 @@ import subprocess
 import ipaddress
 import re
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
+
+# A device that hasn't answered a sweep is kept (shown offline) so its
+# label/notes survive going offline and coming back on a new DHCP IP —
+# persistence is keyed on MAC, not IP. Only truly anonymous devices
+# (no label AND no notes) are pruned, and only after this long offline.
+UNLABELED_PRUNE_AGE = timedelta(hours=24)
 
 
 def _arp_fallback(cidr: str) -> list[tuple[str, str]]:
@@ -47,7 +53,8 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         vendor_data = enrich_device(ip, mac, device_type)
 
         device = db.session.get(NetworkDevice, mac)
-        if device is None:
+        is_new = device is None
+        if is_new:
             device = NetworkDevice(mac_address=mac)
             db.session.add(device)
 
@@ -58,6 +65,10 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         if vendor_data:
             device.vendor_data = vendor_data
 
+        if is_new and not device.label and device_type != 'unknown':
+            model = vendor_data.get('model') if vendor_data else None
+            device.label = f"{device_type.capitalize()} {model}".strip() if model else device_type.capitalize()
+
         try:
             db.session.commit()
         except Exception as e:
@@ -65,8 +76,75 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
             log.error('Failed to save device %s: %s', mac, e)
 
 
+def _subnet_id_for_ip(ip: str, subnets) -> int | None:
+    """Which active subnet contains `ip`, by CIDR. None if none match —
+    NetworkDevice.subnet_id is nullable, and the prune step is scoped per
+    subnet, so an unmatched device is simply never pruned."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    for row in subnets:
+        try:
+            if addr in ipaddress.ip_network(row.cidr, strict=False):
+                return row.id
+        except ValueError:
+            continue
+    return None
+
+
+def _scan_artnet(app, subnets) -> None:
+    """Discover Stardust units over Art-Net and upsert them.
+
+    Art-Net discovery rather than the ARP sweep because these devices sit on
+    interfaces the default-route sweep does not reach — an ArtPollReply is
+    the reliable way to see them.
+    """
+    from .models import NetworkDevice
+    from .integrations.stardust import StardustAdapter
+    from . import db
+
+    try:
+        units = StardustAdapter(sim=False).discover_units()
+    except Exception as e:
+        log.warning('Art-Net discovery failed: %s', e)
+        return
+
+    with app.app_context():
+        for unit in units:
+            mac = unit['mac']
+            device = db.session.get(NetworkDevice, mac)
+            if device is None:
+                device = NetworkDevice(mac_address=mac)
+                db.session.add(device)
+
+            device.last_ip = unit['ip']
+            device.last_seen = datetime.utcnow()
+            device.device_type = 'stardust'
+            device.subnet_id = _subnet_id_for_ip(unit['ip'], subnets)
+            device.vendor_data = {
+                'model': unit.get('longName') or unit.get('shortName'),
+                'firmware': unit.get('firmware'),
+                'shortName': unit.get('shortName'),
+                'estaMan': unit.get('estaMan'),
+                'universesOutputting': unit.get('universesOutputting') or [],
+                'webUrl': f"http://{unit['ip']}",
+            }
+            # Auto-label so the anonymous-device prune keeps this row.
+            if not device.label:
+                device.label = unit.get('longName') or unit.get('shortName') or 'Stardust'
+
+        try:
+            db.session.commit()
+            if units:
+                log.info('Art-Net: %d Stardust unit(s) upserted', len(units))
+        except Exception as e:
+            db.session.rollback()
+            log.error('Failed to save Art-Net devices: %s', e)
+
+
 def run_scan_now(app) -> None:
-    from .models import NetworkSubnet
+    from .models import NetworkSubnet, NetworkDevice
     from . import db
 
     with app.app_context():
@@ -78,11 +156,42 @@ def run_scan_now(app) -> None:
         subnet_id, cidr = row.id, row.cidr
         log.info('Scanning %s', cidr)
         try:
-            pairs = _arp_scan(cidr)
+            net = ipaddress.ip_network(cidr, strict=False)
+            excluded = {str(net.network_address), str(net.broadcast_address)}
+            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr) if ip not in excluded]
+            found_macs = set()
             for ip, mac in pairs:
+                found_macs.add(mac)
                 _process_discovered_device(ip, mac, subnet_id, app)
+            # CHANGE: the old code deleted every device in this subnet that
+            # wasn't seen in the current sweep. That destroyed the whole
+            # point of MAC-keyed labels — a DHCP device that briefly dropped
+            # offline lost its label/notes, and came back (often on a new IP)
+            # as a blank row. Now we KEEP unseen devices (they render offline
+            # via last_seen) and prune ONLY anonymous ones — no label and no
+            # notes — that have been offline longer than UNLABELED_PRUNE_AGE.
+            with app.app_context():
+                cutoff = datetime.utcnow() - UNLABELED_PRUNE_AGE
+                q = NetworkDevice.query.filter(
+                    NetworkDevice.subnet_id == subnet_id,
+                    db.or_(NetworkDevice.label.is_(None),
+                           NetworkDevice.label == ''),
+                    db.or_(NetworkDevice.notes.is_(None),
+                           NetworkDevice.notes == ''),
+                    db.or_(NetworkDevice.last_seen.is_(None),
+                           NetworkDevice.last_seen < cutoff),
+                )
+                if found_macs:
+                    q = q.filter(NetworkDevice.mac_address.notin_(found_macs))
+                q.delete(synchronize_session=False)
+                db.session.commit()
         except Exception as e:
             log.error('Scan error on %s: %s', cidr, e)
+
+    # Once per sweep, not per subnet: ArtPoll is a broadcast from every local
+    # interface, so it is independent of the configured CIDR list. Runs after
+    # the prune so a freshly-seen unit is never pruned in the same pass.
+    _scan_artnet(app, subnets)
 
 
 def start_scanner(app) -> None:

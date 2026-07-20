@@ -1,0 +1,438 @@
+"""LumenRadio Stardust adapter — RDM-over-Art-Net (the standards path).
+
+[VERIFIED] Stardust is an 8-universe DMX/RDM wireless transmitter speaking
+sACN and Art-Net, and exposes RDM to third-party controllers via
+RDM-over-Art-Net. That is the clean integration surface; the web UI is
+deliberately NOT scraped (the fragile/SSRF pattern this codebase removed).
+
+Implementation: minimal Art-Net UDP (port 6454):
+  * ArtPoll (OpPoll 0x2000) broadcast -> ArtPollReply (0x2100) to find nodes
+    and identify LumenRadio by the short/long name fields.
+  * ArtTodRequest (OpTodRequest 0x8000) -> ArtTodData (0x8100) per universe
+    to enumerate downstream RDM UIDs (6 bytes each).
+Packet layouts follow the Art-Net 4 spec; parsing is defensive
+[NEEDS VERIFICATION against a real Stardust for name strings / port config].
+
+Fetching each fixture's DMX_START_ADDRESS needs full RDM GET via OpRdm
+(0x8300) — marked v2. In v1 the patch reconciliation compares what RDM
+discovery reports (sim provides addresses; real mode provides UIDs) against
+the PatchSheet.
+
+Read-only: discovery only, no RDM SETs, no config writes.
+"""
+
+import logging
+import math
+import os
+import select
+import socket
+import struct
+import time
+
+from . import DeviceAdapter, check_thresholds, require_private_host
+
+log = logging.getLogger(__name__)
+
+ARTNET_PORT = 6454
+POLL_TIMEOUT = 1.2
+# (Net<<8)|(Sub<<4)|SwOut with every bit set — Art-Net's "port not assigned to
+# a universe" sentinel. [VERIFIED 2026-07-20] a Stardust reports 32767 on all
+# eight replies, so it must never be shown as a real universe.
+UNIVERSE_UNASSIGNED = 0x7FFF
+OP_POLL = 0x2000
+OP_POLL_REPLY = 0x2100
+OP_TOD_REQUEST = 0x8000
+OP_TOD_DATA = 0x8100
+HEADER = b'Art-Net\x00'
+
+ALERT_RULES = [
+    ('universesDown', 'gt', 0, '{value} universe(s) not transmitting', 'crit'),
+    ('weakestRfPct', 'lt', 30, 'RF link at {value}% on a universe', 'warn'),
+]
+
+
+def _artpoll_packet():
+    # Art-Net 4: ID, OpPoll (lo-hi), ProtVer 14 (hi-lo), Flags, Priority
+    return HEADER + struct.pack('<H', OP_POLL) + struct.pack('>H', 14) + bytes([0x00, 0x00])
+
+
+def _tod_request_packet(net, subuni):
+    # ID, OpTodRequest, ProtVer, filler(2), spare(7), Net, Command(0=TodFull),
+    # AddCount(1), Address[1]
+    return (HEADER + struct.pack('<H', OP_TOD_REQUEST) + struct.pack('>H', 14)
+            + bytes(2) + bytes(7) + bytes([net & 0x7F, 0x00, 1, subuni & 0xFF]))
+
+
+def _parse_poll_reply(data):
+    if len(data) < 207 or not data.startswith(HEADER):
+        return None
+    op = struct.unpack('<H', data[8:10])[0]
+    if op != OP_POLL_REPLY:
+        return None
+    ip = '.'.join(str(b) for b in data[10:14])
+    firmware = '%d.%d' % (data[16], data[17])   # VersInfoH.VersInfoL
+    esta = '0x%02X%02X' % (data[25], data[24])  # EstaManHi, EstaManLo ("LU"=LumenRadio)
+    short_name = data[26:44].split(b'\x00')[0].decode('latin-1', 'replace')
+    long_name = data[44:108].split(b'\x00')[0].decode('latin-1', 'replace')
+    # MAC at offset 201 (Art-Net 4 ArtPollReply). Uppercase colon form to
+    # match the ARP scanner's NetworkDevice keys so labels unify across both
+    # discovery paths. [VERIFIED against a live Stardust 2026-07-20: MAC,
+    # names, firmware, and ESTA code all parse correctly.]
+    mac = ':'.join('%02X' % b for b in data[201:207])
+    # Output ports. Art-Net caps one reply at 4 ports; a node with more sends
+    # several replies (one per port group) that _discover_nodes merges by MAC.
+    # NetSwitch/SubSwitch are read PER REPLY — [VERIFIED 2026-07-20] a Swisson
+    # port with SubSwitch=6, SwOut=5 is universe 101, which a device-wide
+    # SubSwitch would get wrong.
+    ports = []
+    for p in range(min(4, data[173])):
+        universe = (data[18] << 8) | (data[19] << 4) | (data[190 + p] & 0x0F)
+        if universe == UNIVERSE_UNASSIGNED:
+            continue
+        ports.append({'universe': universe,
+                      # GoodOutput bit7 = "data is being transmitted"
+                      'transmitting': bool(data[182 + p] & 0x80)})
+    return {'ip': ip, 'mac': mac, 'shortName': short_name, 'longName': long_name,
+            'firmware': firmware, 'estaMan': esta, 'ports': ports}
+
+
+def _parse_tod_data(data):
+    if len(data) < 28 or not data.startswith(HEADER):
+        return None
+    op = struct.unpack('<H', data[8:10])[0]
+    if op != OP_TOD_DATA:
+        return None
+    # Port(1)@12? layout: ProtVer, RdmVer, Port, spare(6), BindIndex, Net,
+    # CommandResponse, Address, UidTotalHi/Lo, BlockCount, UidCount, UIDs...
+    subuni = data[23]
+    uid_count = data[27]
+    uids = []
+    off = 28
+    for _ in range(uid_count):
+        if off + 6 > len(data):
+            break
+        raw = data[off:off + 6]
+        uids.append('{:02X}{:02X}:{:02X}{:02X}{:02X}{:02X}'.format(*raw))
+        off += 6
+    return {'subuni': subuni, 'uids': uids}
+
+
+def universes_outputting(node):
+    """Universes this node reports as actively transmitting (ArtPollReply)."""
+    return sorted({p['universe'] for p in node.get('ports', []) if p['transmitting']})
+
+
+def _local_ipv4s():
+    """Every local IPv4 to poll from.
+
+    [VERIFIED 2026-07-20] The scanner host has several overlapping 10.0.0.0/8
+    interfaces and the devices are reachable ONLY from one of them, so a
+    single socket on the default route finds zero nodes. Polling from every
+    interface is what makes discovery work.
+
+    FIVE12_ARTNET_SRC pins discovery to one source IP when fanning out is
+    undesirable (firewall prompts, noisy broadcast on unrelated VLANs).
+    """
+    pin = os.getenv('FIVE12_ARTNET_SRC', '').strip()
+    if pin:
+        return [pin]
+    ips = set()
+    try:
+        for *_, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(sa[0])
+    except socket.gaierror:
+        pass
+    # '' (INADDR_ANY) is the last resort — it is the behaviour that failed on
+    # the multi-homed host, but it is better than not polling at all.
+    return sorted(ips) or ['']
+
+
+class StardustAdapter(DeviceAdapter):
+    id = 'stardust'
+    name = 'LumenRadio Stardust'
+
+    def __init__(self, sim=False):
+        super().__init__()
+        self.sim = sim
+        self._sim_t0 = time.time()
+        # Optional pin: unicast target instead of broadcast discovery
+        self.host = os.getenv('FIVE12_STARDUST_HOST', '').strip() or None
+
+    # ── Art-Net plumbing ──
+    def _open_socket(self, src='', timeout=POLL_TIMEOUT):
+        """Bind a UDP socket to `src` on the fixed Art-Net port.
+
+        Port 6454 rather than an ephemeral one because ArtPollReply/ArtTodData
+        are sent back to 6454, not to the sender's port. SO_REUSEADDR must be
+        set before bind() so several interfaces can hold the same port at once.
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        s.settimeout(timeout)
+        s.bind((src, ARTNET_PORT))
+        return s
+
+    def _discover_nodes(self):
+        """ArtPoll from every local interface; tag each node with the source
+        IP that heard it ('via') so later unicast can bind the same one."""
+        target = '255.255.255.255'
+        if self.host:
+            target = require_private_host(self.host)
+
+        socks = {}
+        for src in _local_ipv4s():
+            try:
+                socks[self._open_socket(src)] = src
+            except OSError as exc:
+                # One unusable interface (port contention, adapter down) must
+                # not sink discovery on the others.
+                log.debug('Art-Net: cannot bind %s:%d — %s', src, ARTNET_PORT, exc)
+        if not socks:
+            raise OSError(f'no bindable interface on port {ARTNET_PORT}')
+
+        nodes = {}
+        try:
+            for s, src in socks.items():
+                try:
+                    s.sendto(_artpoll_packet(), (target, ARTNET_PORT))
+                except OSError as exc:
+                    log.debug('Art-Net: poll from %s failed — %s', src, exc)
+            # select() across all sockets against one shared deadline: reading
+            # them serially would burn the whole window blocked on the first
+            # quiet interface and never reach the one that can hear replies.
+            deadline = time.time() + POLL_TIMEOUT
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select(list(socks), [], [], remaining)
+                if not ready:
+                    break
+                for s in ready:
+                    try:
+                        data, _addr = s.recvfrom(2048)
+                    except OSError:
+                        continue
+                    node = _parse_poll_reply(data)
+                    if not node:
+                        continue
+                    # Identity dedupes by MAC (one physical unit = one row),
+                    # but PORTS must merge across replies: an 8-port node
+                    # sends 8 replies sharing one MAC, so first-reply-wins
+                    # would silently discard seven of its universes.
+                    known = nodes.get(node['mac'])
+                    if known is None:
+                        node['via'] = socks[s]
+                        nodes[node['mac']] = node
+                        continue
+                    by_uni = {p['universe']: p for p in known['ports']}
+                    for p in node['ports']:
+                        if p['universe'] in by_uni:
+                            # Two ports on the same universe: outputting on
+                            # either one means the universe is on air.
+                            by_uni[p['universe']]['transmitting'] |= p['transmitting']
+                        else:
+                            known['ports'].append(p)
+                            by_uni[p['universe']] = p
+        finally:
+            for s in socks:
+                s.close()
+        return list(nodes.values())
+
+    @staticmethod
+    def _is_stardust(node):
+        blob = (node['shortName'] + ' ' + node['longName']).lower()
+        return 'stardust' in blob or 'lumenradio' in blob or 'crmx' in blob
+
+    def discover_units(self):
+        """All Stardust units on the network, each with its MAC — the basis for
+        MAC-persistent labels ('which physical unit is this?'). Read-only."""
+        if self.sim:
+            return self._sim_units()
+        try:
+            nodes = self._discover_nodes()
+        except (OSError, ValueError):
+            return []
+        return [{'mac': n['mac'], 'ip': n['ip'],
+                 'shortName': n['shortName'], 'longName': n['longName'],
+                 'firmware': n.get('firmware'), 'estaMan': n.get('estaMan'),
+                 'via': n.get('via', ''),
+                 'universesOutputting': universes_outputting(n)}
+                for n in nodes if self._is_stardust(n)]
+
+    @staticmethod
+    def _sim_units():
+        # Stable fake MACs so a label set in sim persists across polls/restart.
+        return [
+            {'mac': '00:1A:2B:00:00:01', 'ip': '10.0.0.80',
+             'shortName': 'Stardust', 'longName': 'Stardust DTx8 (sim A)'},
+            {'mac': '00:1A:2B:00:00:02', 'ip': '10.0.0.81',
+             'shortName': 'Stardust', 'longName': 'Stardust DTx8 (sim B)'},
+        ]
+
+    def detect(self):
+        if self.sim:
+            return {'found': True, 'address': '10.0.0.80', 'detail': 'simulated'}
+        try:
+            nodes = self._discover_nodes()
+        except (OSError, ValueError) as exc:
+            return {'found': False, 'address': None, 'detail': f'Art-Net poll failed: {exc}'}
+        hits = [n for n in nodes if self._is_stardust(n)]
+        if hits:
+            return {'found': True, 'address': hits[0]['ip'],
+                    'detail': hits[0]['longName'] or hits[0]['shortName']}
+        return {'found': False, 'address': None,
+                'detail': f'{len(nodes)} Art-Net node(s) found, none LumenRadio'}
+
+    # ── status + RDM TOD ──
+    def get_status(self):
+        status = self._sim_status() if self.sim else self._real_status()
+        status['alerts'] = check_thresholds(status, ALERT_RULES)
+        if status.get('available'):
+            self.history.record({
+                'universesUp': status.get('universesUp'),
+                'weakestRfPct': status.get('weakestRfPct'),
+                'fixturesDiscovered': status.get('fixturesDiscovered'),
+            })
+        return status
+
+    def _real_status(self):
+        # Discover directly rather than via detect() so the node's 'via'
+        # survives — the TOD unicast has to leave the same interface that
+        # heard the ArtPollReply or it goes out the default route and dies.
+        try:
+            nodes = self._discover_nodes()
+        except (OSError, ValueError) as exc:
+            return {'available': False, 'reason': f'Art-Net poll failed: {exc}'}
+        hits = [n for n in nodes if self._is_stardust(n)]
+        if not hits:
+            return {'available': False,
+                    'reason': f'{len(nodes)} Art-Net node(s) found, none LumenRadio'}
+        node = hits[0]
+        ip = node['ip']
+        universes = []
+        try:
+            with self._open_socket(node.get('via', '')) as s:
+                for u in range(8):                     # Stardust: 8 universes
+                    s.sendto(_tod_request_packet(0, u), (ip, ARTNET_PORT))
+                deadline = time.time() + 1.5
+                tods = {}
+                while time.time() < deadline:
+                    try:
+                        data, _addr = s.recvfrom(2048)
+                    except socket.timeout:
+                        break
+                    tod = _parse_tod_data(data)
+                    if tod:
+                        tods.setdefault(tod['subuni'], []).extend(tod['uids'])
+        except OSError as exc:
+            return {'available': False, 'reason': f'RDM TOD failed: {exc}'}
+        for u in range(8):
+            uids = tods.get(u, [])
+            universes.append({
+                'universe': u + 1,
+                'transmitting': u in tods,   # replied to TOD [NEEDS VERIFICATION as an "up" proxy]
+                'rfPct': None,               # RF quality not in Art-Net; web UI/v2
+                'fixtures': [{'uid': uid, 'dmxAddress': None, 'model': None} for uid in uids],
+            })
+        found = sum(len(u['fixtures']) for u in universes)
+        outputting = universes_outputting(node)
+        # [VERIFIED 2026-07-20] A Stardust answers neither ArtTodRequest nor
+        # advertises real SwOut values, so a TOD reply is NOT a usable "up"
+        # proxy — treating it as one reported "8 universes down" on a healthy
+        # unit. Report up/down only from ArtPollReply port data; when the node
+        # publishes none, report unknown (None) so the alert rule stays quiet
+        # rather than crying wolf. Stardust universes need the sACN listener.
+        for u in universes:
+            u['transmitting'] = (u['universe'] in outputting) if node['ports'] else None
+        up = len(outputting) if node['ports'] else None
+        return {
+            'available': True, 'source': 'artnet-rdm',
+            'node': node['longName'] or node['shortName'], 'address': ip,
+            'via': node.get('via', ''),
+            'firmware': node.get('firmware'),
+            'mac': node['mac'],
+            'universes': universes,
+            'universesOutputting': outputting,
+            'universesUp': up,
+            'universesDown': (8 - up) if up is not None else None,
+            'weakestRfPct': None,
+            'fixturesDiscovered': found,
+        }
+
+    # ── simulator ──
+    def _sim_status(self):
+        t = time.time() - self._sim_t0
+        fixtures_by_uni = {
+            1: [('4C4C:00A11201', 'Astera AX5', 45), ('4C4C:00A11202', 'Astera AX5', 52),
+                ('4C4C:00A11203', 'Astera AX5', 50)],
+            2: [('4A6F:00220301', 'Aputure LS 600x', 1), ('4A6F:00220302', 'Aputure LS 600x', 25)],
+            5: [('4C4C:00B00101', 'Astera Titan', 101)],
+        }
+        universes = []
+        for u in range(1, 9):
+            rf = max(8, min(99, round(82 + 14 * math.sin(t / 53 + u * 2.1) - (u == 5) * 40)))
+            transmitting = u in fixtures_by_uni or u <= 4
+            universes.append({
+                'universe': u,
+                'transmitting': transmitting,
+                'rfPct': rf if transmitting else None,
+                'fixtures': [
+                    {'uid': uid, 'model': model, 'dmxAddress': addr}
+                    for uid, model, addr in fixtures_by_uni.get(u, [])
+                ],
+            })
+        up = [u for u in universes if u['transmitting']]
+        rfs = [u['rfPct'] for u in up if u['rfPct'] is not None]
+        return {
+            'available': True, 'source': 'sim',
+            'node': 'Stardust DTx8 (sim)', 'address': '10.0.0.80',
+            'universes': universes,
+            'universesUp': len(up),
+            'universesDown': 8 - len(up),
+            'weakestRfPct': min(rfs) if rfs else None,
+            'fixturesDiscovered': sum(len(u['fixtures']) for u in universes),
+        }
+
+    # ── patch reconciliation (the novel bit) ──
+    def reconcile(self, patch_rows):
+        """Compare RDM-discovered fixtures against PatchRow entries.
+        patch_rows: iterable of PatchRow. Returns per-universe diffs."""
+        status = self.get_status()
+        if not status.get('available'):
+            return {'available': False, 'reason': status.get('reason')}
+        patched = {}
+        for r in patch_rows:
+            if r.universe is None:
+                continue
+            patched.setdefault(r.universe, []).append({
+                'address': r.address, 'fixture': r.fixture, 'type': r.type,
+            })
+        report = []
+        for u in status['universes']:
+            uni = u['universe']
+            plist = patched.get(uni, [])
+            discovered = u['fixtures']
+            issues = []
+            if discovered and not plist:
+                issues.append('fixtures on air but universe not in patch')
+            if plist and not discovered and u['transmitting'] is False:
+                issues.append('patched but universe not transmitting')
+            addrs_patch = {p['address'] for p in plist if p['address'] is not None}
+            addrs_rdm = {f['dmxAddress'] for f in discovered if f.get('dmxAddress') is not None}
+            for a in sorted(addrs_rdm - addrs_patch):
+                issues.append(f'fixture reports address {a} — not in patch')
+            for a in sorted(addrs_patch - addrs_rdm):
+                if discovered:  # only meaningful when RDM gave us addresses
+                    issues.append(f'patched at {a} but no fixture reports it')
+            if plist or discovered or issues:
+                report.append({
+                    'universe': uni,
+                    'patchedCount': len(plist),
+                    'discoveredCount': len(discovered),
+                    'issues': issues,
+                })
+        return {'available': True, 'report': report,
+                'note': 'RDM DMX addresses need full RDM GET (v2); '
+                        'sim mode demonstrates the reconciliation shape'}

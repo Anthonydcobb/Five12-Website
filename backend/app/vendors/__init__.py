@@ -1,9 +1,22 @@
+import logging
 import requests
 import subprocess
+
+try:
+    import puresnmp
+except ImportError:  # dependency not installed in this interpreter
+    puresnmp = None
+
+log = logging.getLogger(__name__)
+
+# Read-only SNMP defaults. GigaCore ships v2c enabled with community "public".
+_SNMP_COMMUNITY = 'public'
+_SNMP_TIMEOUT = 2
 
 _OUI_MAP = {
     '00:1C:A2': 'luminex',
     '70:A7:41': 'luminex',
+    'D0:69:9E': 'luminex',
     '78:8A:20': 'ubiquiti',
     'DC:9F:DB': 'ubiquiti',
     'FC:EC:DA': 'ubiquiti',
@@ -11,6 +24,7 @@ _OUI_MAP = {
     '80:2A:A8': 'ubiquiti',
     'B4:FB:E4': 'ubiquiti',
     '00:27:22': 'swisson',
+    '28:36:38': 'swisson',
     '20:B0:01': 'starlink',
 }
 
@@ -31,18 +45,43 @@ def enrich_device(ip: str, mac: str, device_type: str) -> dict:
     return {}
 
 
+def _snmp_get(ip: str, oid: str):
+    """Single read-only SNMP GET. OctetStrings are decoded to str."""
+    val = puresnmp.get(ip, _SNMP_COMMUNITY, oid, timeout=_SNMP_TIMEOUT)
+    if isinstance(val, bytes):
+        return val.decode('latin-1').strip()
+    return val
+
+
+def _snmp_walk_map(ip: str, oid: str) -> dict:
+    """Walk a table column, keyed by the interface index (last OID arc)."""
+    out = {}
+    for row in puresnmp.walk(ip, _SNMP_COMMUNITY, oid, timeout=_SNMP_TIMEOUT):
+        o = str(getattr(row, 'oid', row[0]))
+        val = getattr(row, 'value', row[1])
+        out[o.rsplit('.', 1)[-1]] = val
+    return out
+
+
 def _enrich_luminex(ip: str) -> dict:
+    # GigaCore's web GUI is auth-locked (401) and exposes no public REST API,
+    # but SNMP v2c is enabled by default. Pull model + port stats from standard
+    # MIBs. Firmware is not in any MIB GigaCore implements, so it stays blank.
+    if puresnmp is None:
+        log.warning('puresnmp not installed; skipping Luminex SNMP enrichment')
+        return {}
     try:
-        r = requests.get(f'http://{ip}/api/v1/system', timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            return {
-                'model': data.get('model'),
-                'firmware': data.get('firmware'),
-                'uptime': data.get('uptime'),
-                'portCount': data.get('portCount'),
-                'activePorts': data.get('activePorts'),
-            }
+        model = _snmp_get(ip, '1.3.6.1.2.1.1.1.0')          # sysDescr
+        if_types = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.3')  # ifType
+        oper = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.8')      # ifOperStatus
+        # Physical ports are ifType == 6 (ethernetCsmacd); the rest are VLANs.
+        phys = [idx for idx, t in if_types.items() if t == 6]
+        return {
+            'model': model,
+            'firmware': None,
+            'portCount': len(phys),
+            'activePorts': sum(1 for idx in phys if oper.get(idx) == 1),  # 1 == up
+        }
     except Exception:
         pass
     return {}
@@ -61,9 +100,16 @@ def _enrich_ubiquiti(ip: str) -> dict:
 
 def _enrich_swisson(ip: str) -> dict:
     try:
-        r = requests.get(f'http://{ip}/api/status', timeout=3)
+        r = requests.get(f'http://{ip}/model/device', timeout=3)
         if r.status_code == 200:
-            return r.json()
+            data = r.json()
+            return {
+                'model': data.get('modelName'),
+                'firmware': data.get('swVersionStr'),
+                'hwVersion': data.get('hwVersionStr'),
+                'portCount': len(data.get('uids', [])),
+                'longName': data.get('longArtNetName'),
+            }
     except Exception:
         pass
     return {}

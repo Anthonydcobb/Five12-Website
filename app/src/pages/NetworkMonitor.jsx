@@ -32,8 +32,8 @@ function Sidebar({ subnets, locations, devices, selectedSubnet, selectedLocation
   }
 
   return (
-    <div style={{ width: 148, flexShrink: 0, background: '#111', borderRight: '1px solid #222', padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 0 }}>
-      <div style={{ padding: '0 10px', color: '#555', fontSize: 9, letterSpacing: 1, marginBottom: 6 }}>NETWORKS</div>
+    <div style={{ width: 148, flexShrink: 0, background: 'var(--color-surface)', borderRight: '1px solid var(--color-border)', padding: '12px 0', display: 'flex', flexDirection: 'column', gap: 0 }}>
+      <div style={{ padding: '0 10px', color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 6 }}>NETWORKS</div>
       {subnets.map(s => {
         const active = selectedSubnet === s.id && !selectedLocation;
         return (
@@ -43,21 +43,21 @@ function Sidebar({ subnets, locations, devices, selectedSubnet, selectedLocation
             style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '5px 10px', margin: '1px 4px', borderRadius: 4,
-              background: active ? '#1e3a5f' : 'transparent',
-              border: 'none', cursor: 'pointer', color: s.color || '#7dd3fc',
-              fontSize: 10, textAlign: 'left',
+              background: active ? 'var(--color-surface-2)' : 'transparent',
+              border: 'none', cursor: 'pointer', color: s.color || 'var(--color-gel)',
+              fontSize: 12, textAlign: 'left',
             }}
           >
             <span>● {s.label}</span>
-            <span style={{ color: '#555', fontSize: 9 }}>{onlineCount(s.id)}/{totalCount(s.id)}</span>
+            <span style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{onlineCount(s.id)}/{totalCount(s.id)}</span>
           </button>
         );
       })}
       {subnets.length === 0 && (
-        <div style={{ padding: '4px 10px', color: '#444', fontSize: 10 }}>No subnets configured</div>
+        <div style={{ padding: '4px 10px', color: 'var(--color-text-muted)', fontSize: 11 }}>No subnets configured</div>
       )}
 
-      <div style={{ padding: '8px 10px 4px', color: '#555', fontSize: 9, letterSpacing: 1, borderTop: '1px solid #1a1a1a', marginTop: 8 }}>LOCATIONS</div>
+      <div style={{ padding: '8px 10px 4px', color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, borderTop: '1px solid var(--color-surface)', marginTop: 8 }}>LOCATIONS</div>
       {locations.map(loc => {
         const active = selectedLocation === loc.id;
         return (
@@ -66,9 +66,9 @@ function Sidebar({ subnets, locations, devices, selectedSubnet, selectedLocation
             onClick={() => onSelectLocation(loc.id)}
             style={{
               display: 'block', width: '100%', padding: '5px 10px', margin: '1px 4px',
-              borderRadius: 4, background: active ? '#1a2a1a' : 'transparent',
-              border: 'none', cursor: 'pointer', color: active ? '#86efac' : '#888',
-              fontSize: 10, textAlign: 'left',
+              borderRadius: 4, background: active ? 'var(--color-surface)' : 'transparent',
+              border: 'none', cursor: 'pointer', color: active ? 'var(--color-online)' : 'var(--color-text-muted)',
+              fontSize: 12, textAlign: 'left',
             }}
           >
             {loc.name}
@@ -77,7 +77,7 @@ function Sidebar({ subnets, locations, devices, selectedSubnet, selectedLocation
       })}
       <button
         onClick={onSaveLocation}
-        style={{ padding: '5px 10px', margin: '4px 4px 0', border: 'none', background: 'transparent', color: '#444', fontSize: 10, cursor: 'pointer', textAlign: 'left', fontStyle: 'italic' }}
+        style={{ padding: '5px 10px', margin: '4px 4px 0', border: 'none', background: 'transparent', color: 'var(--color-text-muted)', fontSize: 11, cursor: 'pointer', textAlign: 'left', fontStyle: 'italic' }}
       >
         + Save current...
       </button>
@@ -95,34 +95,34 @@ function DeviceRow({ device, selected, onClick }) {
     <div
       onClick={onClick}
       style={{
-        background: selected ? '#1e3a5f' : online ? '#141414' : '#1a0f0f',
-        border: `1px solid ${selected ? '#2a4a7f' : online ? '#222' : '#2a1010'}`,
+        background: selected ? 'var(--color-surface-2)' : online ? 'var(--color-surface)' : 'var(--color-brand-dim)',
+        border: `1px solid ${selected ? 'var(--color-border)' : online ? 'var(--color-border)' : 'var(--color-brand-dim)'}`,
         borderRadius: 4, padding: '7px 8px', marginBottom: 4, cursor: 'pointer',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ color: online ? '#fff' : '#f87171', fontSize: 11 }}>
+        <span style={{ color: online ? 'var(--color-text)' : 'var(--color-brand-hi)', fontSize: 13 }}>
           {online ? '🟢' : '🔴'} {name}
         </span>
         {online && device.lastIp && (
           <a
             href={`http://${device.lastIp}`} target="_blank" rel="noreferrer"
             onClick={e => e.stopPropagation()}
-            style={{ color: '#7dd3fc', fontSize: 9, textDecoration: 'none' }}
+            style={{ color: 'var(--color-gel)', fontSize: 11, textDecoration: 'none' }}
           >↗</a>
         )}
       </div>
       {online && device.lastIp && (
-        <div style={{ color: '#7dd3fc', fontSize: 9, marginTop: 2 }}>{device.lastIp}</div>
+        <div style={{ color: 'var(--color-gel)', fontSize: 11, marginTop: 2 }}>{device.lastIp}</div>
       )}
       {!online && (
-        <div style={{ color: '#f87171', fontSize: 9, marginTop: 2 }}>offline · last seen {timeAgo(device.lastSeen)}</div>
+        <div style={{ color: 'var(--color-brand-hi)', fontSize: 11, marginTop: 2 }}>offline · last seen {timeAgo(device.lastSeen)}</div>
       )}
       {!device.label && online && (
-        <div style={{ color: '#f59e0b', fontSize: 9, marginTop: 1 }}>⚠ unlabeled</div>
+        <div style={{ color: 'var(--color-warn)', fontSize: 11, marginTop: 1 }}>⚠ unlabeled</div>
       )}
       {device.notes && (
-        <div style={{ color: '#475569', fontSize: 9, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           "{device.notes}"
         </div>
       )}
@@ -151,12 +151,12 @@ function DeviceList({ devices, subnets, selectedSubnet, selectedLocation, locati
   const online = list.filter(d => isOnline(d)).length;
 
   return (
-    <div style={{ width: 220, flexShrink: 0, background: '#0f0f0f', borderRight: '1px solid #1a1a1a', padding: 8, overflowY: 'auto' }}>
-      <div style={{ color: subnet?.color || '#7dd3fc', fontSize: 10, marginBottom: 8 }}>
+    <div style={{ width: 220, flexShrink: 0, background: 'var(--color-bg)', borderRight: '1px solid var(--color-surface)', padding: 8, overflowY: 'auto' }}>
+      <div style={{ color: subnet?.color || 'var(--color-gel)', fontSize: 12, marginBottom: 8 }}>
         {selectedLocation ? 'Snapshot devices' : subnet ? `${subnet.label} · ${online} online` : `All networks · ${online} online`}
       </div>
       {list.length === 0 && (
-        <div style={{ color: '#333', fontSize: 10, textAlign: 'center', marginTop: 24 }}>No devices yet</div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 12, textAlign: 'center', marginTop: 24 }}>No devices yet</div>
       )}
       {list.map(d => (
         <DeviceRow
@@ -174,9 +174,9 @@ function DeviceList({ devices, subnets, selectedSubnet, selectedLocation, locati
 
 function MetaCell({ label, value }) {
   return (
-    <div style={{ background: '#1a1a1a', borderRadius: 4, padding: 7 }}>
-      <div style={{ color: '#555', fontSize: 9, letterSpacing: 1 }}>{label}</div>
-      <div style={{ color: '#ccc', fontSize: 10, marginTop: 2 }}>{value || '—'}</div>
+    <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 7 }}>
+      <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1 }}>{label}</div>
+      <div style={{ color: 'var(--color-text)', fontSize: 12, marginTop: 2 }}>{value || '—'}</div>
     </div>
   );
 }
@@ -208,13 +208,18 @@ function DeviceDetail({ device, locations, onUpdate }) {
 
   const online = isOnline(device);
   const vd = device.vendorData || {};
+  // Generic across vendors: any device whose enrichment supplied a webUrl
+  // (Stardust via Art-Net, Luminex/Swisson if theirs adds one) gets the
+  // button; everything else falls back to its last known IP.
+  const webUrl = vd.webUrl || (device.lastIp ? `http://${device.lastIp}` : null);
+  const universes = vd.universesOutputting;
 
   const appearances = locations.filter(loc =>
     (loc.devices || []).some(ld => ld.macAddress === device.macAddress)
   );
 
   return (
-    <div style={{ flex: 1, background: '#0a0a0a', padding: 14, overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+    <div style={{ flex: 1, background: 'var(--color-bg)', padding: 14, overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
         <div>
           {editingLabel ? (
@@ -224,27 +229,34 @@ function DeviceDetail({ device, locations, onUpdate }) {
               onChange={e => setLabelVal(e.target.value)}
               onBlur={saveLabel}
               onKeyDown={e => e.key === 'Enter' && saveLabel()}
-              style={{ background: '#1a1a1a', border: '1px solid #7dd3fc', borderRadius: 4, color: '#fff', fontSize: 13, fontWeight: 'bold', padding: '2px 6px', width: 180 }}
+              style={{ background: 'var(--color-surface)', border: '1px solid var(--color-gel)', borderRadius: 4, color: 'var(--color-text)', fontSize: 13, fontWeight: 'bold', padding: '2px 6px', width: 180 }}
             />
           ) : (
             <div
               onClick={() => setEditingLabel(true)}
-              style={{ color: '#fff', fontSize: 13, fontWeight: 'bold', cursor: 'text' }}
+              style={{ color: 'var(--color-text)', fontSize: 13, fontWeight: 'bold', cursor: 'text' }}
               title="Click to edit label"
             >
-              {device.label || <span style={{ color: '#444' }}>Unlabeled device</span>}
+              {device.label || <span style={{ color: 'var(--color-text-muted)' }}>Unlabeled device</span>}
             </div>
           )}
-          {device.lastIp && (
-            <a href={`http://${device.lastIp}`} target="_blank" rel="noreferrer"
-              style={{ color: '#7dd3fc', fontSize: 10, textDecoration: 'underline', marginTop: 2, display: 'block' }}>
-              http://{device.lastIp} ↗ Open device GUI
+          {webUrl && (
+            <a href={webUrl} target="_blank" rel="noreferrer"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 4,
+                background: 'var(--color-surface-2)', border: '1px solid var(--color-border)',
+                borderRadius: 4, padding: '3px 8px', color: 'var(--color-gel)',
+                fontSize: 10, textDecoration: 'none',
+              }}
+              title={`Open ${webUrl}`}>
+              ↗ Open device GUI
+              <span style={{ color: 'var(--color-text-muted)' }}>{webUrl.replace(/^https?:\/\//, '')}</span>
             </a>
           )}
         </div>
         <div style={{
           background: online ? '#22c55e22' : '#ef444422',
-          color: online ? '#22c55e' : '#ef4444',
+          color: online ? 'var(--color-online)' : 'var(--color-brand-hi)',
           padding: '3px 8px', borderRadius: 4, fontSize: 10,
         }}>
           ● {online ? 'ONLINE' : 'OFFLINE'}
@@ -253,37 +265,65 @@ function DeviceDetail({ device, locations, onUpdate }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
         <MetaCell label="MAC ADDRESS" value={device.macAddress} />
-        <MetaCell label="DEVICE TYPE" value={device.deviceType} />
+        <MetaCell label="DEVICE TYPE" value={device.deviceType === 'swisson' ? `Swisson${vd.model ? ` ${vd.model}` : ''}` : (vd.model || device.deviceType)} />
         <MetaCell label="FIRMWARE" value={vd.firmware} />
-        <MetaCell label="UPTIME" value={vd.uptime} />
-        <MetaCell label="PORTS" value={vd.portCount ? `${vd.portCount} · ${vd.activePorts ?? '?'} active` : null} />
+        <MetaCell label="HW VERSION" value={vd.hwVersion || vd.uptime} />
+        <MetaCell label="PORTS" value={vd.portCount ? `${vd.portCount}${vd.activePorts != null ? ` · ${vd.activePorts} active` : ''}` : null} />
         <MetaCell label="LAST SEEN" value={device.lastSeen ? timeAgo(device.lastSeen) : 'never'} />
       </div>
 
-      <div style={{ background: '#1a1a1a', borderRadius: 4, padding: 8, marginBottom: 8 }}>
-        <div style={{ color: '#555', fontSize: 9, letterSpacing: 1, marginBottom: 4 }}>NOTES</div>
+      {universes && (
+        <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
+          <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 6 }}>
+            UNIVERSES OUTPUTTING
+          </div>
+          {universes.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {universes.map(u => (
+                <span key={u} style={{
+                  background: 'var(--color-surface-2)', border: '1px solid var(--color-gel)',
+                  borderRadius: 3, padding: '2px 7px', color: 'var(--color-gel)',
+                  fontSize: 11, fontVariantNumeric: 'tabular-nums',
+                }}>{u}</span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>
+              None reported
+              {device.deviceType === 'stardust' && (
+                <span style={{ fontSize: 10, display: 'block', marginTop: 2 }}>
+                  This unit does not publish its universes over Art-Net — needs the sACN listener.
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 4 }}>NOTES</div>
         <textarea
           value={notesVal}
           onChange={e => setNotesVal(e.target.value)}
           onBlur={saveNotes}
           placeholder="Add notes about this device..."
           style={{
-            width: '100%', background: '#111', border: '1px solid #333', borderRadius: 3,
-            padding: 6, color: '#ccc', fontSize: 10, minHeight: 52, resize: 'vertical', boxSizing: 'border-box',
+            width: '100%', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 3,
+            padding: 6, color: 'var(--color-text)', fontSize: 12, minHeight: 52, resize: 'vertical', boxSizing: 'border-box',
           }}
         />
-        <div style={{ color: '#333', fontSize: 9, marginTop: 4 }}>Autosaves on blur · keyed to MAC address · persists across locations</div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 10, marginTop: 4 }}>Autosaves on blur · keyed to MAC address · persists across locations</div>
       </div>
 
-      <div style={{ background: '#1a1a1a', borderRadius: 4, padding: 8 }}>
-        <div style={{ color: '#555', fontSize: 9, letterSpacing: 1, marginBottom: 4 }}>SEEN AT LOCATIONS</div>
+      <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8 }}>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 4 }}>SEEN AT LOCATIONS</div>
         {appearances.length === 0 && (
-          <div style={{ color: '#333', fontSize: 10 }}>Not seen at any saved location yet</div>
+          <div style={{ color: 'var(--color-text-muted)', fontSize: 12 }}>Not seen at any saved location yet</div>
         )}
         {appearances.map(loc => {
           const ld = (loc.devices || []).find(d => d.macAddress === device.macAddress);
           return (
-            <div key={loc.id} style={{ fontSize: 10, color: '#aaa', padding: '2px 0' }}>
+            <div key={loc.id} style={{ fontSize: 12, color: 'var(--color-text-muted)', padding: '2px 0' }}>
               📍 {loc.name} · {formatDate(loc.createdAt)} · IP was {ld?.ipAtTime || '?'}
             </div>
           );
@@ -302,22 +342,22 @@ function SaveLocationModal({ onSave, onCancel }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, padding: 24, width: 320 }}>
-        <div style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>Save Location Snapshot</div>
+      <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 8, padding: 24, width: 320 }}>
+        <div style={{ color: 'var(--color-text)', fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>Save Location Snapshot</div>
         <input
           ref={inputRef}
           value={name}
           onChange={e => setName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter' && name.trim()) onSave(name.trim()); if (e.key === 'Escape') onCancel(); }}
           placeholder="e.g. Warner Bros Lot 3 - Stage A"
-          style={{ width: '100%', background: '#111', border: '1px solid #444', borderRadius: 4, padding: '8px 10px', color: '#fff', fontSize: 12, boxSizing: 'border-box', marginBottom: 12 }}
+          style={{ width: '100%', background: 'var(--color-surface)', border: '1px solid var(--color-text-muted)', borderRadius: 4, padding: '8px 10px', color: 'var(--color-text)', fontSize: 12, boxSizing: 'border-box', marginBottom: 12 }}
         />
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <button onClick={onCancel} style={{ padding: '6px 14px', background: '#333', border: 'none', borderRadius: 4, color: '#aaa', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+          <button onClick={onCancel} style={{ padding: '6px 14px', background: 'var(--color-border)', border: 'none', borderRadius: 4, color: 'var(--color-text-muted)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
           <button
             onClick={() => name.trim() && onSave(name.trim())}
             disabled={!name.trim()}
-            style={{ padding: '6px 14px', background: '#22c55e', border: 'none', borderRadius: 4, color: '#000', fontSize: 12, fontWeight: 'bold', cursor: 'pointer', opacity: name.trim() ? 1 : 0.4 }}
+            style={{ padding: '6px 14px', background: 'var(--color-online)', border: 'none', borderRadius: 4, color: 'var(--color-bg)', fontSize: 12, fontWeight: 'bold', cursor: 'pointer', opacity: name.trim() ? 1 : 0.4 }}
           >Save</button>
         </div>
       </div>
@@ -330,7 +370,7 @@ function SaveLocationModal({ onSave, onCancel }) {
 function SubnetSettings({ subnets, onAdd, onDelete, onClose }) {
   const [label, setLabel] = useState('');
   const [cidr, setCidr] = useState('');
-  const [color, setColor] = useState('#7dd3fc');
+  const [color, setColor] = useState('var(--color-gel)');
 
   const add = () => {
     if (!label.trim() || !cidr.trim()) return;
@@ -340,23 +380,23 @@ function SubnetSettings({ subnets, onAdd, onDelete, onClose }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div style={{ background: '#1a1a1a', border: '1px solid #333', borderRadius: 8, padding: 24, width: 380 }}>
-        <div style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>Subnet Settings</div>
+      <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 8, padding: 24, width: 380 }}>
+        <div style={{ color: 'var(--color-text)', fontSize: 14, fontWeight: 'bold', marginBottom: 12 }}>Subnet Settings</div>
         {subnets.map(s => (
-          <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #222' }}>
+          <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--color-border)' }}>
             <span style={{ color: s.color, fontSize: 11 }}>● {s.label}</span>
-            <span style={{ color: '#555', fontSize: 10 }}>{s.cidr}</span>
-            <button onClick={() => onDelete(s.id)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 11 }}>✕</button>
+            <span style={{ color: 'var(--color-text-muted)', fontSize: 10 }}>{s.cidr}</span>
+            <button onClick={() => onDelete(s.id)} style={{ background: 'none', border: 'none', color: 'var(--color-brand-hi)', cursor: 'pointer', fontSize: 11 }}>✕</button>
           </div>
         ))}
         <div style={{ marginTop: 12, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Label" style={{ flex: 1, minWidth: 80, background: '#111', border: '1px solid #444', borderRadius: 4, padding: '5px 8px', color: '#fff', fontSize: 11 }} />
-          <input value={cidr} onChange={e => setCidr(e.target.value)} placeholder="192.168.10.0/24" style={{ flex: 2, minWidth: 130, background: '#111', border: '1px solid #444', borderRadius: 4, padding: '5px 8px', color: '#fff', fontSize: 11 }} />
-          <input type="color" value={color} onChange={e => setColor(e.target.value)} style={{ width: 32, height: 30, background: 'none', border: '1px solid #444', borderRadius: 4, cursor: 'pointer', padding: 2 }} />
-          <button onClick={add} style={{ background: '#2563eb', border: 'none', borderRadius: 4, color: '#fff', fontSize: 11, padding: '5px 10px', cursor: 'pointer' }}>Add</button>
+          <input value={label} onChange={e => setLabel(e.target.value)} placeholder="Label" style={{ flex: 1, minWidth: 80, background: 'var(--color-surface)', border: '1px solid var(--color-text-muted)', borderRadius: 4, padding: '5px 8px', color: 'var(--color-text)', fontSize: 11 }} />
+          <input value={cidr} onChange={e => setCidr(e.target.value)} placeholder="192.168.10.0/24" style={{ flex: 2, minWidth: 130, background: 'var(--color-surface)', border: '1px solid var(--color-text-muted)', borderRadius: 4, padding: '5px 8px', color: 'var(--color-text)', fontSize: 11 }} />
+          <input type="color" value={color} onChange={e => setColor(e.target.value)} style={{ width: 32, height: 30, background: 'none', border: '1px solid var(--color-text-muted)', borderRadius: 4, cursor: 'pointer', padding: 2 }} />
+          <button onClick={add} style={{ background: 'var(--color-gel)', border: 'none', borderRadius: 4, color: 'var(--color-text)', fontSize: 11, padding: '5px 10px', cursor: 'pointer' }}>Add</button>
         </div>
         <div style={{ textAlign: 'right', marginTop: 14 }}>
-          <button onClick={onClose} style={{ background: '#333', border: 'none', borderRadius: 4, color: '#aaa', fontSize: 12, padding: '6px 14px', cursor: 'pointer' }}>Done</button>
+          <button onClick={onClose} style={{ background: 'var(--color-border)', border: 'none', borderRadius: 4, color: 'var(--color-text-muted)', fontSize: 12, padding: '6px 14px', cursor: 'pointer' }}>Done</button>
         </div>
       </div>
     </div>
@@ -502,33 +542,33 @@ export default function NetworkMonitor() {
   const secondsAgo = lastScan ? Math.floor((Date.now() - lastScan) / 1000) : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: '#0a0a0a', color: '#fff', fontFamily: 'monospace' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'monospace' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid #1a1a1a', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid var(--color-surface)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ fontSize: 13, fontWeight: 'bold' }}>Network Monitor</span>
-          {scanning && <span style={{ color: '#7dd3fc', fontSize: 10 }}>● scanning...</span>}
+          {scanning && <span style={{ color: 'var(--color-gel)', fontSize: 10 }}>● scanning...</span>}
           {!scanning && secondsAgo !== null && (
-            <span style={{ color: '#444', fontSize: 10 }}>Last scan: {secondsAgo}s ago</span>
+            <span style={{ color: 'var(--color-text-muted)', fontSize: 10 }}>Last scan: {secondsAgo}s ago</span>
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
           <button
             onClick={() => setShowSubnetSettings(true)}
-            style={{ padding: '4px 10px', background: '#1a1a1a', border: '1px solid #333', borderRadius: 4, color: '#888', fontSize: 11, cursor: 'pointer' }}
+            style={{ padding: '4px 10px', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-text-muted)', fontSize: 11, cursor: 'pointer' }}
           >
             ⚙ Subnets
           </button>
           <button
             onClick={triggerScan}
             disabled={scanning}
-            style={{ padding: '4px 10px', background: '#1e3a5f', border: '1px solid #2a4a7f', borderRadius: 4, color: '#7dd3fc', fontSize: 11, cursor: scanning ? 'default' : 'pointer', opacity: scanning ? 0.5 : 1 }}
+            style={{ padding: '4px 10px', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-gel)', fontSize: 11, cursor: scanning ? 'default' : 'pointer', opacity: scanning ? 0.5 : 1 }}
           >
             Scan Now
           </button>
           <button
             onClick={() => setShowSaveModal(true)}
-            style={{ padding: '4px 10px', background: '#1a2a1a', border: '1px solid #2a4a2a', borderRadius: 4, color: '#86efac', fontSize: 11, cursor: 'pointer' }}
+            style={{ padding: '4px 10px', background: 'var(--color-surface)', border: '1px solid var(--color-surface)', borderRadius: 4, color: 'var(--color-online)', fontSize: 11, cursor: 'pointer' }}
           >
             ⊞ Save Location
           </button>
@@ -560,7 +600,7 @@ export default function NetworkMonitor() {
           {selectedDevice
             ? <DeviceDetail device={selectedDevice} locations={locationsWithDevices} onUpdate={updateDevice} />
             : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#333', fontSize: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--color-border)', fontSize: 12 }}>
                 Select a device to view details
               </div>
             )

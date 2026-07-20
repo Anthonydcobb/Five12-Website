@@ -26,3 +26,10 @@ typing_extensions==4.13.2
 tzdata==2025.2
 Werkzeug==3.1.3
 scapy==2.6.1
+requests==2.32.3
+puresnmp==1.11.0.post1
+t61codec==2.0.0
+verlib==0.1
+# Optional — Starlink live telemetry (sim mode works without these):
+# starlink-grpc-tools
+# grpcio
