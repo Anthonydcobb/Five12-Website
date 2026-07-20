@@ -40,26 +40,52 @@ def _local_ipv4s():
 # ('via') so RDM TOD unicast in _real_status binds the same interface.
 ```
 
-## sACN blocker (network-side, not code) — CAUSE UNCONFIRMED
-sACN Universe Discovery (`239.255.250.214:5568`) never reaches the host —
-ruled out firewall (python.exe allowed) and code (multicast self-test works).
+## sACN blocker — SOLVED 2026-07-20. It was the bind, not the network.
+**sACN multicast reaches this host fine.** Verified live: joined
+`239.255.250.214` + `239.255.0.1–8` on interface `10.220.220.220` and
+received within seconds:
+```
+RX from 10.0.0.2  len=638  acn='ASC-E1.17'  universe=1
+source='Processor, Netnumber 2, Output 1'
+```
 
-**CORRECTION 2026-07-20:** an earlier draft asserted the cause was "IGMP
-snooping with no querier." That was never verified, and the operator has
-since confirmed **a querier is enabled and there is only one switch** — so
-snooping is most likely NOT the cause. Do not act on the old claim.
+**Root cause: the Windows multicast bind.** You must `bind(('', 5568))`
+(INADDR_ANY) and choose the interface via the `IP_ADD_MEMBERSHIP` mreq:
+```python
+s.bind(('', 5568))                                  # NOT (IFACE, 5568)
+mreq = socket.inet_aton(group) + socket.inet_aton('10.220.220.220')
+s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+```
+Binding the interface's *unicast* IP — the intuitive thing, and what the
+Art-Net unicast path correctly does — silently receives **zero** multicast
+on Windows. That is why every earlier attempt saw nothing.
 
-Untested candidates, most likely first:
-1. **Wrong NIC for the IGMP join.** The host has 7 IPv4s and only
-   `10.220.220.220` reaches the lighting gear. If the listener binds
-   `INADDR_ANY`, Windows picks by route metric and the membership report
-   leaves the wrong adapter. This is the *same* root cause as the Art-Net
-   bug fixed below, which makes it the prime suspect. Check with
-   `netsh interface ip show joins`; the listener must
-   `IP_ADD_MEMBERSHIP` bound explicitly to `10.220.220.220`.
-2. Socket never joins the group at all (no explicit `IP_ADD_MEMBERSHIP`).
-3. Firewall profile: inbound UDP 5568 blocked on the profile that VLAN is
-   classified as (Public vs Private), even though python.exe is allowed.
+**Two earlier diagnoses in this doc were both WRONG. Do not act on either:**
+- ~~"IGMP snooping with no querier"~~ — a querier is enabled on the single
+  switch. **No switch change is needed. Nothing to do on the network.**
+- ~~"wrong NIC for the IGMP join"~~ — disproved: `netsh interface ip show
+  joins` shows `239.255.250.214` joined on `Ethernet 2` (ifIndex 5), which
+  *is* `10.220.220.220`. The join was always on the correct adapter.
+
+Host topology notes (verified): `Ethernet 4` is `10.220.220.221`, a second
+NIC on the same subnet as `Ethernet 2`; the default route is `Local Area
+Connection` (`10.0.0.1`), neither of them. NordVPN/NordLynx is active. None
+of this blocked sACN, but it is why interface selection must always be
+explicit rather than left to the routing table.
+
+## OPEN SCOPE QUESTION — read before building the listener
+The Stardust is a **receiver**: it consumes sACN/Art-Net and re-transmits
+DMX wirelessly over CRMX. In sACN, **sources announce themselves; receivers
+do not.** So a listener yields "which universes are live on the wire, and
+who sources them" (above: universe 1 from a processor at `10.0.0.2`) — it
+does **not** reveal which universes the Stardust is patched to consume.
+
+That is the number the devices panel was specced to show, so the original
+goal may not be reachable from sACN either. Decide the scope before
+designing: either redefine the panel section as *network* universes (a
+genuinely useful "what's on the wire" view), or find another surface for
+Stardust's patch config. Do not assume the listener answers the original
+question.
 
 ## Tasks 1–4 — DONE 2026-07-20 (all verified against live hardware)
 1. ✅ **`integrations/stardust.py`** — `_local_ipv4s()` (honours new
