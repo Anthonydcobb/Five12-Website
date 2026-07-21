@@ -38,7 +38,10 @@ All four are seeded as `NetworkSubnet` rows and scanned automatically.
 
 **Luminex GigaCore12 (6)** — `172.16.1.4`, `.11`, `.12`, `.21`, `.31`, `.36`
 
-**Netgear M4250-10G2F-PoE+** — `172.16.3.97` (firmware 13.0.5.26, boot 1.0.0.11)
+**Netgear M4250-10G2F-PoE+ (7)** — `172.16.3.78`, `.79`, `.90`, `.93`, `.96`,
+`.97`, `.98`. All seven share OUI `28:94:01` and are typed automatically.
+Firmware 13.0.5.26 / boot 1.0.0.11, 12 ports each. Serials read over SNMP where
+configured: `.97` = `70VG5C5GA0121`, `.98` = `70VG5C5NA0143`.
 
 **Unidentified** — `172.16.2.2`, `10.0.7.2`, `10.31.0.11`, `10.31.7.102`, `192.168.1.11`
 
@@ -78,6 +81,22 @@ and returned `Incomplete`. The physical HOG NIC was meanwhile on
 `192.168.220.220/16`, squatting on the Bolero range. NIC corrected;
 `172.31.0.4` now reachable.
 
+**Scan loop never completed** (fixed 0700a3d). `_scapy_scan` enumerated whatever
+CIDR it was handed, and the configured ranges are deliberately loose. Measured
+on this host: a /24 sweep is ~2.6s, so HogNet `/16` was ~11min and the sACN
+`10.0.0.0/8` was **~47h**. `run_scan_now` walks subnets sequentially, so the /8
+stalled every later subnet indefinitely and Management was never reached. Wide
+prefixes are now reduced by `_sweep_targets` to the /24s holding a local NIC or
+a previously-seen device; `arp -a` still covers the full CIDR, so only the
+ACTIVE probe is narrowed. Full four-subnet loop: never finished -> **65s**.
+
+**Switch firmware/serial were on the wire but discarded** (fixed 0700a3d).
+`_enrich_snmp_switch` hardcoded `firmware: None` and set `model` to the entire
+raw sysDescr string. Firmware now comes from `entPhysicalSoftwareRev`, boot
+version from the sysDescr tail, serial from `entPhysicalSerialNum`. Netgear
+reports **no** `entPhysicalHardwareRev` — it returns an empty string — so
+HW VERSION is left blank rather than faked from the boot version.
+
 ## Open
 
 1. **Two Hog consoles still not visible on `172.31.x`.** The Loopback adapter
@@ -91,14 +110,24 @@ and returned `Incomplete`. The physical HOG NIC was meanwhile on
    `172.16.10-11.x` out the Wi-Fi via a FortiGate. Renumber Management to a /24.
    Mitigated in-app: the scanner now drops locally-administered MACs, so the
    phones no longer land in the device list.
+   [MEASURED 2026-07-21] Only partly mitigated — 148 unknown devices sat on
+   Management and **145 of them were in `172.16.10.x`/`172.16.11.x`**, i.e.
+   inside the Wi-Fi /23. Their OUIs are scattered consumer singletons, so OUI
+   matching cannot catch them; the subnet boundary can. Planned fix: a
+   per-subnet `ignore_cidrs` column, set to `172.16.10.0/23` on Management, so
+   those addresses are never persisted as devices at all.
 3. **Rogue second default route** `0.0.0.0/0 -> 10.0.0.1` on the disabled
    "Local Area Connection". NordVPN also holds `10.100.0.2/22` inside the sACN `/8`.
 4. **Tailscale ifMetric 5** is below the lighting NICs at 25, so it wins multicast
    egress. Has not stopped the sACN listener, which joins on every interface.
 5. **All four lighting NICs are firewall profile "Public".**
 6. **SNMP** v2c community `public` / `172.16.0.0` / `255.255.0.0` / ReadOnly is
-   configured on the one M4250 only. Remaining Netgears still need it, and
-   return `{}` from enrichment until they get it. Luminex answers by default.
+   configured on `172.16.3.97` and `.98` (the latter added 2026-07-21 and
+   verified reading its own serial). The remaining **five** Netgears still need
+   it and return `{}` from enrichment until they get it. Luminex answers by
+   default. Each unconfigured switch costs ~6s of SNMP retries, so those five
+   add ~30s to every Management sweep — configuring them speeds up scanning as
+   well as filling in the data.
    The `puresnmp` client itself is fine — pinned in `backend/requirements.txt`
    and present in `backend/.venv`, which is the interpreter `electron/main.js`
    prefers. A "puresnmp not installed" warning means the backend was started
@@ -119,6 +148,17 @@ and returned `Incomplete`. The physical HOG NIC was meanwhile on
 - `10.31.x.201` is a **Stardust**, not a Raspberry Pi — `E4-5F-01` is the Pi
   OUI, and Stardusts are Pi-based.
 - Wide sweeps (>50k addresses) time out. Sweep targeted /24s only.
+- **A stale Flask backend silently reverts data — always confirm the old
+  process died.** [PROVEN 2026-07-21] After the ARP fix was committed, the
+  seven Netgear switches still showed `unknown`. The code was correct; three
+  backends from earlier the same day were still running with pre-fix code in
+  memory, sweeping on the 30s loop and overwriting `device_type` every cycle.
+  Demonstrated by writing `netgear` to `172.16.3.96` and watching it revert 29s
+  later while no current-code process was running. The tell was a HALF-updated
+  row: new code wrote the `Netgear` label, old code (which only labels on first
+  sighting) left the label alone but stomped the type. Two hours went into
+  chasing the code before the environment was suspected. `Get-Process python`
+  after any backend change; a survivor fails silently rather than loudly.
 - A hand-rolled SNMP packet with a miscalculated varbind length produced false
   "no SNMP reply" results across every switch. Length is `oidCount + 4`, not
   `oidCount + 6`. (The app uses `puresnmp` and never had this bug.)
