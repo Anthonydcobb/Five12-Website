@@ -96,7 +96,30 @@ class LabelTemplate(db.Model):
         return f"<LabelTemplate {self.name!r}>"
 
 
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utc_iso(dt):
+    """Serialize a naive-UTC column as an UNAMBIGUOUS UTC instant.
+
+    The datetime columns here are filled by `datetime.utcnow()`, so they hold
+    UTC with no tzinfo attached. A bare `.isoformat()` renders that as
+    "2026-07-21T20:57:05" — no offset — and per the ECMAScript spec a
+    date-time string without an offset is parsed as LOCAL time. The browser
+    therefore read every timestamp as being `utcoffset` hours in the future
+    (4h here), `isOnline` computed a NEGATIVE elapsed time, and
+    `negative < 90_000` is always true — so every device showed permanently
+    online and "remove offline devices" never found anything to remove.
+
+    Emits a trailing `Z`, which both `new Date()` and `datetime.fromisoformat`
+    accept. Values that already carry a tzinfo are converted rather than
+    stamped, so this stays correct if a column ever becomes tz-aware.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 class NetworkSubnet(db.Model):
     __tablename__ = 'network_subnets'
@@ -150,10 +173,10 @@ class NetworkDevice(db.Model):
             'subnetId': self.subnet_id,
             'notes': self.notes,
             'lastIp': self.last_ip,
-            'lastSeen': self.last_seen.isoformat() if self.last_seen else None,
+            'lastSeen': _utc_iso(self.last_seen),
             'vendorData': self.vendor_data,
             'hidden': bool(self.hidden),
-            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'createdAt': _utc_iso(self.created_at),
         }
 
 
@@ -168,7 +191,7 @@ class LocationSnapshot(db.Model):
         return {
             'id': self.id,
             'name': self.name,
-            'createdAt': self.created_at.isoformat() if self.created_at else None,
+            'createdAt': _utc_iso(self.created_at),
             'deviceCount': len(self.devices),
         }
 
