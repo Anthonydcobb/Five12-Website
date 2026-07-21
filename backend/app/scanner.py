@@ -7,7 +7,16 @@ import re
 import logging
 from datetime import datetime, timedelta
 
+from .local_ifaces import local_ipv4s
+
 log = logging.getLogger(__name__)
+
+# Widest prefix we will enumerate address-by-address (a /22). Past this, a
+# sweep stops being a sweep: measured on this host a /24 takes ~2.6s, so a /16
+# is ~11min and the configured sACN /8 is ~47h — one subnet stalls the whole
+# sequential loop for days. Wider ranges are reduced to candidate /24s by
+# `_sweep_targets` instead of being enumerated.
+MAX_SWEEP_ADDRESSES = 1024
 
 # A device that hasn't answered a sweep is kept (shown offline) so its
 # label/notes survive going offline and coming back on a new DHCP IP —
@@ -66,7 +75,7 @@ def _warm_arp_cache(cidr: str) -> None:
         net = ipaddress.ip_network(cidr, strict=False)
     except ValueError:
         return
-    if net.num_addresses > 1024:
+    if net.num_addresses > MAX_SWEEP_ADDRESSES:
         return
     with ThreadPoolExecutor(max_workers=64) as pool:
         for host in net.hosts():
@@ -83,7 +92,39 @@ def _merge_pairs(primary: list[tuple[str, str]],
     return sorted(merged.items())
 
 
-def _arp_scan(cidr: str) -> list[tuple[str, str]]:
+def _sweep_targets(cidr: str, known_ips=()) -> list[str]:
+    """The ranges actually worth enumerating inside `cidr`.
+
+    A prefix at or under MAX_SWEEP_ADDRESSES is swept whole. Anything wider is
+    reduced to the /24s that hold either a local NIC or a previously-seen
+    device: the configured ranges are deliberately loose (sACN is a whole /8)
+    but real hardware clusters into a handful of /24s. That turns 16.7M probes
+    into ~1k while still covering every address a device has ever been seen on.
+
+    Returns [] when a wide range has no known occupants — nothing to aim at.
+    The `arp -a` fallback in `_arp_scan` still covers the full CIDR, so this
+    narrows the ACTIVE probe only; it never narrows what can be discovered
+    from the cache.
+    """
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return []
+    if net.num_addresses <= MAX_SWEEP_ADDRESSES:
+        return [str(net)]
+
+    targets = set()
+    for ip in list(local_ipv4s()) + list(known_ips):
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if addr in net:
+            targets.add(str(ipaddress.ip_network(f'{ip}/24', strict=False)))
+    return sorted(targets)
+
+
+def _arp_scan(cidr: str, known_ips=()) -> list[tuple[str, str]]:
     """Discover (ip, mac) pairs using BOTH the active scapy sweep and the OS
     ARP cache.
 
@@ -95,18 +136,28 @@ def _arp_scan(cidr: str) -> list[tuple[str, str]]:
     'unknown' after the OUI table gained them) and quiet devices were never
     found at all. Empty is not proof of an empty network, so the two sources
     are now merged rather than one being preferred.
+
+    CHANGE: the sweep is now aimed at `_sweep_targets(cidr)` rather than the
+    raw CIDR. Sweeping the configured range verbatim meant ~11min per /16 and
+    ~47h for the sACN /8, so the sequential scan loop never reached the later
+    subnets at all.
     """
-    try:
-        scapy_pairs = _scapy_scan(cidr)
-    except Exception as e:
-        log.debug('scapy ARP sweep unavailable on %s: %s', cidr, e)
-        scapy_pairs = []
+    scapy_pairs = []
+    for target in _sweep_targets(cidr, known_ips):
+        try:
+            found = _scapy_scan(target)
+        except Exception as e:
+            log.debug('scapy ARP sweep unavailable on %s: %s', target, e)
+            found = []
+        if found:
+            scapy_pairs.extend(found)
+        else:
+            # scapy contributed nothing here, so the cache is the only source
+            # for this range — make it worth reading before we read it.
+            _warm_arp_cache(target)
 
-    if not scapy_pairs:
-        # scapy contributed nothing, so the cache is the only source — make it
-        # worth reading before we read it.
-        _warm_arp_cache(cidr)
-
+    # Always over the FULL cidr: `arp -a` is a single cheap command and the
+    # cache may hold devices outside any swept /24.
     return _merge_pairs(scapy_pairs, _arp_fallback(cidr))
 
 
@@ -238,7 +289,14 @@ def run_scan_now(app) -> None:
             # that changes on the next association, so they accumulated as
             # permanent unlabeled junk that the prune could only clear 24h late.
             # Lighting infrastructure never randomizes its MAC.
-            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr)
+            # Previously-seen addresses aim the sweep inside a wide CIDR —
+            # see _sweep_targets. Cheap query, and it means a device that has
+            # ever been seen keeps getting actively probed on its own /24.
+            with app.app_context():
+                known_ips = [r[0] for r in db.session.query(
+                    NetworkDevice.last_ip).filter(
+                    NetworkDevice.last_ip.isnot(None)).all()]
+            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr, known_ips)
                      if ip not in excluded and _is_host_mac(mac)
                      and not is_randomized_mac(mac)]
             found_macs = set()

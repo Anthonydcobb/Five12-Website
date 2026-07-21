@@ -1,4 +1,5 @@
 import logging
+import re
 import requests
 import subprocess
 
@@ -118,30 +119,83 @@ def _snmp_walk_map(ip: str, oid: str) -> dict:
     return out
 
 
+def _entity_field(ip: str, oid: str):
+    """First non-empty value in an ENTITY-MIB column.
+
+    The chassis is conventionally index 1, but that is convention, not a
+    guarantee — so take the lowest-indexed row that is actually populated.
+    Netgear leaves most of these columns as empty strings (notably
+    entPhysicalHardwareRev), which is why blank is treated as absent.
+
+    Returns None rather than raising: not every managed switch implements
+    ENTITY-MIB, and a switch that doesn't must still yield its MIB-II data.
+    """
+    try:
+        rows = _snmp_walk_map(ip, oid)
+    except Exception:
+        return None
+    for idx in sorted(rows, key=lambda k: int(k) if k.isdigit() else 1 << 30):
+        val = rows[idx]
+        if isinstance(val, bytes):
+            val = val.decode('latin-1')
+        val = str(val).strip()
+        if val:
+            return val
+    return None
+
+
+def _versions_in(text: str) -> list[str]:
+    """Dotted version numbers in a sysDescr, in order.
+
+    Netgear's M4250 sysDescr ends '..., 13.0.5.26, 1.0.0.11' — firmware then
+    boot loader. That tail is the only place the boot version appears at all;
+    entPhysicalFirmwareRev is empty on this hardware.
+    """
+    return re.findall(r'\d+(?:\.\d+){2,}', text or '')
+
+
 def _enrich_snmp_switch(ip: str, vendor: str) -> dict:
-    """Model + port counts from standard MIB-II. Works on any managed switch
-    with SNMP v2c and community `public` — verified against Luminex GigaCore
-    and Netgear M4250."""
+    """Model, firmware and port counts from standard MIB-II + ENTITY-MIB.
+    Works on any managed switch with SNMP v2c and community `public` —
+    [VERIFIED 2026-07-21] against the M4250 at 172.16.3.97.
+
+    CHANGE: firmware used to be hardcoded None. It is available two ways —
+    entPhysicalSoftwareRev ('13.0.5.26'), and as the tail of sysDescr — and
+    neither was being read. Serial number comes free from the same walk.
+    """
     if puresnmp is None:
         log.warning('puresnmp not installed; skipping %s SNMP enrichment', vendor)
         return {}
     try:
-        model = _snmp_get(ip, '1.3.6.1.2.1.1.1.0')            # sysDescr
+        sys_descr = _snmp_get(ip, '1.3.6.1.2.1.1.1.0')        # sysDescr
         if_types = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.3')  # ifType
         oper = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.8')      # ifOperStatus
-        # Physical ports are ifType == 6 (ethernetCsmacd); the rest are VLANs.
-        phys = [idx for idx, t in if_types.items() if t == 6]
-        return {
-            'model': model,
-            'firmware': None,
-            'portCount': len(phys),
-            'activePorts': sum(1 for idx in phys if oper.get(idx) == 1),  # 1 == up
-        }
     except Exception:
         # Silent {} is correct here: on this rig SNMP v2c is only configured on
         # one M4250 so far, so the other switches legitimately never answer.
-        pass
-    return {}
+        return {}
+
+    # Physical ports are ifType == 6 (ethernetCsmacd); the rest are VLANs.
+    phys = [idx for idx, t in if_types.items() if t == 6]
+
+    # ENTITY-MIB is probed only after MIB-II succeeded, and each field is
+    # independently optional, so a switch without it keeps model and ports.
+    versions = _versions_in(sys_descr)
+    data = {
+        'model': _entity_field(ip, '1.3.6.1.2.1.47.1.1.1.1.13') or sys_descr,
+        'firmware': (_entity_field(ip, '1.3.6.1.2.1.47.1.1.1.1.10')
+                     or (versions[0] if versions else None)),
+        'portCount': len(phys),
+        'activePorts': sum(1 for idx in phys if oper.get(idx) == 1),  # 1 == up
+    }
+    serial = _entity_field(ip, '1.3.6.1.2.1.47.1.1.1.1.11')
+    if serial:
+        data['serial'] = serial
+    # Netgear reports no entPhysicalHardwareRev, so the boot-loader version
+    # from the sysDescr tail is the closest thing to a hardware revision.
+    if len(versions) > 1:
+        data['bootVersion'] = versions[1]
+    return data
 
 
 def _enrich_luminex(ip: str) -> dict:

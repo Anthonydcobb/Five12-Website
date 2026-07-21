@@ -270,6 +270,10 @@ function DeviceDetail({ device, locations, onUpdate }) {
         <MetaCell label="FIRMWARE" value={vd.firmware} />
         <MetaCell label="HW VERSION" value={vd.hwVersion || vd.uptime} />
         <MetaCell label="PORTS" value={vd.portCount ? `${vd.portCount}${vd.activePorts != null ? ` · ${vd.activePorts} active` : ''}` : null} />
+        {/* Netgear reports no entPhysicalHardwareRev (HW VERSION stays blank),
+            so boot loader is shown separately rather than faked into it. */}
+        <MetaCell label="BOOT" value={vd.bootVersion} />
+        <MetaCell label="SERIAL" value={vd.serial} />
         <MetaCell label="LAST SEEN" value={device.lastSeen ? timeAgo(device.lastSeen) : 'never'} />
       </div>
 
