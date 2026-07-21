@@ -197,11 +197,24 @@ its label `Bollero Antenna #1` intact on the next sweep.
 
 1. **Python is `backend/.venv/Scripts/python.exe`.** It has scapy, puresnmp and
    pytest. A bare `python` off PATH does not, and produces a misleading
-   "puresnmp not installed" warning. [SEEN AGAIN 2026-07-21] Port 5000 was
-   being served by the bare-PATH interpreter while the venv one sat alive but
-   unable to bind — both started in the same second. `Get-NetTCPConnection
-   -LocalPort 5000 -State Listen` names the process that actually owns the
-   port; `Get-Process python` alone does not.
+   "puresnmp not installed" warning.
+
+   **Do NOT diagnose this from the process list.** [CORRECTED 2026-07-21 — one
+   session already lost time to this] `backend/.venv` was built with a
+   redirector, not a copied binary: `pyvenv.cfg` has
+   `executable = ...\Programs\Python\Python312\python.exe`, so launching the
+   venv python execs the BASE binary while keeping the venv's `sys.prefix` and
+   site-packages. Windows therefore reports the base path in
+   `Win32_Process.CommandLine` and `Get-NetTCPConnection` for a process that is
+   correctly inside the venv. A command line reading
+   `AppData\...\Python312\python.exe -m flask run` is **not** evidence of the
+   wrong interpreter and proves nothing either way.
+
+   The real test is behaviour, not paths: if `172.16.3.97`/`.98` come back with
+   a `serial` in `vendorData`, puresnmp imported and the venv is live. A
+   "puresnmp not installed" line in the log is the only reliable negative.
+
+   What IS worth checking is **how many** flask processes exist — see 6.
 2. **Dev is MySQL (`five12_website`), the desktop Electron app is SQLite**
    (`~/Five12Data/five12.db`). Different databases, different data — always
    confirm which one you are looking at.
@@ -221,8 +234,14 @@ its label `Bollero Antenna #1` intact on the next sweep.
    `ignore_cidrs` column existed on the model for ~30 minutes with no
    migration, the app spawned a backend that loaded it, and every subnet query
    500'd. **Write the migration in the same change as the model edit.**
-6. After ANY backend code change: kill survivors. A stale process reverts data
-   silently rather than failing loudly — see the corrections below.
+6. **After ANY backend code change, kill survivors** — `Get-Process python |
+   Stop-Process -Force`. A stale process reverts data silently rather than
+   failing loudly (see the corrections below). [SEEN 2026-07-21] Four flask
+   processes accumulated across one session; each `flask db ...` invocation
+   also builds the app, which starts the scanner and the sACN listener, so
+   those commands leave a live process behind rather than exiting cleanly.
+   Nothing respawns them — killed, they stay dead — so a plain kill-all before
+   starting is safe and is the fastest way back to a known state.
 
 ```powershell
 cd backend
@@ -254,6 +273,14 @@ Tests: `& .venv\Scripts\python.exe -m pytest tests/ -q`
   sighting) left the label alone but stomped the type. Two hours went into
   chasing the code before the environment was suspected. `Get-Process python`
   after any backend change; a survivor fails silently rather than loudly.
+- **"The wrong interpreter owns port 5000" was a FALSE alarm.** [2026-07-21]
+  The venv is a redirector, so every venv-launched process reports the base
+  Python path on Windows. Time went into "fixing" a correctly-configured
+  process. Verify an environment claim by testing behaviour (does SNMP
+  enrichment return a serial?) before acting on a path string. Same failure
+  shape as the stale-backend hunt below: the environment was blamed from
+  circumstantial evidence instead of a direct test.
+
 - A hand-rolled SNMP packet with a miscalculated varbind length produced false
   "no SNMP reply" results across every switch. Length is `oidCount + 4`, not
   `oidCount + 6`. (The app uses `puresnmp` and never had this bug.)
