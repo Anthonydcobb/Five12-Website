@@ -106,6 +106,11 @@ class NetworkSubnet(db.Model):
     interface_hint = db.Column(db.String(50), nullable=True)
     color          = db.Column(db.String(20), nullable=False, default='#7dd3fc')
     active         = db.Column(db.Boolean, nullable=False, default=True)
+    # Comma-separated CIDRs inside `cidr` whose addresses are never persisted
+    # as devices. The venue Wi-Fi /23 sits inside the Management /16 and its
+    # clients are consumer singletons no OUI table can catch — the subnet
+    # boundary is the only thing that separates them from lighting gear.
+    ignore_cidrs   = db.Column(db.String(255), nullable=True)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -116,6 +121,7 @@ class NetworkSubnet(db.Model):
             'interfaceHint': self.interface_hint,
             'color': self.color,
             'active': self.active,
+            'ignoreCidrs': self.ignore_cidrs,
         }
 
 
@@ -129,6 +135,11 @@ class NetworkDevice(db.Model):
     last_ip     = db.Column(db.String(15), nullable=True)
     last_seen   = db.Column(db.DateTime, nullable=True)
     vendor_data = db.Column(db.JSON, nullable=True)
+    # Soft hide for the per-subnet "remove offline devices" button. Never a
+    # delete: the row is keyed on MAC, so hiding it and un-hiding it on the
+    # next sighting is what lets a device come back with its label and notes.
+    hidden      = db.Column(db.Boolean, nullable=False, default=False,
+                            server_default='0')
     created_at  = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -141,6 +152,7 @@ class NetworkDevice(db.Model):
             'lastIp': self.last_ip,
             'lastSeen': self.last_seen.isoformat() if self.last_seen else None,
             'vendorData': self.vendor_data,
+            'hidden': bool(self.hidden),
             'createdAt': self.created_at.isoformat() if self.created_at else None,
         }
 

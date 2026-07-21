@@ -97,6 +97,40 @@ version from the sysDescr tail, serial from `entPhysicalSerialNum`. Netgear
 reports **no** `entPhysicalHardwareRev` — it returns an empty string — so
 HW VERSION is left blank rather than faked from the boot version.
 
+**Venue Wi-Fi is now filtered by subnet, not by OUI** (fixed 2026-07-21).
+`NetworkSubnet.ignore_cidrs` holds comma-separated ranges inside a subnet whose
+addresses are never persisted as devices — the same treatment randomized MACs
+get, applied before the row is written rather than cleaned up after. Seeded to
+`172.16.10.0/23` on Management by migration `b3f21c9d47ae`, which also purges
+the rows already there. [VERIFIED 2026-07-21] Management went from 148 unknown
+devices to 17 total, and repeated sweeps do not bring them back.
+
+One row inside the ignored range survived the purge and should: the FortiGate at
+`172.16.10.1`, which had been auto-labelled `Fortinet`. The purge deliberately
+spares any row with a label or notes. Note the consequence — that row is now
+inside an ignored range, so **it will never be refreshed again** and will sit
+permanently offline. Either accept it as a static record, or narrow the ignore
+list to exclude `.1`.
+
+**"Remove offline devices", per subnet** (added 2026-07-21).
+`POST /api/network/subnets/<id>/clear-offline` sets `hidden=True` on every
+offline device in that subnet and returns the count. It is a **soft hide keyed
+on MAC, never a delete** — label, notes and vendor data stay on the row, and
+`_process_discovered_device` clears `hidden` on any sighting, so a device that
+plugs back in returns with everything the operator typed on it. `GET
+/api/network/devices` omits hidden rows unless `?includeHidden=1`.
+
+Offline is `scanner.OFFLINE_THRESHOLD` = 90s, which **must** stay equal to
+`OFFLINE_THRESHOLD_MS` in `app/src/pages/NetworkMonitor.jsx`. The button clears
+exactly what the UI paints red; if the two drift, it silently acts on a
+different set than the operator can see. Both constants carry a comment
+pointing at the other.
+
+[VERIFIED 2026-07-21] Against MySQL on the live rig: the endpoint hid the one
+offline Bolero row and returned `{"hidden":1}`, the two online antennas were
+untouched, and a device forced to `hidden=1` came back with `hidden=False` and
+its label `Bollero Antenna #1` intact on the next sweep.
+
 ## Open
 
 1. **Two Hog consoles still not visible on `172.31.x`.** The Loopback adapter
@@ -113,9 +147,10 @@ HW VERSION is left blank rather than faked from the boot version.
    [MEASURED 2026-07-21] Only partly mitigated — 148 unknown devices sat on
    Management and **145 of them were in `172.16.10.x`/`172.16.11.x`**, i.e.
    inside the Wi-Fi /23. Their OUIs are scattered consumer singletons, so OUI
-   matching cannot catch them; the subnet boundary can. Planned fix: a
-   per-subnet `ignore_cidrs` column, set to `172.16.10.0/23` on Management, so
-   those addresses are never persisted as devices at all.
+   matching cannot catch them; the subnet boundary can.
+   **Mitigated in-app 2026-07-21** by `ignore_cidrs` — see "Fixed" above. The
+   underlying overlap is still there, so renumbering Management to a /24
+   remains the real fix; the app just no longer cares.
 3. **Rogue second default route** `0.0.0.0/0 -> 10.0.0.1` on the disabled
    "Local Area Connection". NordVPN also holds `10.100.0.2/22` inside the sACN `/8`.
 4. **Tailscale ifMetric 5** is below the lighting NICs at 25, so it wins multicast
@@ -136,6 +171,66 @@ HW VERSION is left blank rather than faked from the boot version.
 7. **`10.31.2.201` unreachable** — real fault, unresolved. NOTE: the original
    notes give this address as both `10.31.2.201` and `10.31.1.201`; the correct
    octet has not been confirmed.
+8. **scapy contributes nothing on this host.** `_scapy_scan` returns 0 answers
+   without raising (no Npcap/admin) on every subnet — all real discovery comes
+   from `arp -a` plus the ping warm-up. The active sweep should become opt-in
+   rather than being paid for on every pass.
+9. **Replace sweeping with SNMP, don't just speed it up.** Ask the switches:
+   `ipNetToMediaTable` (`1.3.6.1.2.1.4.22.1.2`) is a device's own ARP table, so
+   one walk returns the whole VLAN's IP↔MAC map — including quiet devices that
+   never answer a ping. `dot1qTpFdbPort` gives MAC→port for everything the
+   switch has seen. This scales to a /8 trivially because you query ~7
+   switches, not 16.7M addresses. Blocked on item 6 (five switches still need
+   SNMP configured).
+10. **Enrichment failure is invisible.** `_process_discovered_device` only
+   writes `vendor_data` when truthy, so a switch that stops answering SNMP
+   silently keeps its last-known blob rather than clearing or flagging it.
+11. **Unverified oddity:** two devices with the Luminex OUI `D0:69:9E` on
+   `172.16.1.x` were typed `unknown` while six others typed `luminex`
+   correctly. Not investigated. May just be stale rows from a pre-fix process.
+12. **`ignore_cidrs` has no UI.** It can be set when creating a subnet
+   (`POST /api/network/subnets` accepts `ignoreCidrs`) but not edited
+   afterwards — changing it on an existing subnet needs SQL or a new PATCH
+   route. Fine while the only value is the seeded Wi-Fi /23.
+
+## Environment — read before touching the backend
+
+1. **Python is `backend/.venv/Scripts/python.exe`.** It has scapy, puresnmp and
+   pytest. A bare `python` off PATH does not, and produces a misleading
+   "puresnmp not installed" warning. [SEEN AGAIN 2026-07-21] Port 5000 was
+   being served by the bare-PATH interpreter while the venv one sat alive but
+   unable to bind — both started in the same second. `Get-NetTCPConnection
+   -LocalPort 5000 -State Listen` names the process that actually owns the
+   port; `Get-Process python` alone does not.
+2. **Dev is MySQL (`five12_website`), the desktop Electron app is SQLite**
+   (`~/Five12Data/five12.db`). Different databases, different data — always
+   confirm which one you are looking at.
+3. **The migration directory is `backend/migrations/`, not the `migrations/`
+   at the repo root.** The root one is a dead earlier history and is NOT what
+   Alembic reads (CLAUDE.md still points at it and is wrong). Head as of
+   2026-07-21 is `b3f21c9d47ae`.
+4. **The desktop SQLite database is built by `create_all()`**, which creates
+   tables but never adds columns to existing ones. It had no `alembic_version`
+   at all until 2026-07-21, when it was stamped `2114aba7e69a` and brought onto
+   the migration chain. Any future column must be applied to BOTH databases —
+   `flask db upgrade` for MySQL, and again with `FLASK_CONFIG=desktop` for
+   SQLite.
+5. **The app launches its own backend.** A model change without a matching
+   migration breaks the app the moment it restarts, even if your own backend is
+   fine. That is how the subnets vanished at the end of 2026-07-21: an
+   `ignore_cidrs` column existed on the model for ~30 minutes with no
+   migration, the app spawned a backend that loaded it, and every subnet query
+   500'd. **Write the migration in the same change as the model edit.**
+6. After ANY backend code change: kill survivors. A stale process reverts data
+   silently rather than failing loudly — see the corrections below.
+
+```powershell
+cd backend
+$env:FLASK_APP='app.py'
+& .venv\Scripts\python.exe -m flask run --host=127.0.0.1 --port=5000 --no-reload
+```
+
+Tests: `& .venv\Scripts\python.exe -m pytest tests/ -q`
 
 ## Corrections made during diagnosis — do not repeat these errors
 

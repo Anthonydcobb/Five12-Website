@@ -17,7 +17,10 @@ __pycache__/
 
 # 🛑 Flask & Database
 instance/
-migrations/
+# Anchored so this ignores ONLY the dead root-level migrations/ copy. The live
+# Alembic history is backend/migrations/ — a bare `migrations/` matched that too
+# and silently kept every real migration out of git.
+/migrations/
 *.sqlite3
 *.db
 

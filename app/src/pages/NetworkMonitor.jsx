@@ -12,9 +12,14 @@ function timeAgo(iso) {
   return `${Math.floor(secs / 3600)}h ago`;
 }
 
+// MUST match OFFLINE_THRESHOLD in backend/app/scanner.py. "Remove offline
+// devices" clears exactly what is painted red here, so if the two disagree the
+// button silently acts on a different set than the operator can see.
+const OFFLINE_THRESHOLD_MS = 90_000;
+
 function isOnline(device) {
   if (!device.lastSeen) return false;
-  return (Date.now() - new Date(device.lastSeen)) < 90_000; // 90s threshold
+  return (Date.now() - new Date(device.lastSeen)) < OFFLINE_THRESHOLD_MS;
 }
 
 function formatDate(iso) {
@@ -370,6 +375,31 @@ function SaveLocationModal({ onSave, onCancel }) {
   );
 }
 
+// ── Clear-offline confirmation ────────────────────────────────────────────────
+
+function ClearOfflineModal({ subnetLabel, count, onConfirm, onCancel }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 8, padding: 24, width: 380 }}>
+        <div style={{ color: 'var(--color-text)', fontSize: 14, fontWeight: 'bold', marginBottom: 10 }}>Remove Offline Devices</div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 12, lineHeight: 1.5, marginBottom: 16 }}>
+          Hide <span style={{ color: 'var(--color-text)' }}>{count}</span> offline device{count === 1 ? '' : 's'} from <span style={{ color: 'var(--color-text)' }}>{subnetLabel}</span>.
+          <br />
+          Nothing is deleted — labels and notes are kept, and a device reappears with them if it comes back on the network.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onCancel} style={{ padding: '6px 14px', background: 'var(--color-border)', border: 'none', borderRadius: 4, color: 'var(--color-text-muted)', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={count === 0}
+            style={{ padding: '6px 14px', background: 'var(--color-brand-hi)', border: 'none', borderRadius: 4, color: 'var(--color-bg)', fontSize: 12, fontWeight: 'bold', cursor: count === 0 ? 'default' : 'pointer', opacity: count === 0 ? 0.4 : 1 }}
+          >Remove</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Subnet settings ───────────────────────────────────────────────────────────
 
 function SubnetSettings({ subnets, onAdd, onDelete, onClose }) {
@@ -424,6 +454,7 @@ export default function NetworkMonitor() {
   const [lastScan, setLastScan] = useState(null);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showSubnetSettings, setShowSubnetSettings] = useState(false);
+  const [showClearOffline, setShowClearOffline] = useState(false);
 
   const fetchDevices = useCallback(async () => {
     try {
@@ -526,6 +557,27 @@ export default function NetworkMonitor() {
     }
   };
 
+  // Scoped to the selected subnet: the backend endpoint is per-subnet, and
+  // "clear everything everywhere" is not an action worth one click.
+  const activeSubnet = subnets.find(s => s.id === selectedSubnet) || null;
+  const offlineCount = activeSubnet
+    ? devices.filter(d => d.subnetId === activeSubnet.id && !isOnline(d)).length
+    : 0;
+
+  const clearOffline = async () => {
+    setShowClearOffline(false);
+    if (!activeSubnet) return;
+    try {
+      await axios.post(`/api/network/subnets/${activeSubnet.id}/clear-offline`);
+      // Refetch rather than filtering locally — the backend decides what counts
+      // as offline, and a device seen between render and click must survive.
+      await fetchDevices();
+      setSelectedDevice(null);
+    } catch (e) {
+      console.error('clear offline', e);
+    }
+  };
+
   const locDevices = selectedLocation && locationDetail[selectedLocation]
     ? (locationDetail[selectedLocation].devices || []).map(ld => ({
         macAddress: ld.macAddress,
@@ -564,6 +616,16 @@ export default function NetworkMonitor() {
           >
             ⚙ Subnets
           </button>
+          {activeSubnet && !selectedLocation && (
+            <button
+              onClick={() => setShowClearOffline(true)}
+              disabled={offlineCount === 0}
+              title={`Hide the ${offlineCount} offline device(s) on ${activeSubnet.label}. Labels and notes are kept.`}
+              style={{ padding: '4px 10px', background: 'var(--color-surface)', border: '1px solid var(--color-border)', borderRadius: 4, color: 'var(--color-brand-hi)', fontSize: 11, cursor: offlineCount === 0 ? 'default' : 'pointer', opacity: offlineCount === 0 ? 0.4 : 1 }}
+            >
+              ✕ Remove Offline ({offlineCount})
+            </button>
+          )}
           <button
             onClick={triggerScan}
             disabled={scanning}
@@ -620,6 +682,14 @@ export default function NetworkMonitor() {
       </div>
 
       {showSaveModal && <SaveLocationModal onSave={saveLocation} onCancel={() => setShowSaveModal(false)} />}
+      {showClearOffline && activeSubnet && (
+        <ClearOfflineModal
+          subnetLabel={activeSubnet.label}
+          count={offlineCount}
+          onConfirm={clearOffline}
+          onCancel={() => setShowClearOffline(false)}
+        />
+      )}
       {showSubnetSettings && (
         <SubnetSettings
           subnets={subnets}

@@ -20,6 +20,7 @@ def create_subnet():
         cidr=data['cidr'],
         interface_hint=data.get('interfaceHint'),
         color=data.get('color', '#7dd3fc'),
+        ignore_cidrs=data.get('ignoreCidrs') or None,
     )
     db.session.add(subnet)
     db.session.commit()
@@ -39,8 +40,37 @@ def delete_subnet(subnet_id):
 
 @net.get('/devices')
 def list_devices():
-    devices = NetworkDevice.query.order_by(NetworkDevice.last_seen.desc()).all()
+    """Hidden devices are omitted by default — that is what makes the
+    "remove offline devices" button look like a removal. `?includeHidden=1`
+    is the escape hatch for confirming a row still exists with its notes."""
+    q = NetworkDevice.query
+    if request.args.get('includeHidden') not in ('1', 'true'):
+        q = q.filter(NetworkDevice.hidden.is_(False))
+    devices = q.order_by(NetworkDevice.last_seen.desc()).all()
     return jsonify([d.to_dict() for d in devices])
+
+
+@net.post('/subnets/<int:subnet_id>/clear-offline')
+def clear_offline_devices(subnet_id):
+    """Hide every offline device on one subnet. A HIDE, never a delete:
+    label, notes and vendor data stay on the row, and the next sighting
+    un-hides it (see scanner._process_discovered_device). Offline is
+    scanner.OFFLINE_THRESHOLD, which matches the 90s the UI paints red."""
+    from .scanner import OFFLINE_THRESHOLD
+
+    subnet = db.session.get(NetworkSubnet, subnet_id)
+    if subnet is None:
+        return jsonify({'error': 'not found'}), 404
+
+    cutoff = datetime.utcnow() - OFFLINE_THRESHOLD
+    count = NetworkDevice.query.filter(
+        NetworkDevice.subnet_id == subnet_id,
+        NetworkDevice.hidden.is_(False),
+        db.or_(NetworkDevice.last_seen.is_(None),
+               NetworkDevice.last_seen < cutoff),
+    ).update({'hidden': True}, synchronize_session=False)
+    db.session.commit()
+    return jsonify({'hidden': count})
 
 
 @net.patch('/devices/<mac>')

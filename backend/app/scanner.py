@@ -24,6 +24,43 @@ MAX_SWEEP_ADDRESSES = 1024
 # (no label AND no notes) are pruned, and only after this long offline.
 UNLABELED_PRUNE_AGE = timedelta(hours=24)
 
+# How long without a sighting before a device counts as offline. MUST match
+# `isOnline` in app/src/pages/NetworkMonitor.jsx, which paints a device red at
+# 90s — the "remove offline devices" button clears exactly what the operator
+# sees as red, so a disagreement here silently clears the wrong set.
+OFFLINE_THRESHOLD = timedelta(seconds=90)
+
+
+def _ignored_networks(ignore_cidrs: str | None) -> list:
+    """Parse a subnet's comma-separated `ignore_cidrs` into networks.
+
+    An unparseable entry is skipped rather than raised: this is operator-typed
+    text, and one typo must not take the whole subnet's scan down with it.
+    """
+    if not ignore_cidrs:
+        return []
+    nets = []
+    for part in ignore_cidrs.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            log.warning('ignoring unparseable ignore_cidr %r', part)
+    return nets
+
+
+def _is_ignored_ip(ip: str, nets) -> bool:
+    """True if `ip` falls in any ignored range — never persisted as a device."""
+    if not nets:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in net for net in nets)
+
 
 def _is_host_mac(mac: str) -> bool:
     """False for addresses that are not a real host: broadcast, all-zero
@@ -180,6 +217,10 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         device.last_seen = datetime.utcnow()
         device.device_type = device_type
         device.subnet_id = subnet_id
+        # Any sighting un-hides. "Remove offline devices" is a soft hide, so a
+        # device that plugs back in reappears here — with the label and notes
+        # the operator typed on it still attached.
+        device.hidden = False
         if vendor_data:
             device.vendor_data = vendor_data
 
@@ -279,6 +320,7 @@ def run_scan_now(app) -> None:
 
     for row in subnets:
         subnet_id, cidr = row.id, row.cidr
+        ignored = _ignored_networks(row.ignore_cidrs)
         log.info('Scanning %s', cidr)
         try:
             net = ipaddress.ip_network(cidr, strict=False)
@@ -296,9 +338,14 @@ def run_scan_now(app) -> None:
                 known_ips = [r[0] for r in db.session.query(
                     NetworkDevice.last_ip).filter(
                     NetworkDevice.last_ip.isnot(None)).all()]
+            # `ignore_cidrs` drops addresses inside a range the operator has
+            # declared not-ours — the venue Wi-Fi /23 nested in the Management
+            # /16. Same treatment randomized MACs get: filtered before persist,
+            # so those rows never exist rather than being cleaned up later.
             pairs = [(ip, mac) for ip, mac in _arp_scan(cidr, known_ips)
                      if ip not in excluded and _is_host_mac(mac)
-                     and not is_randomized_mac(mac)]
+                     and not is_randomized_mac(mac)
+                     and not _is_ignored_ip(ip, ignored)]
             found_macs = set()
             for ip, mac in pairs:
                 found_macs.add(mac)
