@@ -1,6 +1,7 @@
 import threading
 import time
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import ipaddress
 import re
 import logging
@@ -13,6 +14,16 @@ log = logging.getLogger(__name__)
 # persistence is keyed on MAC, not IP. Only truly anonymous devices
 # (no label AND no notes) are pruned, and only after this long offline.
 UNLABELED_PRUNE_AGE = timedelta(hours=24)
+
+
+def _is_host_mac(mac: str) -> bool:
+    """False for addresses that are not a real host: broadcast, all-zero
+    (incomplete ARP entry), and IPv4/IPv6 multicast. `arp -a` lists all three,
+    and each was previously persisted as its own NetworkDevice row."""
+    m = mac.upper().replace('-', ':')
+    if m in ('FF:FF:FF:FF:FF:FF', '00:00:00:00:00:00'):
+        return False
+    return not m.startswith(('01:00:5E', '33:33'))
 
 
 def _arp_fallback(cidr: str) -> list[tuple[str, str]]:
@@ -32,15 +43,71 @@ def _arp_fallback(cidr: str) -> list[tuple[str, str]]:
     return results
 
 
-def _arp_scan(cidr: str) -> list[tuple[str, str]]:
-    """Try scapy ARP sweep; fall back to OS ARP cache on failure."""
+def _scapy_scan(cidr: str) -> list[tuple[str, str]]:
+    """Active ARP sweep via scapy. Raises if scapy is unusable."""
+    from scapy.all import ARP, Ether, srp
+    ans, _ = srp(Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=cidr),
+                 timeout=2, verbose=False)
+    return [(rcv.psrc, rcv.hwsrc.upper()) for _, rcv in ans]
+
+
+def _warm_arp_cache(cidr: str) -> None:
+    """Ping every host in `cidr` so the OS ARP cache is populated before we
+    read it.
+
+    Without this the cache-based path is purely passive: it only sees devices
+    something else happened to talk to recently. A quiet device — the second
+    Bolero antenna at 192.168.1.12 was the case that exposed this — ages out
+    and becomes invisible. Skipped for prefixes wider than /22: a /8 sweep is
+    16M pings and would never finish (see docs/network-state.md, "wide sweeps
+    time out").
+    """
     try:
-        from scapy.all import ARP, Ether, srp
-        ans, _ = srp(Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=cidr),
-                     timeout=2, verbose=False)
-        return [(rcv.psrc, rcv.hwsrc.upper()) for _, rcv in ans]
-    except Exception:
-        return _arp_fallback(cidr)
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return
+    if net.num_addresses > 1024:
+        return
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        for host in net.hosts():
+            pool.submit(subprocess.run,
+                        ['ping', '-n', '1', '-w', '200', str(host)],
+                        capture_output=True, timeout=5)
+
+
+def _merge_pairs(primary: list[tuple[str, str]],
+                 secondary: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Union of two (ip, mac) lists, `primary` winning on a conflicting IP."""
+    merged = {ip: mac for ip, mac in secondary}
+    merged.update({ip: mac for ip, mac in primary})
+    return sorted(merged.items())
+
+
+def _arp_scan(cidr: str) -> list[tuple[str, str]]:
+    """Discover (ip, mac) pairs using BOTH the active scapy sweep and the OS
+    ARP cache.
+
+    CHANGE: the old version returned the scapy result and only consulted the
+    cache inside `except`. On Windows without Npcap/admin, scapy imports and
+    runs fine but sends nothing, so `srp` returns ZERO answers and raises
+    NOTHING — the fallback never fired and this returned []. Discovery was
+    silently dead: device_type never refreshed (Netgear switches stayed
+    'unknown' after the OUI table gained them) and quiet devices were never
+    found at all. Empty is not proof of an empty network, so the two sources
+    are now merged rather than one being preferred.
+    """
+    try:
+        scapy_pairs = _scapy_scan(cidr)
+    except Exception as e:
+        log.debug('scapy ARP sweep unavailable on %s: %s', cidr, e)
+        scapy_pairs = []
+
+    if not scapy_pairs:
+        # scapy contributed nothing, so the cache is the only source — make it
+        # worth reading before we read it.
+        _warm_arp_cache(cidr)
+
+    return _merge_pairs(scapy_pairs, _arp_fallback(cidr))
 
 
 def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
@@ -65,7 +132,13 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         if vendor_data:
             device.vendor_data = vendor_data
 
-        if is_new and not device.label and device_type != 'unknown':
+        # CHANGE: dropped the `is_new` guard. Auto-labelling only ever fired on
+        # a row's first sighting, so a device already in the table when the OUI
+        # map gained its vendor kept label=None forever — the seven Netgear
+        # switches were sitting unlabelled for exactly this reason. Labelling
+        # any UNLABELLED row instead backfills them on the next sweep. An
+        # operator-typed label is still never overwritten.
+        if not device.label and device_type != 'unknown':
             model = vendor_data.get('model') if vendor_data else None
             device.label = f"{device_type.capitalize()} {model}".strip() if model else device_type.capitalize()
 
@@ -145,6 +218,7 @@ def _scan_artnet(app, subnets) -> None:
 
 def run_scan_now(app) -> None:
     from .models import NetworkSubnet, NetworkDevice
+    from .vendors import is_randomized_mac
     from . import db
 
     with app.app_context():
@@ -158,7 +232,15 @@ def run_scan_now(app) -> None:
         try:
             net = ipaddress.ip_network(cidr, strict=False)
             excluded = {str(net.network_address), str(net.broadcast_address)}
-            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr) if ip not in excluded]
+            # CHANGE: drop locally-administered (randomized) MACs. The venue
+            # Wi-Fi client subnet sits inside the Management /16, so ~50 phones
+            # were being persisted as NetworkDevice rows — each keyed on a MAC
+            # that changes on the next association, so they accumulated as
+            # permanent unlabeled junk that the prune could only clear 24h late.
+            # Lighting infrastructure never randomizes its MAC.
+            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr)
+                     if ip not in excluded and _is_host_mac(mac)
+                     and not is_randomized_mac(mac)]
             found_macs = set()
             for ip, mac in pairs:
                 found_macs.add(mac)

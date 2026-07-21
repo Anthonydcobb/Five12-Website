@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
+import SacnUniverses from '../components/SacnUniverses';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -600,8 +601,14 @@ export default function NetworkMonitor() {
           {selectedDevice
             ? <DeviceDetail device={selectedDevice} locations={locationsWithDevices} onUpdate={updateDevice} />
             : (
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--color-border)', fontSize: 12 }}>
-                Select a device to view details
+              // With no device selected this pane used to be an empty prompt.
+              // The live sACN table is always relevant and needs no selection,
+              // so it fills the space instead.
+              <div style={{ padding: '10px 12px' }}>
+                <SacnUniverses />
+                <div style={{ marginTop: 14, color: 'var(--color-border)', fontSize: 12 }}>
+                  Select a device to view details
+                </div>
               </div>
             )
           }

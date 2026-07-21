@@ -30,6 +30,7 @@ import struct
 import time
 
 from . import DeviceAdapter, check_thresholds, require_private_host
+from ..local_ifaces import local_ipv4s
 
 log = logging.getLogger(__name__)
 
@@ -123,28 +124,10 @@ def universes_outputting(node):
 
 
 def _local_ipv4s():
-    """Every local IPv4 to poll from.
-
-    [VERIFIED 2026-07-20] The scanner host has several overlapping 10.0.0.0/8
-    interfaces and the devices are reachable ONLY from one of them, so a
-    single socket on the default route finds zero nodes. Polling from every
-    interface is what makes discovery work.
-
-    FIVE12_ARTNET_SRC pins discovery to one source IP when fanning out is
-    undesirable (firewall prompts, noisy broadcast on unrelated VLANs).
-    """
-    pin = os.getenv('FIVE12_ARTNET_SRC', '').strip()
-    if pin:
-        return [pin]
-    ips = set()
-    try:
-        for *_, sa in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            ips.add(sa[0])
-    except socket.gaierror:
-        pass
-    # '' (INADDR_ANY) is the last resort — it is the behaviour that failed on
-    # the multi-homed host, but it is better than not polling at all.
-    return sorted(ips) or ['']
+    """Every local IPv4 to poll from. Thin wrapper kept so this call site and
+    the FIVE12_ARTNET_SRC pin read exactly as before; the implementation moved
+    to app/local_ifaces.py to be shared with the sACN listener."""
+    return local_ipv4s('FIVE12_ARTNET_SRC')
 
 
 class StardustAdapter(DeviceAdapter):

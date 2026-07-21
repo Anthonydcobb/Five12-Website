@@ -31,6 +31,7 @@ def delete_subnet(subnet_id):
     subnet = db.session.get(NetworkSubnet, subnet_id)
     if subnet is None:
         return jsonify({'error': 'not found'}), 404
+    NetworkDevice.query.filter_by(subnet_id=subnet_id).update({'subnet_id': None})
     db.session.delete(subnet)
     db.session.commit()
     return '', 204
@@ -74,6 +75,24 @@ def trigger_scan():
     app = current_app._get_current_object()
     threading.Thread(target=run_scan_now, args=(app,), daemon=True).start()
     return jsonify({'status': 'scanning'}), 202
+
+
+@net.get('/sacn')
+def sacn_state():
+    """Live E1.31 universes and their sources. In-memory only — see
+    sacn_listener.py; nothing here touches the database.
+
+    Returns listening=false with a reason rather than an empty list when the
+    socket could not be opened, so the UI can distinguish "the wire is quiet"
+    from "we never got to listen".
+    """
+    from .sacn_listener import get_listener
+    listener = get_listener()
+    if listener is None:
+        return jsonify({'listening': False,
+                        'error': 'sACN listener not started',
+                        'interfaces': [], 'universes': []})
+    return jsonify(listener.api_state())
 
 
 @net.get('/locations')

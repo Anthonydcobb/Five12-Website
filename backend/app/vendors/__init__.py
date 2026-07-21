@@ -13,35 +13,90 @@ log = logging.getLogger(__name__)
 _SNMP_COMMUNITY = 'public'
 _SNMP_TIMEOUT = 2
 
+# OUI -> device type. Entries marked "confirmed on rig" were verified during the
+# July 2026 network survey by resolving known-good device IPs to their MACs
+# (see docs/network-state.md). Everything else is from the public IEEE registry.
 _OUI_MAP = {
+    # Luminex — GigaCore AV switches
     '00:1C:A2': 'luminex',
     '70:A7:41': 'luminex',
-    'D0:69:9E': 'luminex',
+    'D0:69:9E': 'luminex',          # confirmed on rig
+    # Ubiquiti
     '78:8A:20': 'ubiquiti',
     'DC:9F:DB': 'ubiquiti',
     'FC:EC:DA': 'ubiquiti',
     '24:A4:3C': 'ubiquiti',
     '80:2A:A8': 'ubiquiti',
     'B4:FB:E4': 'ubiquiti',
+    # Swisson — DMX nodes
     '00:27:22': 'swisson',
-    '28:36:38': 'swisson',
+    '28:36:38': 'swisson',          # confirmed on rig
+    # Starlink
     '20:B0:01': 'starlink',
+    # Riedel — Bolero antennas. [VERIFIED 2026-07-21] both rig antennas
+    # (192.168.1.11, .12) share this OUI.
+    '00:19:7C': 'bolero',
+    # Stardust. NOTE: E4:5F:01 is a Raspberry Pi Trading OUI, and Stardusts are
+    # Pi-based — so this maps to 'stardust' rather than 'raspberrypi' on purpose.
+    # A generic Pi on the lighting network would be misreported; none are expected.
+    'E4:5F:01': 'stardust',         # confirmed on rig
+    # High End Systems / ETC — Hog 4 family. Art-Net/sACN source names read
+    # "Processor, Netnumber N, Output M"; N matches the final IP octet.
+    '00:90:A1': 'hog',              # confirmed on rig
+    '00:A0:64': 'hog',
+    # Fortinet — the venue FortiGate, not lighting gear, but worth naming so it
+    # doesn't sit in the list as "unknown".
+    '00:09:0F': 'fortinet',
+    # NETGEAR — M4250 AV line and older switches. 28:94:01 confirmed on rig
+    # (172.16.3.97, M4250-10G2F-PoE+); the rest are registry entries.
+    '28:94:01': 'netgear',          # confirmed on rig
+    '00:09:5B': 'netgear', '00:0F:B5': 'netgear', '00:14:6C': 'netgear',
+    '00:18:4D': 'netgear', '00:1B:2F': 'netgear', '00:1E:2A': 'netgear',
+    '00:1F:33': 'netgear', '00:22:3F': 'netgear', '00:24:B2': 'netgear',
+    '00:26:F2': 'netgear', '20:0C:C8': 'netgear', '28:C6:8E': 'netgear',
+    '2C:30:33': 'netgear', '30:46:9A': 'netgear', '44:94:FC': 'netgear',
+    '6C:B0:CE': 'netgear', '84:1B:5E': 'netgear', '9C:3D:CF': 'netgear',
+    'A0:40:A0': 'netgear', 'A0:63:91': 'netgear', 'C0:3F:0E': 'netgear',
+    'C4:04:15': 'netgear', 'CC:40:D0': 'netgear', 'E0:91:F5': 'netgear',
+    'E4:F4:C6': 'netgear', 'F8:73:94': 'netgear',
 }
 
 
+def is_randomized_mac(mac: str) -> bool:
+    """True if `mac` is locally administered (bit 0x02 of the first octet).
+
+    Phones and laptops randomize their MAC per-SSID; lighting infrastructure
+    never does. On this rig ~50 venue Wi-Fi clients share the Management /16,
+    and without this check every one of them is persisted as a NetworkDevice
+    row keyed on a MAC that changes on the next association.
+    """
+    try:
+        return bool(int(mac.replace('-', ':').split(':')[0], 16) & 0x02)
+    except (ValueError, IndexError):
+        return False
+
+
 def detect_vendor_type(mac: str) -> str:
-    return _OUI_MAP.get(mac.upper()[:8], 'unknown')
+    # CHANGE: normalize '-' to ':' before lookup. _arp_fallback already converts,
+    # but scapy and any future caller may pass dash-form; a dash-form MAC used to
+    # silently return 'unknown' for every device.
+    return _OUI_MAP.get(mac.upper().replace('-', ':')[:8], 'unknown')
 
 
 def enrich_device(ip: str, mac: str, device_type: str) -> dict:
     if device_type == 'luminex':
         return _enrich_luminex(ip)
+    if device_type == 'netgear':
+        return _enrich_netgear(ip)
     if device_type == 'ubiquiti':
         return _enrich_ubiquiti(ip)
     if device_type == 'swisson':
         return _enrich_swisson(ip)
     if device_type == 'starlink':
         return _enrich_starlink(ip)
+    # 'stardust' is enriched by Art-Net discovery in scanner._scan_artnet, which
+    # returns far more (firmware, universes outputting) than SNMP would.
+    # 'hog' and 'fortinet' expose nothing useful read-only; named, not probed.
     return {}
 
 
@@ -63,15 +118,15 @@ def _snmp_walk_map(ip: str, oid: str) -> dict:
     return out
 
 
-def _enrich_luminex(ip: str) -> dict:
-    # GigaCore's web GUI is auth-locked (401) and exposes no public REST API,
-    # but SNMP v2c is enabled by default. Pull model + port stats from standard
-    # MIBs. Firmware is not in any MIB GigaCore implements, so it stays blank.
+def _enrich_snmp_switch(ip: str, vendor: str) -> dict:
+    """Model + port counts from standard MIB-II. Works on any managed switch
+    with SNMP v2c and community `public` — verified against Luminex GigaCore
+    and Netgear M4250."""
     if puresnmp is None:
-        log.warning('puresnmp not installed; skipping Luminex SNMP enrichment')
+        log.warning('puresnmp not installed; skipping %s SNMP enrichment', vendor)
         return {}
     try:
-        model = _snmp_get(ip, '1.3.6.1.2.1.1.1.0')          # sysDescr
+        model = _snmp_get(ip, '1.3.6.1.2.1.1.1.0')            # sysDescr
         if_types = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.3')  # ifType
         oper = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.8')      # ifOperStatus
         # Physical ports are ifType == 6 (ethernetCsmacd); the rest are VLANs.
@@ -83,8 +138,24 @@ def _enrich_luminex(ip: str) -> dict:
             'activePorts': sum(1 for idx in phys if oper.get(idx) == 1),  # 1 == up
         }
     except Exception:
+        # Silent {} is correct here: on this rig SNMP v2c is only configured on
+        # one M4250 so far, so the other switches legitimately never answer.
         pass
     return {}
+
+
+def _enrich_luminex(ip: str) -> dict:
+    # GigaCore's web GUI is auth-locked (401) and exposes no public REST API,
+    # but SNMP v2c is enabled by default. Firmware is not in any MIB GigaCore
+    # implements, so it stays blank.
+    return _enrich_snmp_switch(ip, 'Luminex')
+
+
+def _enrich_netgear(ip: str) -> dict:
+    # M4250 answers MIB-II once v2c is enabled — it is NOT on by default, unlike
+    # Luminex. Configure per switch: community `public`, ReadOnly, restricted to
+    # the Management range. Returns {} until then.
+    return _enrich_snmp_switch(ip, 'Netgear')
 
 
 def _enrich_ubiquiti(ip: str) -> dict:
