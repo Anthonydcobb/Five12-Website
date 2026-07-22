@@ -8,6 +8,19 @@ const FIELDS = [
 ];
 const LABEL = Object.fromEntries(FIELDS);
 
+// Parse a fetch Response defensively: the body may not be JSON at all (a
+// 413 payload-too-large, a proxy error page, or a Flask 500 HTML page), in
+// which case `res.json()` throws and the user sees "Unexpected token '<'…"
+// instead of a real message. Read the body as text once, try to parse it,
+// and only surface a clean Error.
+async function readJson(res) {
+  const text = await res.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
+  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  return data || {};
+}
+
 export default function ImportWizard({ patchId, onClose, onImported }) {
   const [file, setFile] = useState(null);
   const [analysis, setAnalysis] = useState(null);   // analyze response
@@ -22,8 +35,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
       fd.append('file', f);
       const res = await fetch(`/api/patch-sheets/${patchId}/import/analyze`,
                              { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Analyze failed');
+      const data = await readJson(res);
       setAnalysis(data);
       setMapping(data.suggestedMapping || {});
     } catch (e) { setError(e.message); }
@@ -46,8 +58,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
       fd.append('headerRowIndex', String(analysis.headerRowIndex));
       const res = await fetch(`/api/patch-sheets/${patchId}/import/commit`,
                              { method: 'POST', body: fd });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Import failed');
+      const data = await readJson(res);
       onImported(data.inserted);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }

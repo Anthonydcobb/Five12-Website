@@ -17,8 +17,8 @@ def test_analyze_returns_mapping_and_preview(client):
     assert body["previewRows"][0]["Fixture Type"] == "PAR64"
 
 
-def _make_patch(db):
-    show = Show(name="T")
+def _make_patch(db, show_name="T"):
+    show = Show(name=show_name)
     db.session.add(show); db.session.commit()
     sheet = PatchSheet(name="U", show_id=show.id)
     db.session.add(sheet); db.session.commit()
@@ -43,3 +43,22 @@ def test_commit_inserts_rows_with_derivation(client, db):
     assert row.address == 101
     assert row.end_address == 108      # derived
     assert row.channel_count == 8
+
+
+def test_commit_truncates_overlong_string_fields(client, db):
+    pid = _make_patch(db, show_name="T-truncate")
+    long_type = "X" * 200
+    csv = ("Fixture Type,DMX Addr,Ch\n" + long_type + ",101,8\n").encode()
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    data = {
+        "file": (io.BytesIO(csv), "foreign.csv"),
+        "mapping": json.dumps(mapping),
+        "headerRowIndex": "0",
+    }
+    resp = client.post(f"/api/patch-sheets/{pid}/import/commit",
+                       data=data, content_type="multipart/form-data")
+    assert resp.status_code == 200
+    assert resp.get_json()["inserted"] == 1
+    row = PatchRow.query.filter_by(patch_id=pid).one()
+    assert len(row.type) == 120
+    assert row.type == long_type[:120]

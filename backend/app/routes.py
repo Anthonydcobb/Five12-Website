@@ -363,6 +363,27 @@ def analyze_patch_import(patch_id):
         return jsonify({'error': str(e)}), 500
 
 
+# Max lengths for PatchRow's bounded string columns (see backend/app/models.py).
+# `notes` is TEXT (unbounded) and int fields (universe/address/end_address/
+# channel_count) are excluded — only string columns can overflow.
+_PATCHROW_MAXLEN = {
+    'set': 50, 'fixture': 50, 'type': 120, 'location': 120,
+    'wattage': 50, 'weight': 50, 'firmware': 120,
+}
+
+
+def _fit(value, maxlen):
+    """Truncate a string value to fit a column's max length.
+
+    A foreign sheet can have a value longer than our column width; rather
+    than fail the whole import (MySQL strict mode) or silently corrupt data
+    (SQLite), we truncate to make someone else's patch fit into ours.
+    """
+    if isinstance(value, str) and len(value) > maxlen:
+        return value[:maxlen]
+    return value
+
+
 @bp.route('/api/patch-sheets/<int:patch_id>/import/commit', methods=['POST'])
 def commit_patch_import(patch_id):
     try:
@@ -381,17 +402,17 @@ def commit_patch_import(patch_id):
         for row in canonical_rows:
             db.session.add(PatchRow(
                 patch_id=patch_id,
-                set_name=row.get('set'),
-                fixture=row.get('fixture'),
+                set_name=_fit(row.get('set'), _PATCHROW_MAXLEN['set']),
+                fixture=_fit(row.get('fixture'), _PATCHROW_MAXLEN['fixture']),
                 universe=row.get('universe'),
                 address=row.get('address'),
                 end_address=row.get('endAddress'),
-                type=row.get('type'),
+                type=_fit(row.get('type'), _PATCHROW_MAXLEN['type']),
                 channel_count=row.get('channelCount'),
-                location=row.get('location'),
-                wattage=row.get('wattage'),
-                weight=row.get('weight'),
-                firmware=row.get('firmware'),
+                location=_fit(row.get('location'), _PATCHROW_MAXLEN['location']),
+                wattage=_fit(row.get('wattage'), _PATCHROW_MAXLEN['wattage']),
+                weight=_fit(row.get('weight'), _PATCHROW_MAXLEN['weight']),
+                firmware=_fit(row.get('firmware'), _PATCHROW_MAXLEN['firmware']),
                 notes=row.get('notes'),
             ))
         db.session.commit()
