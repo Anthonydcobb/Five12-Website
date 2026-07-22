@@ -1,8 +1,49 @@
-# Handoff — Network Monitor: devices flap offline/online (diagnosed, fix pending)
+# Handoff — Network Monitor: devices flap offline/online (FIXED 2026-07-22)
 
-**Status:** root cause CONFIRMED with live evidence. Fix NOT yet implemented — for a
-fresh session. Branch `edit_export`. This is a **pre-existing** issue; nothing in the
-2026-07-22 sessions touched the scanner.
+**Status:** FIXED. Root cause was confirmed with live evidence (below), then fixed
+with a per-cycle keep-alive re-probe. Branch `edit_export`. This was a **pre-existing**
+issue; nothing in the earlier 2026-07-22 sessions touched the scanner.
+
+## Resolution (2026-07-22)
+
+Two things were found and fixed:
+
+1. **Duplicate backend.** Two `flask run --port=5000` processes were alive at once —
+   one held the port, the other lost the bind race but its scanner thread kept running
+   and stomping the same DB every 30s (the exact "stale backend" trap this repo's notes
+   warn about). Killed both, ran one. This alone was *aggravating* the flap (two
+   scanners + CPU contention stretched the cycle); it was not the whole cause.
+
+2. **The real fix — per-cycle keep-alive (`quick_reprobe` in `scanner.py`).** The scan
+   loop is now split across two daemon threads:
+   - **keep-alive** (`quick_reprobe`, every `KEEPALIVE_INTERVAL = 20s`): pings just the
+     already-known device IPs and re-reads the ARP cache, bumping `last_seen` for every
+     known MAC still answering. No scapy sweep, no `/24` warming, no SNMP enrichment, no
+     prune — so it finishes in a couple of seconds.
+   - **discovery** (`run_scan_now`, every `DISCOVERY_INTERVAL = 300s`): the original slow
+     wide sweep + enrichment + prune + Art-Net, now on its own thread so its ~165s
+     duration never stalls the keep-alive.
+
+   Known gear is now refreshed every ~20s — far under the 90s `OFFLINE_THRESHOLD` — so it
+   stops flapping. New-device discovery and SNMP enrichment still happen, every 5 min.
+   Tests: `backend/tests/test_scanner_keepalive.py` (5 tests). Full suite 119 pass.
+
+**Verified live (single clean backend, MySQL dev):** over-90s count went from 8+/40
+(median 128s) to **1/41 (median 10s)**. The one remaining is `172.31.0.139`
+"Princess Donut", genuinely absent (not answering ARP) — a correct offline reading, not
+a flap. "I don't see anything on HogNet" was this same bug: the real Hog consoles
+(`172.31.0.4/.11/.22`) were sitting at 93s = red/offline because HogNet is scanned first
+and then waited the whole ~165s cycle before its next revisit. They now hold at ~10s.
+
+### If the flap ever returns
+- First check for **duplicate flask processes** (`Get-Process python`) — that trap recurs.
+- `KEEPALIVE_INTERVAL` must stay well under `OFFLINE_THRESHOLD` (90s). If the offline
+  threshold is ever lowered below ~40s, lower the keep-alive interval too.
+- Genuinely-absent gear (unplugged) *should* read offline — that is not the flap.
+
+---
+
+## Original diagnosis (kept for reference)
 
 ## Symptom
 

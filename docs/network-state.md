@@ -134,6 +134,22 @@ a word and does **not** consult `timeslots`:
 
 ## Fixed
 
+**Devices flapped offline/online — revisit interval exceeded the offline threshold**
+(fixed 2026-07-22). "Online" is `last_seen` within `OFFLINE_THRESHOLD` (90s), but the
+wide discovery sweep refreshed a device's `last_seen` only once per full pass — measured
+**~165s** on the rig (HogNet 13s + sACN 40s + Bolero 4s + Management 78s of SNMP retries
++ 30s sleep). So every device sawtoothed across the 90s line and flipped offline/online,
+worst on HogNet (scanned first, then waited the whole cycle). Two duplicate `flask
+run --port=5000` backends were also running, both scanning the same DB, aggravating it.
+Fix: split the scan into two daemon threads — a cheap **keep-alive** (`quick_reprobe`,
+every 20s: ping known device IPs + read the ARP cache, bump `last_seen`, no sweep/SNMP)
+and the slow **discovery** sweep (`run_scan_now`, every 300s). Known gear now refreshes
+every ~20s, well under the threshold. [VERIFIED 2026-07-22] over-90s count 8+/40
+(median 128s) → 1/41 (median 10s); the lone holdout was a genuinely-absent unit. Covered
+by `backend/tests/test_scanner_keepalive.py`. As a bonus this also cut scanner CPU
+sharply — the old loop scanned ~85% of the time; discovery now runs 165s out of every
+300s at most, and only one thread does the heavy work.
+
 **Every device read permanently ONLINE — timezone bug** (fixed 2026-07-22, commit
 `464b9b6`). `to_dict()` emitted a bare `.isoformat()` on naive-UTC datetimes with
 no `Z`/offset; per the ECMAScript spec an offset-less string parses as LOCAL

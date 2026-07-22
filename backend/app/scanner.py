@@ -30,6 +30,18 @@ UNLABELED_PRUNE_AGE = timedelta(hours=24)
 # sees as red, so a disagreement here silently clears the wrong set.
 OFFLINE_THRESHOLD = timedelta(seconds=90)
 
+# The keep-alive re-probe (`quick_reprobe`) runs this often; the slow wide
+# discovery sweep (`run_scan_now`) runs on its own thread this often. A full
+# discovery pass measured ~165s on the rig (a /8 + two /16s + SNMP retries),
+# far longer than OFFLINE_THRESHOLD, so if `last_seen` only refreshed on the
+# discovery pass every device would sawtooth across 90s and flap offline. The
+# keep-alive re-probes only the already-known device IPs — a few dozen exact
+# pings, no sweep and no SNMP — so real gear's `last_seen` never ages past the
+# threshold between discovery passes. Keep KEEPALIVE_INTERVAL well under
+# OFFLINE_THRESHOLD. See docs/handoff-2026-07-22-network-monitor-flap.md.
+KEEPALIVE_INTERVAL = 20    # seconds between keep-alive re-probes of known gear
+DISCOVERY_INTERVAL = 300   # seconds between full discovery sweeps
+
 
 def _ignored_networks(ignore_cidrs: str | None) -> list:
     """Parse a subnet's comma-separated `ignore_cidrs` into networks.
@@ -381,15 +393,99 @@ def run_scan_now(app) -> None:
     _scan_artnet(app, subnets)
 
 
+def _ping_hosts(ips) -> None:
+    """Ping a specific list of hosts so the OS ARP cache holds them.
+
+    Unlike `_warm_arp_cache`, which pings an entire /24, this targets only the
+    exact IPs we already know about — a keep-alive is a few dozen pings, not 256
+    per subnet, so it finishes in a couple of seconds and can run every cycle.
+    """
+    with ThreadPoolExecutor(max_workers=64) as pool:
+        for ip in ips:
+            pool.submit(subprocess.run,
+                        ['ping', '-n', '1', '-w', '200', str(ip)],
+                        capture_output=True, timeout=5)
+
+
+def quick_reprobe(app) -> int:
+    """Refresh `last_seen` for already-known devices, cheaply, every cycle.
+
+    Pings the exact IPs of devices already in the table, re-reads the OS ARP
+    cache, and bumps `last_seen` for every known MAC still answering. It does
+    NOT sweep, warm whole /24s, enrich over SNMP, auto-label, discover new
+    devices or prune — that is the slow discovery pass's job (`run_scan_now`).
+    This exists purely so real gear does not age past OFFLINE_THRESHOLD in the
+    ~165s between discovery passes and flap offline. Returns the count refreshed.
+
+    A MAC seen on the wire that is NOT already in the table is ignored here: it
+    could be a randomized/ignored address the discovery filters would drop, and
+    persisting it without vendor detection would create a blank, unclassified
+    row. New devices appear on the next discovery pass instead.
+    """
+    from .models import NetworkDevice
+    from . import db
+
+    with app.app_context():
+        known_ips = [ip for (ip,) in db.session.query(NetworkDevice.last_ip)
+                     .filter(NetworkDevice.last_ip.isnot(None)).all()]
+    if not known_ips:
+        return 0
+
+    _ping_hosts(known_ips)
+
+    now = datetime.utcnow()
+    refreshed = 0
+    with app.app_context():
+        # 0.0.0.0/0 → the whole ARP table; we match by MAC, not by CIDR.
+        for ip, mac in _arp_fallback('0.0.0.0/0'):
+            device = db.session.get(NetworkDevice, mac)
+            if device is None:
+                continue
+            device.last_ip = ip
+            device.last_seen = now
+            # A sighting un-hides, exactly as a discovery sighting does, so a
+            # device hidden by "remove offline" that is back on the wire returns.
+            device.hidden = False
+            refreshed += 1
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            log.error('quick_reprobe commit failed: %s', e)
+            return 0
+    log.debug('quick_reprobe: refreshed %d device(s)', refreshed)
+    return refreshed
+
+
 def start_scanner(app) -> None:
-    def _loop():
+    """Run discovery and keep-alive on two independent daemon threads.
+
+    They are deliberately decoupled: the discovery sweep is slow (~165s) and its
+    duration must not stall the keep-alive, or known gear would age past the
+    offline threshold while a discovery pass is running and flap — the very bug
+    this split fixes. Both write NetworkDevice rows; each wraps its commits in
+    try/except so a rare concurrent-write conflict (SQLite) is a skipped beat,
+    self-healed on the next pass, not a crash.
+    """
+    def _discovery_loop():
         while True:
             try:
                 run_scan_now(app)
             except Exception as e:
-                log.error('Scanner loop error: %s', e)
-            time.sleep(30)
+                log.error('Discovery loop error: %s', e)
+            time.sleep(DISCOVERY_INTERVAL)
 
-    t = threading.Thread(target=_loop, daemon=True, name='arp-scanner')
-    t.start()
-    log.info('ARP scanner started')
+    def _keepalive_loop():
+        while True:
+            try:
+                quick_reprobe(app)
+            except Exception as e:
+                log.error('Keep-alive loop error: %s', e)
+            time.sleep(KEEPALIVE_INTERVAL)
+
+    threading.Thread(target=_discovery_loop, daemon=True,
+                     name='arp-discovery').start()
+    threading.Thread(target=_keepalive_loop, daemon=True,
+                     name='arp-keepalive').start()
+    log.info('ARP scanner started (discovery every %ds, keep-alive every %ds)',
+             DISCOVERY_INTERVAL, KEEPALIVE_INTERVAL)
