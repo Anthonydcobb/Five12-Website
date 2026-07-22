@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import PatchForm from './PatchForm';
 import RepatchForm from './RepatchForm';
+import ImportWizard from './ImportWizard';
 
 const COLS = [
   { key: 'set',          label: 'Set',          editable: true,  sortable: true  },
@@ -33,6 +34,7 @@ export default function PatchTab({
 }) {
   const [showPatchForm, setShowPatchForm] = useState(false);
   const [showRepatchForm, setShowRepatchForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [selectedCells, setSelectedCells] = useState(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [command, setCommand] = useState('');
@@ -200,18 +202,6 @@ export default function PatchTab({
     window.open(`/api/patch-sheets/${patchId}/export-excel`, '_blank');
   };
 
-  const handleImport = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const fd = new FormData();
-    fd.append('file', file);
-    fetch(`/api/patch-sheets/${patchId}/import-excel`, { method: 'POST', body: fd })
-      .then(r => r.json())
-      .then(d => { alert(`Imported ${d.inserted} fixtures`); window.location.reload(); })
-      .catch(() => alert('Import failed'));
-    e.target.value = '';
-  };
-
   return (
     <div className="flex flex-col gap-4">
 
@@ -287,10 +277,12 @@ export default function PatchTab({
             </select>
           </label>
 
-          <label className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded cursor-pointer">
+          <button
+            onClick={() => setShowImport(true)}
+            className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded"
+          >
             Import
-            <input type="file" accept=".xlsx" onChange={handleImport} className="hidden" />
-          </label>
+          </button>
           <button onClick={handleExport} className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded">
             Export
           </button>
@@ -437,6 +429,13 @@ export default function PatchTab({
           rows={rows}
           onRePatch={onRePatch}
           onClose={() => setShowRepatchForm(false)}
+        />
+      )}
+      {showImport && (
+        <ImportWizard
+          patchId={patchId}
+          onClose={() => setShowImport(false)}
+          onImported={(n) => { setShowImport(false); alert(`Imported ${n} rows`); window.location.reload(); }}
         />
       )}
     </div>

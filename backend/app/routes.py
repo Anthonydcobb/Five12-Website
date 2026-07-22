@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory
 from .models import Show, PatchSheet, Fixture, PatchRow, LabelTemplate
 from . import db
+from .patch_import import (read_table, detect_header_row, guess_mapping,
+                           apply_mapping)
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
@@ -324,6 +326,105 @@ def import_patch_sheet_excel(patch_id):
         current_app.logger.exception("Excel import failed")
         return jsonify({'error': str(e)}), 500
 
+
+@bp.route('/api/patch-sheets/<int:patch_id>/import/analyze', methods=['POST'])
+def analyze_patch_import(patch_id):
+    try:
+        if 'file' not in request.files:
+            return {'error': 'No file uploaded'}, 400
+        f = request.files['file']
+        grid = read_table(f.read(), f.filename)
+        if not grid:
+            return {'error': 'The file appears to be empty.'}, 400
+        hidx = detect_header_row(grid)
+        headers = [('' if c is None else str(c)).strip() for c in grid[hidx]]
+        named = [h for h in headers if h]
+        data_rows = grid[hidx + 1:]
+        mapping = guess_mapping(headers)
+        preview = []
+        for cells in data_rows[:5]:
+            preview.append({
+                headers[i]: (cells[i] if i < len(cells) else None)
+                for i in range(len(headers)) if headers[i]
+            })
+        row_count = sum(
+            1 for cells in data_rows
+            if any(c not in (None, '') for c in cells)
+        )
+        return jsonify({
+            'headerRowIndex': hidx,
+            'theirColumns': named,
+            'suggestedMapping': {h: mapping.get(h) for h in named},
+            'previewRows': preview,
+            'rowCount': row_count,
+        })
+    except Exception as e:
+        current_app.logger.exception("Patch import analyze failed")
+        return jsonify({'error': str(e)}), 500
+
+
+# Max lengths for PatchRow's bounded string columns (see backend/app/models.py).
+# `notes` is TEXT (unbounded) and int fields (universe/address/end_address/
+# channel_count) are excluded — only string columns can overflow.
+_PATCHROW_MAXLEN = {
+    'set': 50, 'fixture': 50, 'type': 120, 'location': 120,
+    'wattage': 50, 'weight': 50, 'firmware': 120,
+}
+
+
+def _fit(value, maxlen):
+    """Truncate a string value to fit a column's max length.
+
+    A foreign sheet can have a value longer than our column width; rather
+    than fail the whole import (MySQL strict mode) or silently corrupt data
+    (SQLite), we truncate to make someone else's patch fit into ours.
+    """
+    if isinstance(value, str) and len(value) > maxlen:
+        return value[:maxlen]
+    return value
+
+
+@bp.route('/api/patch-sheets/<int:patch_id>/import/commit', methods=['POST'])
+def commit_patch_import(patch_id):
+    try:
+        if 'file' not in request.files:
+            return {'error': 'No file uploaded'}, 400
+        f = request.files['file']
+        mapping = json.loads(request.form.get('mapping', '{}'))
+        header_idx = int(request.form.get('headerRowIndex', 0))
+        grid = read_table(f.read(), f.filename)
+        if not grid:
+            return {'error': 'The file appears to be empty.'}, 400
+        headers = [('' if c is None else str(c)).strip()
+                   for c in grid[header_idx]]
+        data_rows = grid[header_idx + 1:]
+        canonical_rows = apply_mapping(headers, data_rows, mapping)
+        for row in canonical_rows:
+            db.session.add(PatchRow(
+                patch_id=patch_id,
+                set_name=_fit(row.get('set'), _PATCHROW_MAXLEN['set']),
+                fixture=_fit(row.get('fixture'), _PATCHROW_MAXLEN['fixture']),
+                universe=row.get('universe'),
+                address=row.get('address'),
+                end_address=row.get('endAddress'),
+                type=_fit(row.get('type'), _PATCHROW_MAXLEN['type']),
+                channel_count=row.get('channelCount'),
+                location=_fit(row.get('location'), _PATCHROW_MAXLEN['location']),
+                wattage=_fit(row.get('wattage'), _PATCHROW_MAXLEN['wattage']),
+                weight=_fit(row.get('weight'), _PATCHROW_MAXLEN['weight']),
+                firmware=_fit(row.get('firmware'), _PATCHROW_MAXLEN['firmware']),
+                notes=row.get('notes'),
+            ))
+        db.session.commit()
+        non_blank = sum(1 for cells in data_rows
+                        if any(c not in (None, '') for c in cells))
+        inserted = len(canonical_rows)
+        return jsonify({'inserted': inserted,
+                        'skipped': max(0, non_blank - inserted)})
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Patch import commit failed")
+        return jsonify({'error': str(e)}), 500
 
 
 @bp.route('/api/fixtures/import-excel', methods=['POST'])
