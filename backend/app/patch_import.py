@@ -107,3 +107,23 @@ def derive_row(row):
         elif c is None and e is not None:
             out["channelCount"] = e - a + 1
     return out
+
+
+def _row_is_blank(canonical):
+    return all(canonical.get(f) in (None, "") for f in CANONICAL_FIELDS)
+
+
+def apply_mapping(headers, data_rows, mapping):
+    results = []
+    for cells in data_rows:
+        raw = {}
+        for idx, header in enumerate(headers):
+            field = mapping.get(header)
+            if not field or field == "ignore":
+                continue
+            raw[field] = cells[idx] if idx < len(cells) else None
+        canonical = derive_row(raw)
+        if _row_is_blank(canonical):
+            continue
+        results.append(canonical)
+    return results
