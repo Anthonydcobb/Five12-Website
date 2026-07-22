@@ -44,11 +44,23 @@ Replace the `status.universes`-driven U1–U8 grid in
 Everything else on the panel (units table, the detailed Outputs table, RDM
 discovery table, footer) is unchanged. The backend stays fully read-only.
 
-## Out of scope (deferred)
+## Follow-up: LINK button — BUILT 2026-07-22 (commit 1786528)
 
-- **LINK / UNLINK button** — a write to the hardware over `/ws`. Requires the exact
-  command frame, not yet captured (clicking LINK on a source-less output is a
-  no-op; capture attempt pending). Separate spec when ready.
+The LINK button was added after this display work. The `/ws` LinkCommand frame was
+captured live from the GUI:
+
+```
+sent:     {"universe_nrs":[5],"_type_":"dmx_sink.timo_sink.LinkCommand"}   # output E = #5
+received: {"universe_nrs":[5],"_type_":"dmx_sink.timo_sink.LinkingStarted"}
+received: {"universe_nrs":[5],"_type_":"dmx_sink.timo_sink.LinkingEnded"}   # ~8s later
+```
+
+Implemented as `StardustAdapter.link_output(out_nr)` + `POST /api/devices/stardust/link`,
+with a confirm dialog and "linking…" state on active output cards. `outputNr` is fixed
+(A=1..H=8, independent of `universe_nrs` order).
+
+**UNLINK is intentionally NOT exposed** — the operator explicitly did not want unlink
+reachable from this app. Do not add it without a new decision.
 
 ## Testing
 
