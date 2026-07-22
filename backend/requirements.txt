@@ -33,4 +33,4 @@ verlib==0.1
 # Optional — Starlink live telemetry (sim mode works without these):
 # starlink-grpc-tools
 # grpcio
-websocket-client
+websocket-client==1.9.0
