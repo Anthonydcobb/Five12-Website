@@ -68,3 +68,42 @@ def detect_header_row(grid, scan_limit=15):
         if score > best_score:
             best_score, best_idx = score, idx
     return best_idx
+
+
+def parse_int(value):
+    if value is None:
+        return None
+    s = str(value).strip()
+    if s == "" or s.lower() == "nan":
+        return None
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def clean_str(value):
+    if value is None:
+        return None
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if value.is_integer():
+            value = int(value)
+    s = str(value).strip()
+    return s or None
+
+
+def derive_row(row):
+    out = {}
+    for k in INT_FIELDS:
+        out[k] = parse_int(row.get(k))
+    for k in STR_FIELDS:
+        out[k] = clean_str(row.get(k))
+    a, e, c = out.get("address"), out.get("endAddress"), out.get("channelCount")
+    if a is not None:
+        if e is None and c is not None:
+            out["endAddress"] = a + c - 1
+        elif c is None and e is not None:
+            out["channelCount"] = e - a + 1
+    return out
