@@ -108,6 +108,10 @@ _STARDUST_NODE = {
     'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
     'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': [],
 }
+_STARDUST_NODE_B = {
+    'ip': '10.0.1.4', 'mac': '11:22:33:44:55:66', 'shortName': 'Stardust',
+    'longName': 'Stardust DTx8 B', 'firmware': '1.0', 'via': '', 'ports': [],
+}
 
 
 class _FakeSock:
@@ -251,7 +255,7 @@ def test_status_goes_unavailable_after_sticky_window_expires():
     a._discover_nodes_cached = lambda: [_STARDUST_NODE]
     a._real_status()                      # seeds the last-seen sighting
 
-    a._last_stardust_at = 0.0             # pretend the sighting is ancient
+    a._last_seen.clear()                  # pretend the sighting has aged out
     a._discover_nodes_cached = lambda: []  # unit now truly gone
     status = a._real_status()
     assert status['available'] is False
@@ -312,9 +316,50 @@ class _FakeWS:
         pass
 
 
+def test_status_filters_by_mac():
+    """With two Stardusts on the wire, a status poll pinned to a MAC returns that
+    unit — not just whichever was discovered first."""
+    a = StardustAdapter(sim=False)
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    a._ws_fetch_settings = lambda ip: ({}, {}, {})
+    a._discover_nodes_cached = lambda: [_STARDUST_NODE, _STARDUST_NODE_B]
+
+    status = a._real_status(mac='11:22:33:44:55:66')
+    assert status['available'] is True
+    assert status['mac'] == '11:22:33:44:55:66'
+    assert status['node'] == 'Stardust DTx8 B'
+
+
+def test_status_unknown_mac_is_unavailable():
+    a = StardustAdapter(sim=False)
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    a._ws_fetch_settings = lambda ip: ({}, {}, {})
+    a._discover_nodes_cached = lambda: [_STARDUST_NODE]
+
+    status = a._real_status(mac='99:99:99:99:99:99')
+    assert status['available'] is False
+    assert '99:99:99:99:99:99' in status['reason']
+
+
+def test_link_output_targets_unit_by_mac():
+    """Linking must reach the SELECTED unit's IP, not hits[0]."""
+    a = StardustAdapter(sim=False)
+    a._discover_nodes_cached = lambda: [_STARDUST_NODE, _STARDUST_NODE_B]
+    captured = {}
+
+    def _open(ip):
+        captured['ip'] = ip
+        return _FakeWS(['{"universe_nrs":[2],"_type_":"dmx_sink.timo_sink.LinkingStarted"}'])
+
+    a._ws_open = _open
+    result = a.link_output(2, mac='11:22:33:44:55:66')
+    assert result['ok'] is True
+    assert captured['ip'] == '10.0.1.4'   # unit B, not the first-discovered unit
+
+
 def test_link_output_sends_link_command_and_confirms():
     a = StardustAdapter(sim=False)
-    a._stardust_ip = lambda: '10.0.1.3'
+    a._stardust_ip = lambda mac=None: '10.0.1.3'
     fake = _FakeWS(['{"universe_nrs":[5],"_type_":"dmx_sink.timo_sink.LinkingStarted"}'])
     a._ws_open = lambda ip: fake
 

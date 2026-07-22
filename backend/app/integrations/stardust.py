@@ -264,10 +264,10 @@ class StardustAdapter(DeviceAdapter):
         self._nodes_cache = None
         self._nodes_cache_at = 0.0
         self._nodes_lock = threading.Lock()
-        # Last Stardust actually seen, for sticky availability (see
-        # STARDUST_STICKY_SEC) — holds the panel up through a missed poll.
-        self._last_stardust = None
-        self._last_stardust_at = 0.0
+        # Last sighting per unit (mac -> {'node', 'at'}), for sticky availability
+        # (see STARDUST_STICKY_SEC) — holds a unit up through a missed poll
+        # without leaking one unit's reading into another.
+        self._last_seen = {}
 
     # ── Art-Net plumbing ──
     def _open_socket(self, src='', timeout=POLL_TIMEOUT):
@@ -500,18 +500,21 @@ class StardustAdapter(DeviceAdapter):
         return websocket.create_connection(
             f'ws://{require_private_host(ip)}/ws', timeout=WS_TIMEOUT)
 
-    def _stardust_ip(self):
-        """Current Stardust IP: fresh discovery, else the last sighting, else
-        the pinned host. Linking has to reach the actual unit."""
+    def _stardust_ip(self, mac=None):
+        """Current IP of the target Stardust: fresh discovery, else its last
+        sighting, else the pinned host. Linking has to reach the actual unit."""
         try:
             hits = [n for n in self._discover_nodes_cached() if self._is_stardust(n)]
+            if mac is not None:
+                hits = [n for n in hits if n['mac'] == mac]
             if hits:
                 return hits[0]['ip']
         except (OSError, ValueError):
             pass
-        if self._last_stardust:
-            return self._last_stardust.get('ip')
-        return self.host
+        node = self._sticky_node(mac)
+        if node:
+            return node.get('ip')
+        return self.host if mac is None else None
 
     @staticmethod
     def _await_type(ws, wanted_type, timeout):
@@ -527,19 +530,20 @@ class StardustAdapter(DeviceAdapter):
                 return True
         return False
 
-    def link_output(self, out_nr):
-        """Put output `out_nr` (1..8) into CRMX linking mode.
+    def link_output(self, out_nr, mac=None):
+        """Put output `out_nr` (1..8) on the given unit into CRMX linking mode.
 
         The integration's one write: sends a single
         dmx_sink.timo_sink.LinkCommand over ws://<ip>/ws and waits briefly for
-        the device's LinkingStarted confirmation. Read-only otherwise.
+        the device's LinkingStarted confirmation. Read-only otherwise. `mac`
+        selects which unit when several are on the network.
         """
         if isinstance(out_nr, bool) or not isinstance(out_nr, int) or not (1 <= out_nr <= 8):
             raise ValueError(f'output number must be an int 1..8, got {out_nr!r}')
         letter = _output_letter(out_nr)
         if self.sim:
             return {'ok': True, 'outputNr': out_nr, 'output': letter, 'sim': True}
-        ip = self._stardust_ip()
+        ip = self._stardust_ip(mac)
         if not ip:
             return {'ok': False, 'outputNr': out_nr, 'output': letter,
                     'reason': 'Stardust not found on network'}
@@ -560,8 +564,8 @@ class StardustAdapter(DeviceAdapter):
                 'reason': None if started else 'no LinkingStarted confirmation'}
 
     # ── status + RDM TOD ──
-    def get_status(self):
-        status = self._sim_status() if self.sim else self._real_status()
+    def get_status(self, mac=None):
+        status = self._sim_status() if self.sim else self._real_status(mac)
         status['alerts'] = check_thresholds(status, ALERT_RULES)
         if status.get('available'):
             self.history.record({
@@ -571,38 +575,43 @@ class StardustAdapter(DeviceAdapter):
             })
         return status
 
-    def _sticky_node(self):
-        """The last Stardust actually seen, but only within STARDUST_STICKY_SEC.
-        Lets a momentary discovery miss hold the last good reading instead of
-        flipping the panel to unavailable and flapping the UI's RECONNECTING."""
-        if (self._last_stardust is not None
-                and time.time() - self._last_stardust_at < STARDUST_STICKY_SEC):
-            return self._last_stardust
-        return None
+    def _sticky_node(self, mac=None):
+        """The last Stardust seen, within STARDUST_STICKY_SEC — holds a unit up
+        through a momentary discovery miss instead of flapping RECONNECTING.
+        With a MAC, only that unit's sighting counts; without, the most recent
+        still-fresh sighting (the default 'a Stardust' view)."""
+        now = time.time()
+        if mac is not None:
+            e = self._last_seen.get(mac)
+            return e['node'] if e and now - e['at'] < STARDUST_STICKY_SEC else None
+        fresh = [e for e in self._last_seen.values() if now - e['at'] < STARDUST_STICKY_SEC]
+        return max(fresh, key=lambda e: e['at'])['node'] if fresh else None
 
-    def _real_status(self):
+    def _real_status(self, mac=None):
         # Discover directly rather than via detect() so the node's 'via'
         # survives — the TOD unicast has to leave the same interface that
         # heard the ArtPollReply or it goes out the default route and dies.
         try:
             nodes = self._discover_nodes_cached()
         except (OSError, ValueError) as exc:
-            node = self._sticky_node()
+            node = self._sticky_node(mac)
             if node is None:
                 return {'available': False, 'reason': f'Art-Net poll failed: {exc}'}
             return self._status_from_node(node, stale=True)
         hits = [n for n in nodes if self._is_stardust(n)]
+        if mac is not None:
+            hits = [n for n in hits if n['mac'] == mac]
         if hits:
             node = hits[0]
-            self._last_stardust = node
-            self._last_stardust_at = time.time()
+            self._last_seen[node['mac']] = {'node': node, 'at': time.time()}
             return self._status_from_node(node, stale=False)
-        # Missed the Stardust this poll — hold the last good reading if it was
-        # seen moments ago, otherwise report it genuinely gone.
-        node = self._sticky_node()
+        # Missed the unit this poll — hold the last good reading if it was seen
+        # moments ago, otherwise report it genuinely gone.
+        node = self._sticky_node(mac)
         if node is None:
-            return {'available': False,
-                    'reason': f'{len(nodes)} Art-Net node(s) found, none LumenRadio'}
+            reason = (f'Stardust {mac} not found' if mac is not None
+                      else f'{len(nodes)} Art-Net node(s) found, none LumenRadio')
+            return {'available': False, 'reason': reason}
         return self._status_from_node(node, stale=True)
 
     def _status_from_node(self, node, stale):

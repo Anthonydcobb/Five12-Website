@@ -50,6 +50,9 @@ def device_status(device_id):
     adapter = _adapter_or_404(device_id)
     if adapter is None:
         return jsonify({'error': 'unknown device'}), 404
+    mac = request.args.get('mac')
+    if device_id == 'stardust' and mac:
+        return jsonify(adapter.get_status(mac=mac.strip().upper()))
     return jsonify(adapter.get_status())
 
 
@@ -108,8 +111,10 @@ def stardust_link():
     out_nr = body.get('outputNr')
     if not isinstance(out_nr, int) or isinstance(out_nr, bool) or not (1 <= out_nr <= 8):
         return jsonify({'error': 'outputNr must be an integer 1..8'}), 400
+    mac = body.get('mac')
+    mac = mac.strip().upper() if isinstance(mac, str) and mac.strip() else None
     adapter = get_adapter('stardust', sim_enabled(request.args))
-    result = adapter.link_output(out_nr)
+    result = adapter.link_output(out_nr, mac=mac)
     return jsonify(result), (200 if result.get('ok') else 502)
 
 

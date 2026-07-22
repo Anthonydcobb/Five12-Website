@@ -61,20 +61,20 @@ function Sparkline({ samples, field, color = 'var(--color-gel)', height = 34 }) 
   );
 }
 
-function useDevice(id) {
+function useDevice(id, query = '') {
   const [status, setStatus] = useState(null);
   const [history, setHistory] = useState([]);
   useEffect(() => {
     let alive = true;
     const poll = async () => {
       try {
-        const { data } = await axios.get(`/api/devices/${id}/status`);
+        const { data } = await axios.get(`/api/devices/${id}/status${query}`);
         if (alive) setStatus(data);
       } catch { if (alive) setStatus({ available: false, reason: 'backend unreachable' }); }
     };
     const hist = async () => {
       try {
-        const { data } = await axios.get(`/api/devices/${id}/history`);
+        const { data } = await axios.get(`/api/devices/${id}/history${query}`);
         if (alive) setHistory(data);
       } catch { /* keep last */ }
     };
@@ -82,7 +82,7 @@ function useDevice(id) {
     const i1 = setInterval(poll, POLL_MS);
     const i2 = setInterval(hist, POLL_MS * 4);
     return () => { alive = false; clearInterval(i1); clearInterval(i2); };
-  }, [id]);
+  }, [id, query]);
   return { status, history };
 }
 
@@ -259,8 +259,12 @@ function BoleroPanel() {
 const STARDUST_HOLD_MS = 30000;  // keep the last good reading through brief Art-Net discovery misses
 
 function StardustPanel() {
-  const { status: live } = useDevice('stardust');
   const [units, setUnits] = useState([]);
+  // Which unit the rich panel (status / outputs / LINK) is showing. Multiple
+  // Stardusts can be on the network; identity is the MAC (IPs change).
+  const [selectedMac, setSelectedMac] = useState(null);
+  const macQuery = selectedMac ? `?mac=${encodeURIComponent(selectedMac)}` : '';
+  const { status: live } = useDevice('stardust', macQuery);
   // The real unit answers the Art-Net discovery poll only intermittently, so a
   // single miss would otherwise blank the whole panel. Hold the last available
   // reading for a short grace window and show a "reconnecting" hint instead.
@@ -279,6 +283,12 @@ function StardustPanel() {
     const i = setInterval(loadUnits, 10000);
     return () => clearInterval(i);
   }, [loadUnits]);
+  // Default to the first discovered unit. When the selection changes, drop the
+  // held reading so one unit's data never lingers under another mid-switch.
+  useEffect(() => {
+    if (!selectedMac && units.length) setSelectedMac(units[0].mac);
+  }, [units, selectedMac]);
+  useEffect(() => { lastGood.current = null; lastGoodAt.current = 0; }, [selectedMac]);
   const saveLabel = useCallback(async (mac, label) => {
     try { await axios.put('/api/devices/stardust/label', { mac, label }); loadUnits(); }
     catch { /* ignore */ }
@@ -290,15 +300,32 @@ function StardustPanel() {
     const who = `Output ${o.output}${o.name ? ` (${o.name})` : ''}`;
     if (!window.confirm(`Put ${who} into CRMX linking mode? A receiver in range will pair to it.`)) return;
     setLinkingNr(o.outputNr);
-    try { await axios.post('/api/devices/stardust/link', { outputNr: o.outputNr }); }
+    try { await axios.post('/api/devices/stardust/link', { outputNr: o.outputNr, mac: selectedMac }); }
     catch { /* transient; state just resets */ }
     finally { setLinkingNr(null); }
-  }, []);
+  }, [selectedMac]);
 
-  if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
-  if (!status.available) return <Unavailable status={status} />;
+  const selector = units.length > 1 && (
+    <div className="flex gap-1.5 flex-wrap">
+      {units.map((u) => {
+        const label = u.label || u.longName || u.shortName || u.mac;
+        const sel = u.mac === selectedMac;
+        return (
+          <button key={u.mac} onClick={() => setSelectedMac(u.mac)}
+            className={'text-[9px] font-mono rounded-sm px-2 py-1 border transition-colors ' +
+              (sel ? 'border-brand bg-brand-dim/30 text-text' : 'border-[var(--color-border)] bg-[var(--color-surface)] text-text-muted hover:border-border')}>
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  if (!status) return <div className="space-y-3">{selector}<div className="text-[10px] font-mono text-text-muted p-4">loading…</div></div>;
+  if (!status.available) return <div className="space-y-3">{selector}<Unavailable status={status} /></div>;
   return (
     <div className="space-y-3">
+      {selector}
       <div className="flex items-center gap-3">
         <span className="text-[13px] font-mono font-bold text-text">
           <Dot ok={status.universesUp > 0} /> {status.node}
