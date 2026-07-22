@@ -10,7 +10,6 @@ const NAV = [
   { to: '/network', label: 'Network' },
   { to: '/devices', label: 'Devices' },
   { to: '/ip-config', label: 'IP Config' },
-  { to: '/rf', label: 'RF Scanner' },
 ];
 
 export default function Header() {

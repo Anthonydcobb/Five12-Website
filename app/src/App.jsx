@@ -10,7 +10,6 @@ import Database from './pages/Database';
 import LabelsPage from './pages/LabelsPage';
 import NetworkMonitor from './pages/NetworkMonitor';
 import IPConfig from './pages/IPConfig';
-import RFScanner from './pages/RFScanner';
 import Devices from './pages/Devices';
 
 // NOTE: Effects Playground was removed — it duplicated the Console.
@@ -36,7 +35,6 @@ export default function App() {
           <Route path="/network" element={<NetworkMonitor />} />
           <Route path="/devices" element={<Devices />} />
           <Route path="/ip-config" element={<IPConfig />} />
-          <Route path="/rf" element={<RFScanner />} />
         </Routes>
       </main>
     </Router>
