@@ -261,9 +261,6 @@ function BoleroPanel({ sim }) {
 
 function StardustPanel({ sim }) {
   const { status } = useDevice('stardust', sim);
-  const [sheets, setSheets] = useState([]);
-  const [sheetId, setSheetId] = useState('');
-  const [recon, setRecon] = useState(null);
   const [units, setUnits] = useState([]);
   const uq = sim ? '?sim=1' : '';
   const loadUnits = useCallback(async () => {
@@ -279,27 +276,6 @@ function StardustPanel({ sim }) {
     try { await axios.put('/api/devices/stardust/label', { mac, label }); loadUnits(); }
     catch { /* ignore */ }
   }, [loadUnits]);
-
-  useEffect(() => {
-    axios.get('/api/shows').then(async ({ data }) => {
-      const all = [];
-      for (const show of data) {
-        try {
-          const r = await axios.get(`/api/shows/${show.id}/patch-sheets`);
-          r.data.forEach((ps) => all.push({ ...ps, showName: show.name }));
-        } catch { /* skip */ }
-      }
-      setSheets(all);
-    }).catch(() => setSheets([]));
-  }, []);
-
-  const runRecon = useCallback(async () => {
-    if (!sheetId) return;
-    try {
-      const { data } = await axios.get(`/api/devices/stardust/reconcile/${sheetId}${sim ? '?sim=1' : ''}`);
-      setRecon(data);
-    } catch (e) { setRecon({ available: false, reason: e.response?.data?.error || 'failed' }); }
-  }, [sheetId, sim]);
 
   if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
   if (!status.available) return <Unavailable status={status} />;
@@ -411,37 +387,8 @@ function StardustPanel({ sim }) {
         </div>
       )}
 
-      <div className="border-t border-[var(--color-surface-2)] pt-2">
-        <div className="text-[8px] text-text-muted uppercase tracking-widest mb-1">
-          Patch reconciliation — RDM vs patch sheet
-        </div>
-        <div className="flex items-center gap-2 mb-2">
-          <select value={sheetId} onChange={(e) => setSheetId(e.target.value)}
-            className="bg-[var(--color-surface)] border border-[var(--color-border)] rounded-sm text-[10px] font-mono text-text-muted px-1.5 py-1">
-            <option value="">select patch sheet…</option>
-            {sheets.map((s) => <option key={s.id} value={s.id}>{s.showName} / {s.name}</option>)}
-          </select>
-          <button onClick={runRecon} disabled={!sheetId}
-            className="px-2.5 py-1 text-[9px] font-bold tracking-widest bg-brand-dim/40 border border-brand text-gel rounded-sm disabled:opacity-30">
-            RECONCILE
-          </button>
-        </div>
-        {recon && !recon.available && <div className="text-[9px] font-mono text-brand-hi">{recon.reason}</div>}
-        {recon?.available && recon.report.map((r) => (
-          <div key={r.universe} className="mb-1.5">
-            <div className="text-[10px] font-mono text-text-muted">
-              U{r.universe}: patched {r.patchedCount} · discovered {r.discoveredCount}
-              {r.issues.length === 0 && <span className="text-online"> ✓ clean</span>}
-            </div>
-            {r.issues.map((msg, i) => (
-              <div key={i} className="text-[9px] font-mono text-warn pl-3">▸ {msg}</div>
-            ))}
-          </div>
-        ))}
-        {recon?.available && <div className="text-[8px] text-text-muted font-mono">{recon.note}</div>}
-      </div>
-      <div className="text-[8px] text-text-muted font-mono">
-        read-only · RDM-over-Art-Net (standard) — no web-UI scraping · full RDM address GET is v2
+      <div className="text-[8px] text-text-muted font-mono border-t border-[var(--color-surface-2)] pt-2">
+        read-only · RDM-over-Art-Net (standard) · outputs via /ws (source, universe, CRMX type)
       </div>
     </div>
   );
