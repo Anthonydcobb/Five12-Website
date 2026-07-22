@@ -30,3 +30,8 @@ instance/
 
 # 🛑 Node Modules (if using frontend dependencies)
 node_modules/
+
+# build output & tooling
+app/dist/
+code-review/
+.superpowers/
