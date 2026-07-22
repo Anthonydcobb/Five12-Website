@@ -94,3 +94,62 @@ def test_merge_output_with_no_source_and_disabled():
 def test_merge_sorted_by_output_letter():
     outs = _merge_outputs(TIMO, SACN, ARTNET)
     assert [o['output'] for o in outs] == ['A', 'B', 'C', 'D']
+
+
+import socket as _socket
+
+from app.integrations.stardust import StardustAdapter
+
+
+class _FakeSock:
+    """Stand-in for the Art-Net TOD UDP socket: no real network, no fixtures."""
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def sendto(self, *args):
+        pass
+
+    def recvfrom(self, *args):
+        raise _socket.timeout()
+
+    def close(self):
+        pass
+
+
+def test_real_status_attaches_outputs_from_ws():
+    a = StardustAdapter(sim=False)
+    node = {'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+            'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': []}
+    a._discover_nodes = lambda: [node]
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    a._ws_fetch_settings = lambda ip: (
+        {'universe_nrs': [1], 'output_names': ['X'], 'output_powers_mw': [100],
+         'rf_protocols': ['CRMX'], 'enabled_universe_nrs': [1]},
+        {'universe_map': {'5': [1]}},
+        {'universe_map': {}},
+    )
+    status = a._real_status()
+    assert status['available'] is True
+    assert status['outputs'][0]['output'] == 'A'
+    assert status['outputs'][0]['source'] == 'sACN'
+    assert status['outputs'][0]['universe'] == '5'
+    assert status['outputs'][0]['crmxType'] == 'CRMX Classic'
+
+
+def test_real_status_outputs_none_when_ws_fails():
+    a = StardustAdapter(sim=False)
+    node = {'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+            'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': []}
+    a._discover_nodes = lambda: [node]
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+
+    def _boom(ip):
+        raise OSError('ws refused')
+
+    a._ws_fetch_settings = _boom
+    status = a._real_status()
+    assert status['available'] is True   # Art-Net path unaffected
+    assert status['outputs'] is None

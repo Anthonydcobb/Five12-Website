@@ -40,6 +40,7 @@ POLL_TIMEOUT = 1.2
 # a universe" sentinel. [VERIFIED 2026-07-20] a Stardust reports 32767 on all
 # eight replies, so it must never be shown as a real universe.
 UNIVERSE_UNASSIGNED = 0x7FFF
+WS_TIMEOUT = 2.5   # seconds; ws://<ip>/ws connect + read budget for outputs
 OP_POLL = 0x2000
 OP_POLL_REPLY = 0x2100
 OP_TOD_REQUEST = 0x8000
@@ -358,6 +359,45 @@ class StardustAdapter(DeviceAdapter):
         return {'found': False, 'address': None,
                 'detail': f'{len(nodes)} Art-Net node(s) found, none LumenRadio'}
 
+    def _ws_fetch_settings(self, ip):
+        """Poll the Stardust control plane at ws://ip/ws for the outputs config.
+
+        Read-only: sends only the three Get*Command frames and reads until all
+        three responses arrive or WS_TIMEOUT elapses. Returns (timo, sacn,
+        artnet) settings dicts; a missing response comes back as {}. Host is
+        re-validated as private every call and never derived from request input.
+        """
+        import json
+        import websocket   # websocket-client
+        ip = require_private_host(ip)
+        wanted = {
+            'dmx_sink.timo_sink.GetSettingsResponse': 'timo',
+            'dmx_source.sacn_source.GetSettingsResponse': 'sacn',
+            'dmx_source.artnet_source.GetSettingsResponse': 'artnet',
+        }
+        commands = (
+            '{"_type_":"dmx_sink.timo_sink.GetSettingsCommand"}',
+            '{"_type_":"dmx_source.sacn_source.GetSettingsCommand"}',
+            '{"_type_":"dmx_source.artnet_source.GetSettingsCommand"}',
+        )
+        got = {}
+        ws = websocket.create_connection(f'ws://{ip}/ws', timeout=WS_TIMEOUT)
+        try:
+            for cmd in commands:
+                ws.send(cmd)
+            deadline = time.time() + WS_TIMEOUT
+            while len(got) < len(wanted) and time.time() < deadline:
+                try:
+                    msg = json.loads(ws.recv())
+                except (ValueError, websocket.WebSocketTimeoutException):
+                    break
+                key = wanted.get(msg.get('_type_'))
+                if key:
+                    got[key] = msg.get('settings', {}) or {}
+        finally:
+            ws.close()
+        return got.get('timo', {}), got.get('sacn', {}), got.get('artnet', {})
+
     # ── status + RDM TOD ──
     def get_status(self):
         status = self._sim_status() if self.sim else self._real_status()
@@ -420,7 +460,7 @@ class StardustAdapter(DeviceAdapter):
         for u in universes:
             u['transmitting'] = (u['universe'] in outputting) if node['ports'] else None
         up = len(outputting) if node['ports'] else None
-        return {
+        status = {
             'available': True, 'source': 'artnet-rdm',
             'node': node['longName'] or node['shortName'], 'address': ip,
             'via': node.get('via', ''),
@@ -432,7 +472,17 @@ class StardustAdapter(DeviceAdapter):
             'universesDown': (8 - up) if up is not None else None,
             'weakestRfPct': None,
             'fixturesDiscovered': found,
+            'outputs': None,
         }
+        ws_host = node.get('ip') or self.host
+        if ws_host:
+            try:
+                timo, sacn, artnet = self._ws_fetch_settings(ws_host)
+                if timo.get('universe_nrs'):
+                    status['outputs'] = _merge_outputs(timo, sacn, artnet)
+            except Exception as exc:  # noqa: BLE001 — outputs are best-effort
+                log.warning('Stardust /ws outputs fetch failed: %s', exc)
+        return status
 
     # ── simulator ──
     def _sim_status(self):
