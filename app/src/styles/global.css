@@ -1,2 +1,69 @@
-/* src/styles/global.css */
+/* src/styles/global.css — Five12 Logic design system · "1b Spotlight Stage"
+   Dark, technical, theatrical — derived from the Five12 Logic mark. Built for
+   control-room dashboards: DMX rigs, universes, network devices.
+
+   This @theme block is the source of the app's whole look: every `bg-surface`,
+   `text-muted`, `border-border`, `text-online`, `font-display` utility resolves
+   from the custom color/font tokens defined here. Without it the app falls back
+   to bare Tailwind and loses the design entirely. */
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
+
+@theme {
+  /* ── surfaces ─────────────────────────────────────────────── */
+  --color-bg:        oklch(15% 0.006 255);
+  --color-surface:   oklch(22% 0.008 255);
+  --color-surface-2: oklch(27% 0.009 255);
+  --color-border:    oklch(33% 0.010 255);
+  --color-text:      oklch(96% 0.003 255);
+  --color-muted:     oklch(70% 0.012 255);
+
+  /* ── brand red ────────────────────────────────────────────── */
+  --color-red:       oklch(60% 0.23 27);
+  --color-red-hi:    oklch(68% 0.22 27);
+  --color-red-dim:   oklch(30% 0.12 27);
+
+  /* ── accents — dual names match the design mark's labels ──── */
+  --color-cyan:      oklch(75% 0.13 215);  /* cyan · gel  */
+  --color-gel:       oklch(75% 0.13 215);
+  --color-green:     oklch(72% 0.15 150);  /* green · online */
+  --color-online:    oklch(72% 0.15 150);
+  --color-amber:     oklch(78% 0.15 80);   /* amber · warn */
+  --color-warn:      oklch(78% 0.15 80);
+
+  /* ── type ─────────────────────────────────────────────────── */
+  --font-sans:    "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    "IBM Plex Mono", ui-monospace, "Cascadia Code", monospace;
+  --font-display: "Barlow Condensed", "Oswald", ui-sans-serif, sans-serif;
+}
+
+/* ── base — "1b Spotlight Stage": dark stage with a theatrical wash ── */
+@layer base {
+  html { color-scheme: dark; }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+    /* a soft red spotlight from above — the "stage" in Spotlight Stage */
+    background-image:
+      radial-gradient(130% 90% at 50% -15%,
+        oklch(30% 0.12 27 / 0.16), transparent 62%);
+    background-attachment: fixed;
+  }
+
+  /* Display type is Barlow Condensed 700 — headings and section labels. */
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: 0.005em;
+  }
+}
+
+/* ── "1b" theatrical helpers — dramatic glows, available as utilities ── */
+@utility glow-red   { box-shadow: 0 0 24px oklch(60% 0.23 27 / 0.35); }
+@utility glow-cyan  { box-shadow: 0 0 24px oklch(75% 0.13 215 / 0.30); }
+@utility text-glow  { text-shadow: 0 0 18px oklch(68% 0.22 27 / 0.45); }
