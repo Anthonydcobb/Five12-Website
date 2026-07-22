@@ -153,3 +153,15 @@ def test_real_status_outputs_none_when_ws_fails():
     status = a._real_status()
     assert status['available'] is True   # Art-Net path unaffected
     assert status['outputs'] is None
+
+
+def test_sim_exposes_outputs():
+    s = StardustAdapter(sim=True).get_status()
+    assert s['available'] and s['source'] == 'sim'
+    assert len(s['outputs']) == 8
+    for o in s['outputs']:
+        assert set(o) >= {'output', 'name', 'source', 'universe',
+                          'crmxType', 'powerMw', 'enabled'}
+    by_output = {o['output']: o for o in s['outputs']}
+    assert by_output['C']['crmxType'] == '1/4 CRMX²'   # CRMX2_1_4 at N=8
+    assert by_output['H']['enabled'] is False

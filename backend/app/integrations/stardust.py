@@ -508,6 +508,20 @@ class StardustAdapter(DeviceAdapter):
             })
         up = [u for u in universes if u['transmitting']]
         rfs = [u['rfPct'] for u in up if u['rfPct'] is not None]
+        # Outputs config — on real hardware this comes from ws://<ip>/ws; here we
+        # feed the same _merge_outputs join so ?sim=1 renders the real table.
+        sim_timo = {
+            'universe_nrs': [1, 2, 3, 4, 5, 6, 7, 8],
+            'output_names': ['Front', 'Back', 'Spots', 'Cyc', 'FOH', 'Booms', 'Haze', ''],
+            'output_powers_mw': [100, 100, 100, 30, 100, 100, 7, 100],
+            'rf_protocols': ['CRMX', 'CRMX', 'CRMX2_1_4', 'CRMX2_2_4', 'CRMX',
+                             'WDMX_G3', 'CRMX', 'CRMX'],
+            'enabled_universe_nrs': [1, 2, 3, 4, 5, 6, 7],
+        }
+        sim_sacn = {'universe_map': {'1': [1], '2': [2], '5': [3], '6': [5]}}
+        sim_artnet = {'universe_map': {'4': (0 << 8) | (0 << 4) | 1,
+                                       '6': (0 << 8) | (1 << 4) | 2}}
+        sim_outputs = _merge_outputs(sim_timo, sim_sacn, sim_artnet)
         return {
             'available': True, 'source': 'sim',
             'node': 'Stardust DTx8 (sim)', 'address': '10.0.0.80',
@@ -516,6 +530,7 @@ class StardustAdapter(DeviceAdapter):
             'universesDown': 8 - len(up),
             'weakestRfPct': min(rfs) if rfs else None,
             'fixturesDiscovered': sum(len(u['fixtures']) for u in universes),
+            'outputs': sim_outputs,
         }
 
     # ── patch reconciliation (the novel bit) ──
