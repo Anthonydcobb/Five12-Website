@@ -283,6 +283,17 @@ function StardustPanel() {
     try { await axios.put('/api/devices/stardust/label', { mac, label }); loadUnits(); }
     catch { /* ignore */ }
   }, [loadUnits]);
+  // CRMX linking — the one hardware write. Confirm first (it puts a live
+  // output into pairing mode), then POST and show a brief "linking…" state.
+  const [linkingNr, setLinkingNr] = useState(null);
+  const linkOutput = useCallback(async (o) => {
+    const who = `Output ${o.output}${o.name ? ` (${o.name})` : ''}`;
+    if (!window.confirm(`Put ${who} into CRMX linking mode? A receiver in range will pair to it.`)) return;
+    setLinkingNr(o.outputNr);
+    try { await axios.post('/api/devices/stardust/link', { outputNr: o.outputNr }); }
+    catch { /* transient; state just resets */ }
+    finally { setLinkingNr(null); }
+  }, []);
 
   if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
   if (!status.available) return <Unavailable status={status} />;
@@ -340,15 +351,25 @@ function StardustPanel() {
             return (
               <div key={o.output} className={'border rounded-lg px-2 py-1.5 ' +
                 (active ? 'bg-[var(--color-surface)] border-brand/60' : 'bg-[var(--color-bg)] border-[var(--color-surface)] opacity-50')}>
-                <div className="text-[10px] font-mono font-bold text-text flex items-center gap-1">
+                <div className="text-[9px] font-mono font-bold text-text flex items-center gap-1">
                   <Dot ok={active} /> Out {o.output}
                   {o.name && <span className="text-text-muted font-normal">· {o.name}</span>}
                 </div>
-                <div className="text-[8px] font-mono text-text-muted">
-                  {active
-                    ? `${o.source} ${o.universe ?? '—'} · ${o.crmxType || '—'}`
-                    : 'unassigned'}
-                </div>
+                {active ? (
+                  <>
+                    <div className="text-[16px] font-mono font-bold text-brand-hi leading-tight">{o.universe ?? '—'}</div>
+                    <div className="text-[8px] font-mono text-text-muted">{o.source} · {o.crmxType || '—'}</div>
+                    <button
+                      onClick={() => linkOutput(o)}
+                      disabled={linkingNr === o.outputNr}
+                      className="mt-1 text-[8px] font-mono uppercase tracking-wider border border-brand/50 text-brand-hi rounded-sm px-1.5 py-0.5 hover:bg-brand/10 disabled:opacity-50"
+                    >
+                      {linkingNr === o.outputNr ? 'linking…' : 'Link'}
+                    </button>
+                  </>
+                ) : (
+                  <div className="text-[8px] font-mono text-text-muted">unassigned</div>
+                )}
               </div>
             );
           })}

@@ -96,7 +96,10 @@ def test_merge_sorted_by_output_letter():
     assert [o['output'] for o in outs] == ['A', 'B', 'C', 'D']
 
 
+import json
 import socket as _socket
+
+import pytest
 
 from app.integrations import stardust
 from app.integrations.stardust import StardustAdapter
@@ -280,6 +283,66 @@ def test_discover_resends_artpoll_within_the_window(monkeypatch):
     nodes = a._discover_nodes()
     assert nodes == []
     assert sends['n'] >= 2                 # resent, not a single fire-and-forget
+
+
+def test_merge_outputs_includes_output_number():
+    """Each output carries its 1-based output number so the UI can address it —
+    the LinkCommand is keyed by that number (output E == 5)."""
+    by = _by_output(TIMO, SACN, ARTNET)
+    assert by['A']['outputNr'] == 1
+    assert by['C']['outputNr'] == 3
+
+
+class _FakeWS:
+    """Records what was sent and replays canned frames on recv()."""
+    def __init__(self, replies=()):
+        self.sent = []
+        self._replies = list(replies)
+
+    def send(self, s):
+        self.sent.append(s)
+
+    def recv(self):
+        import websocket
+        if self._replies:
+            return self._replies.pop(0)
+        raise websocket.WebSocketTimeoutException()
+
+    def close(self):
+        pass
+
+
+def test_link_output_sends_link_command_and_confirms():
+    a = StardustAdapter(sim=False)
+    a._stardust_ip = lambda: '10.0.1.3'
+    fake = _FakeWS(['{"universe_nrs":[5],"_type_":"dmx_sink.timo_sink.LinkingStarted"}'])
+    a._ws_open = lambda ip: fake
+
+    result = a.link_output(5)
+
+    assert result['ok'] is True
+    assert result['outputNr'] == 5
+    assert result['output'] == 'E'
+    assert json.loads(fake.sent[0]) == {
+        'universe_nrs': [5], '_type_': 'dmx_sink.timo_sink.LinkCommand'}
+
+
+def test_link_output_rejects_out_of_range():
+    a = StardustAdapter(sim=False)
+    for bad in (0, 9, -1):
+        with pytest.raises(ValueError):
+            a.link_output(bad)
+
+
+def test_link_output_sim_is_a_noop_success():
+    a = StardustAdapter(sim=True)
+    touched = {'ws': False}
+    a._ws_open = lambda ip: touched.__setitem__('ws', True)
+
+    result = a.link_output(3)
+
+    assert result['ok'] is True and result.get('sim') is True
+    assert touched['ws'] is False   # sim never contacts hardware
 
 
 def test_sim_exposes_outputs():

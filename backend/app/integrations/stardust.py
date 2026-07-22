@@ -18,7 +18,9 @@ Fetching each fixture's DMX_START_ADDRESS needs full RDM GET via OpRdm
 discovery reports (sim provides addresses; real mode provides UIDs) against
 the PatchSheet.
 
-Read-only: discovery only, no RDM SETs, no config writes.
+Almost entirely read-only: discovery only, no RDM SETs, no config writes.
+The ONE exception is link_output() — a user-triggered CRMX LinkCommand over
+/ws that puts an output into pairing mode. No other frame is ever written.
 """
 
 import logging
@@ -57,6 +59,7 @@ NODES_TTL = 2.5
 # eight replies, so it must never be shown as a real universe.
 UNIVERSE_UNASSIGNED = 0x7FFF
 WS_TIMEOUT = 2.5   # seconds; ws://<ip>/ws connect + read budget for outputs
+LINK_TIMEOUT = 3.0  # seconds; wait budget for the device's LinkingStarted reply
 # The outputs config changes rarely, but the /ws fetch costs ~WS_TIMEOUT and
 # would otherwise run on every fast status poll — enough to make the whole
 # panel flap. Fetch it at most this often and serve the last good result in
@@ -224,6 +227,7 @@ def _merge_outputs(timo, sacn, artnet):
                 source, universe = 'ArtNet', _artnet_addr(int(addr))
         outputs.append({
             'output': _output_letter(out_nr),
+            'outputNr': out_nr,
             'name': names[i] if i < len(names) else None,
             'source': source,
             'universe': universe,
@@ -484,6 +488,76 @@ class StardustAdapter(DeviceAdapter):
         except Exception as exc:  # noqa: BLE001 — outputs are best-effort
             log.warning('Stardust /ws outputs fetch failed: %s', exc)
         return self._outputs_cache
+
+    # ── control: CRMX linking (the ONE deliberate write) ──
+    # Everything else in this adapter is read-only. link_output is the single
+    # exception: a user-triggered command that puts one output into CRMX
+    # linking mode so a receiver can pair. We send ONLY the LinkCommand frame
+    # (never Settings, never Unlink — Unlink is intentionally not exposed).
+    def _ws_open(self, ip):
+        """Open the Stardust control-plane socket. Host re-validated private."""
+        import websocket   # websocket-client
+        return websocket.create_connection(
+            f'ws://{require_private_host(ip)}/ws', timeout=WS_TIMEOUT)
+
+    def _stardust_ip(self):
+        """Current Stardust IP: fresh discovery, else the last sighting, else
+        the pinned host. Linking has to reach the actual unit."""
+        try:
+            hits = [n for n in self._discover_nodes_cached() if self._is_stardust(n)]
+            if hits:
+                return hits[0]['ip']
+        except (OSError, ValueError):
+            pass
+        if self._last_stardust:
+            return self._last_stardust.get('ip')
+        return self.host
+
+    @staticmethod
+    def _await_type(ws, wanted_type, timeout):
+        import json
+        import websocket
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                msg = json.loads(ws.recv())
+            except (ValueError, websocket.WebSocketTimeoutException):
+                break
+            if isinstance(msg, dict) and msg.get('_type_') == wanted_type:
+                return True
+        return False
+
+    def link_output(self, out_nr):
+        """Put output `out_nr` (1..8) into CRMX linking mode.
+
+        The integration's one write: sends a single
+        dmx_sink.timo_sink.LinkCommand over ws://<ip>/ws and waits briefly for
+        the device's LinkingStarted confirmation. Read-only otherwise.
+        """
+        if isinstance(out_nr, bool) or not isinstance(out_nr, int) or not (1 <= out_nr <= 8):
+            raise ValueError(f'output number must be an int 1..8, got {out_nr!r}')
+        letter = _output_letter(out_nr)
+        if self.sim:
+            return {'ok': True, 'outputNr': out_nr, 'output': letter, 'sim': True}
+        ip = self._stardust_ip()
+        if not ip:
+            return {'ok': False, 'outputNr': out_nr, 'output': letter,
+                    'reason': 'Stardust not found on network'}
+        import json
+        frame = json.dumps({'universe_nrs': [out_nr],
+                            '_type_': 'dmx_sink.timo_sink.LinkCommand'})
+        try:
+            ws = self._ws_open(ip)
+        except Exception as exc:  # noqa: BLE001
+            return {'ok': False, 'outputNr': out_nr, 'output': letter,
+                    'reason': f'link failed: {exc}'}
+        try:
+            ws.send(frame)
+            started = self._await_type(ws, 'dmx_sink.timo_sink.LinkingStarted', LINK_TIMEOUT)
+        finally:
+            ws.close()
+        return {'ok': started, 'outputNr': out_nr, 'output': letter,
+                'reason': None if started else 'no LinkingStarted confirmation'}
 
     # ── status + RDM TOD ──
     def get_status(self):

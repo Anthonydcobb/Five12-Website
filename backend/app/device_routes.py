@@ -100,6 +100,19 @@ def stardust_set_label():
     return jsonify({'mac': mac, 'label': dev.label})
 
 
+@devices.post('/stardust/link')
+def stardust_link():
+    """Put one Stardust output into CRMX linking mode (the only device write).
+    Body: {"outputNr": 1..8}. User-triggered from the Devices panel."""
+    body = request.get_json(silent=True) or {}
+    out_nr = body.get('outputNr')
+    if not isinstance(out_nr, int) or isinstance(out_nr, bool) or not (1 <= out_nr <= 8):
+        return jsonify({'error': 'outputNr must be an integer 1..8'}), 400
+    adapter = get_adapter('stardust', sim_enabled(request.args))
+    result = adapter.link_output(out_nr)
+    return jsonify(result), (200 if result.get('ok') else 502)
+
+
 @devices.get('/stardust/reconcile/<int:patch_id>')
 def stardust_reconcile(patch_id):
     """RDM discovery vs PatchSheet — 'patched at U1/45 but reports U1/50'."""
