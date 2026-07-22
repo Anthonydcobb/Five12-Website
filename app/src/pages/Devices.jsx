@@ -329,19 +329,33 @@ function StardustPanel() {
         </div>
       )}
 
-      <div className="grid grid-cols-4 gap-1.5">
-        {status.universes?.map((u) => (
-          <div key={u.universe} className={'border rounded-lg px-2 py-1.5 ' +
-            (u.transmitting ? 'bg-[var(--color-surface)] border-[var(--color-border)]' : 'bg-[var(--color-bg)] border-[var(--color-surface)] opacity-50')}>
-            <div className="text-[10px] font-mono font-bold text-text">
-              U{u.universe} <Dot ok={u.transmitting} />
-            </div>
-            <div className="text-[8px] font-mono text-text-muted">
-              RF {u.rfPct != null ? u.rfPct + '%' : '—'} · {u.fixtures.length} fix
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Output grid A–H, driven by the /ws outputs config (Art-Net can't tell us
+          which universes are on air on a real Stardust). "Active" = an enabled
+          output with a source patched to it — the same rule the GUI uses to grey
+          out its own Output cards. */}
+      {status.outputs?.length > 0 ? (
+        <div className="grid grid-cols-4 gap-1.5">
+          {status.outputs.map((o) => {
+            const active = o.enabled && o.source !== 'None';
+            return (
+              <div key={o.output} className={'border rounded-lg px-2 py-1.5 ' +
+                (active ? 'bg-[var(--color-surface)] border-brand/60' : 'bg-[var(--color-bg)] border-[var(--color-surface)] opacity-50')}>
+                <div className="text-[10px] font-mono font-bold text-text flex items-center gap-1">
+                  <Dot ok={active} /> Out {o.output}
+                  {o.name && <span className="text-text-muted font-normal">· {o.name}</span>}
+                </div>
+                <div className="text-[8px] font-mono text-text-muted">
+                  {active
+                    ? `${o.source} ${o.universe ?? '—'} · ${o.crmxType || '—'}`
+                    : 'unassigned'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-[9px] font-mono text-text-muted">outputs config unavailable (/ws)</div>
+      )}
 
       {status.outputs?.length > 0 && (
         <div>
