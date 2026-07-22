@@ -164,6 +164,55 @@ def _crmx_label(raw, n):
     return CRMX_LABELS.get(n, CRMX_LABELS[8]).get(raw, raw)
 
 
+def _merge_outputs(timo, sacn, artnet):
+    """Join the three /ws GetSettings payloads into a per-output list.
+
+    timo:   dmx_sink.timo_sink settings (universe_nrs, output_names,
+            output_powers_mw, rf_protocols, enabled_universe_nrs).
+    sacn:   dmx_source.sacn_source settings; universe_map {sacnUniverse:[outNr]}.
+    artnet: dmx_source.artnet_source settings; universe_map {outNr: addrInt}.
+
+    Returns a list of per-output dicts sorted by output letter:
+      {output, name, source, universe, crmxType, powerMw, enabled}
+    source is 'sACN' / 'ArtNet' / 'None'; universe is the sACN universe number
+    (str), the ArtNet 'net/sub/uni' (str), or None.
+    """
+    nrs = timo.get('universe_nrs', []) or []
+    names = timo.get('output_names', []) or []
+    powers = timo.get('output_powers_mw', []) or []
+    protocols = timo.get('rf_protocols', []) or []
+    enabled = set(timo.get('enabled_universe_nrs', []) or [])
+    n = len(nrs)
+
+    # sACN map is universe -> [outputs]; invert to output -> universe.
+    sacn_by_output = {}
+    for uni, outs in (sacn.get('universe_map', {}) or {}).items():
+        for out in outs or []:
+            sacn_by_output[out] = str(uni)
+    artnet_map = artnet.get('universe_map', {}) or {}
+
+    outputs = []
+    for i, out_nr in enumerate(nrs):
+        source, universe = 'None', None
+        if out_nr in sacn_by_output:
+            source, universe = 'sACN', sacn_by_output[out_nr]
+        else:
+            addr = artnet_map.get(str(out_nr), artnet_map.get(out_nr))
+            if addr is not None:
+                source, universe = 'ArtNet', _artnet_addr(int(addr))
+        outputs.append({
+            'output': _output_letter(out_nr),
+            'name': names[i] if i < len(names) else None,
+            'source': source,
+            'universe': universe,
+            'crmxType': _crmx_label(protocols[i] if i < len(protocols) else None, n),
+            'powerMw': powers[i] if i < len(powers) else None,
+            'enabled': out_nr in enabled,
+        })
+    outputs.sort(key=lambda o: o['output'])
+    return outputs
+
+
 def _local_ipv4s():
     """Every local IPv4 to poll from. Thin wrapper kept so this call site and
     the FIVE12_ARTNET_SRC pin read exactly as before; the implementation moved
