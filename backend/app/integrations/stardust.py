@@ -37,6 +37,15 @@ log = logging.getLogger(__name__)
 
 ARTNET_PORT = 6454
 POLL_TIMEOUT = 1.2
+# A Stardust answers the broadcast ArtPoll only intermittently, and a single
+# lost datagram would otherwise blank the whole panel. Re-broadcast this often
+# inside the POLL_TIMEOUT window so one dropped poll is not fatal — the loop
+# already listens the full window, so this adds packets, not latency.
+POLL_RESEND_SEC = 0.4
+# How long a just-seen unit stays "available" through a poll that misses it.
+# Bridges brief discovery gaps at the source (backend) so the UI stops flapping
+# RECONNECTING; longer than NODES_TTL, shorter than the frontend's hold window.
+STARDUST_STICKY_SEC = 12.0
 # Discovery binds UDP 6454 and listens ~POLL_TIMEOUT. The status, units, and
 # detect polls each call it on their own cadence; when two overlap they compete
 # for the single ArtPollReply (SO_REUSEADDR hands each datagram to only one
@@ -251,6 +260,10 @@ class StardustAdapter(DeviceAdapter):
         self._nodes_cache = None
         self._nodes_cache_at = 0.0
         self._nodes_lock = threading.Lock()
+        # Last Stardust actually seen, for sticky availability (see
+        # STARDUST_STICKY_SEC) — holds the panel up through a missed poll.
+        self._last_stardust = None
+        self._last_stardust_at = 0.0
 
     # ── Art-Net plumbing ──
     def _open_socket(self, src='', timeout=POLL_TIMEOUT):
@@ -285,24 +298,34 @@ class StardustAdapter(DeviceAdapter):
         if not socks:
             raise OSError(f'no bindable interface on port {ARTNET_PORT}')
 
-        nodes = {}
-        try:
+        def _broadcast():
             for s, src in socks.items():
                 try:
                     s.sendto(_artpoll_packet(), (target, ARTNET_PORT))
                 except OSError as exc:
                     log.debug('Art-Net: poll from %s failed — %s', src, exc)
+
+        nodes = {}
+        try:
             # select() across all sockets against one shared deadline: reading
             # them serially would burn the whole window blocked on the first
             # quiet interface and never reach the one that can hear replies.
+            # Re-broadcast every POLL_RESEND_SEC and listen the full window
+            # (never early-break) so a unit whose first reply was lost still
+            # gets counted from a later one.
             deadline = time.time() + POLL_TIMEOUT
+            next_send = 0.0
             while True:
-                remaining = deadline - time.time()
+                now = time.time()
+                remaining = deadline - now
                 if remaining <= 0:
                     break
-                ready, _, _ = select.select(list(socks), [], [], remaining)
+                if now >= next_send:
+                    _broadcast()
+                    next_send = now + POLL_RESEND_SEC
+                ready, _, _ = select.select(list(socks), [], [], min(remaining, POLL_RESEND_SEC))
                 if not ready:
-                    break
+                    continue
                 for s in ready:
                     try:
                         data, _addr = s.recvfrom(2048)
@@ -474,6 +497,15 @@ class StardustAdapter(DeviceAdapter):
             })
         return status
 
+    def _sticky_node(self):
+        """The last Stardust actually seen, but only within STARDUST_STICKY_SEC.
+        Lets a momentary discovery miss hold the last good reading instead of
+        flipping the panel to unavailable and flapping the UI's RECONNECTING."""
+        if (self._last_stardust is not None
+                and time.time() - self._last_stardust_at < STARDUST_STICKY_SEC):
+            return self._last_stardust
+        return None
+
     def _real_status(self):
         # Discover directly rather than via detect() so the node's 'via'
         # survives — the TOD unicast has to leave the same interface that
@@ -481,12 +513,25 @@ class StardustAdapter(DeviceAdapter):
         try:
             nodes = self._discover_nodes_cached()
         except (OSError, ValueError) as exc:
-            return {'available': False, 'reason': f'Art-Net poll failed: {exc}'}
+            node = self._sticky_node()
+            if node is None:
+                return {'available': False, 'reason': f'Art-Net poll failed: {exc}'}
+            return self._status_from_node(node, stale=True)
         hits = [n for n in nodes if self._is_stardust(n)]
-        if not hits:
+        if hits:
+            node = hits[0]
+            self._last_stardust = node
+            self._last_stardust_at = time.time()
+            return self._status_from_node(node, stale=False)
+        # Missed the Stardust this poll — hold the last good reading if it was
+        # seen moments ago, otherwise report it genuinely gone.
+        node = self._sticky_node()
+        if node is None:
             return {'available': False,
                     'reason': f'{len(nodes)} Art-Net node(s) found, none LumenRadio'}
-        node = hits[0]
+        return self._status_from_node(node, stale=True)
+
+    def _status_from_node(self, node, stale):
         ip = node['ip']
         universes = []
         try:
@@ -526,6 +571,7 @@ class StardustAdapter(DeviceAdapter):
         up = len(outputting) if node['ports'] else None
         status = {
             'available': True, 'source': 'artnet-rdm',
+            'stale': stale,
             'node': node['longName'] or node['shortName'], 'address': ip,
             'via': node.get('via', ''),
             'firmware': node.get('firmware'),

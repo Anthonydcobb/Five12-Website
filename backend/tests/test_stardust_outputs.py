@@ -98,7 +98,13 @@ def test_merge_sorted_by_output_letter():
 
 import socket as _socket
 
+from app.integrations import stardust
 from app.integrations.stardust import StardustAdapter
+
+_STARDUST_NODE = {
+    'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+    'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': [],
+}
 
 
 class _FakeSock:
@@ -211,6 +217,69 @@ def test_discovery_shared_across_callers_within_ttl():
     a._nodes_cache_at = 0.0         # force staleness
     a._discover_nodes_cached()
     assert calls['n'] == 2
+
+
+def test_status_sticky_holds_available_through_a_brief_miss():
+    """A single poll that fails to hear the Stardust must not flip the panel to
+    'unavailable': if the unit was seen moments ago, hold it available (flagged
+    stale) so the UI stops flapping RECONNECTING on every dropped ArtPollReply."""
+    a = StardustAdapter(sim=False)
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    a._ws_fetch_settings = lambda ip: ({}, {}, {})
+    seq = [[_STARDUST_NODE], []]          # poll 1 sees it; poll 2 misses it
+    a._discover_nodes_cached = lambda: seq.pop(0)
+
+    first = a._real_status()
+    assert first['available'] is True
+    assert not first.get('stale')
+
+    second = a._real_status()             # missed this poll, but just seen
+    assert second['available'] is True    # sticky: no flap to unavailable
+    assert second['stale'] is True
+    assert second['node'] == 'Stardust DTx8'
+
+
+def test_status_goes_unavailable_after_sticky_window_expires():
+    """Stickiness is a brief bridge, not a permanent lie: once the last sighting
+    ages past the window, a missing unit is reported unavailable as before."""
+    a = StardustAdapter(sim=False)
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    a._ws_fetch_settings = lambda ip: ({}, {}, {})
+    a._discover_nodes_cached = lambda: [_STARDUST_NODE]
+    a._real_status()                      # seeds the last-seen sighting
+
+    a._last_stardust_at = 0.0             # pretend the sighting is ancient
+    a._discover_nodes_cached = lambda: []  # unit now truly gone
+    status = a._real_status()
+    assert status['available'] is False
+    assert 'none LumenRadio' in status['reason']
+
+
+def test_discover_resends_artpoll_within_the_window(monkeypatch):
+    """A dropped ArtPoll must not doom the whole poll: the broadcast is repeated
+    within POLL_TIMEOUT so a lost datagram has more chances to reach the unit."""
+    a = StardustAdapter(sim=False)
+    sends = {'n': 0}
+
+    class _SilentUDP:
+        def sendto(self, *args):
+            sends['n'] += 1
+
+        def recvfrom(self, *args):
+            raise _socket.timeout()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(stardust, '_local_ipv4s', lambda: [''])
+    monkeypatch.setattr(a, '_open_socket', lambda *args, **kwargs: _SilentUDP())
+    monkeypatch.setattr(stardust.select, 'select', lambda r, w, x, t: ([], [], []))
+    monkeypatch.setattr(stardust, 'POLL_TIMEOUT', 0.25)
+    monkeypatch.setattr(stardust, 'POLL_RESEND_SEC', 0.1)
+
+    nodes = a._discover_nodes()
+    assert nodes == []
+    assert sends['n'] >= 2                 # resent, not a single fire-and-forget
 
 
 def test_sim_exposes_outputs():
