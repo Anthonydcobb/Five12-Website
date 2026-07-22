@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory
 from .models import Show, PatchSheet, Fixture, PatchRow, LabelTemplate
 from . import db
+from .patch_import import (read_table, detect_header_row, guess_mapping,
+                           apply_mapping)
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
@@ -324,6 +326,41 @@ def import_patch_sheet_excel(patch_id):
         current_app.logger.exception("Excel import failed")
         return jsonify({'error': str(e)}), 500
 
+
+@bp.route('/api/patch-sheets/<int:patch_id>/import/analyze', methods=['POST'])
+def analyze_patch_import(patch_id):
+    try:
+        if 'file' not in request.files:
+            return {'error': 'No file uploaded'}, 400
+        f = request.files['file']
+        grid = read_table(f.read(), f.filename)
+        if not grid:
+            return {'error': 'The file appears to be empty.'}, 400
+        hidx = detect_header_row(grid)
+        headers = [('' if c is None else str(c)).strip() for c in grid[hidx]]
+        named = [h for h in headers if h]
+        data_rows = grid[hidx + 1:]
+        mapping = guess_mapping(headers)
+        preview = []
+        for cells in data_rows[:5]:
+            preview.append({
+                headers[i]: (cells[i] if i < len(cells) else None)
+                for i in range(len(headers)) if headers[i]
+            })
+        row_count = sum(
+            1 for cells in data_rows
+            if any(c not in (None, '') for c in cells)
+        )
+        return jsonify({
+            'headerRowIndex': hidx,
+            'theirColumns': named,
+            'suggestedMapping': {h: mapping.get(h) for h in named},
+            'previewRows': preview,
+            'rowCount': row_count,
+        })
+    except Exception as e:
+        current_app.logger.exception("Patch import analyze failed")
+        return jsonify({'error': str(e)}), 500
 
 
 @bp.route('/api/fixtures/import-excel', methods=['POST'])
