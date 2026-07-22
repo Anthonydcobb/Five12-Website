@@ -46,6 +46,32 @@ ALERT_RULES = [
     ('packsOnline', 'eq', 0, 'No beltpacks online', 'warn'),
 ]
 
+# ── Signal quality — mirrors Riedel's OWN getSignalIconClass/getSignalTooltip ──
+# (verified in the GUI bundle app-028c6fe2a3.js). `signalLevel` in
+# /rest/nodeStatus is Riedel's BP_SIGNAL_LEVELS enum, NOT a raw 0/1 scale: the
+# GUI maps it straight to bars (icon-radiolevel_N) + a word, and does NOT
+# consult `timeslots` at all. We reproduce that mapping exactly:
+#
+#   level 0 EXCELLENT -> icon-radiolevel_4  "Excellent"
+#   level 1 GOOD      -> icon-radiolevel_3  "Good"
+#   level 2 MEDIUM    -> icon-radiolevel_2  "Medium"
+#   level 3 BAD       -> icon-radiolevel_1  "Bad"
+#   0xFF   INVALID    -> icon-radiolevel_off "Not Connected"
+SIGNAL_LEVELS = {
+    0: (4, 'Excellent'),
+    1: (3, 'Good'),
+    2: (2, 'Medium'),
+    3: (1, 'Bad'),
+}
+SIGNAL_NOT_CONNECTED = (0, 'Not Connected')  # BP_SIGNAL_LEVELS.INVALID (0xFF)
+
+
+def _signal_quality(signal_level):
+    """Map a pack's raw signalLevel enum to (bars 0-4, label), matching the
+    Bolero GUI exactly. Any value outside 0-3 (0xFF INVALID, missing, unknown)
+    reads as 'Not Connected' / 0 bars — the GUI's INVALID case."""
+    return SIGNAL_LEVELS.get(signal_level, SIGNAL_NOT_CONNECTED)
+
 
 class BoleroAdapter(DeviceAdapter):
     id = 'bolero'
@@ -149,6 +175,7 @@ class BoleroAdapter(DeviceAdapter):
             for bp in packs:
                 batt = bp.get('battery', {}) or {}
                 pid = bp.get('id')
+                sig_bars, sig_label = _signal_quality(bp.get('signalLevel'))
                 beltpacks.append({
                     'id': pid,
                     'name': name_map.get(pid) or f'Pack {pid}',
@@ -157,6 +184,8 @@ class BoleroAdapter(DeviceAdapter):
                     'healthPct': batt.get('batteryHealth'),
                     'tempC': batt.get('batteryTemperature'),
                     'charging': bool(batt.get('usbPower')),
+                    'signalQuality': sig_bars,
+                    'signalLabel': sig_label,
                     'antenna': aname,
                     'online': True,
                 })
@@ -176,11 +205,15 @@ class BoleroAdapter(DeviceAdapter):
     def _sim_status(self):
         t = time.time() - self._sim_t0
         crew = ['Stage Mgr', 'A1 Audio', 'LX Op', 'Camera 1', 'Camera 2', 'Grip']
+        sig_levels = [0, 0, 1, 0, 2, 3]                 # a plausible spread of enums
         packs = []
         for i, name in enumerate(crew):
             start = 95 - i * 9
             drain = t / 60 * (0.55 + i * 0.13)          # %/min, varies per pack
             batt = max(2, round(start - drain))
+            online = not (i == 5 and int(t / 240) % 2 == 1)   # grip wanders off
+            level = sig_levels[i] if online else 0xFF   # offline reads Not Connected
+            sig_bars, sig_label = _signal_quality(level)
             packs.append({
                 'id': i + 1, 'name': name,
                 'batteryPct': batt,
@@ -188,8 +221,10 @@ class BoleroAdapter(DeviceAdapter):
                 'healthPct': max(70, 100 - i * 3),
                 'tempC': round(28 + 6 * math.sin(t / 91 + i), 1),
                 'charging': i == 0 and int(t / 120) % 2 == 1,   # SM docks now and then
+                'signalQuality': sig_bars,
+                'signalLabel': sig_label,
                 'antenna': 'ANT-A' if i % 2 == 0 else 'ANT-B',
-                'online': not (i == 5 and int(t / 240) % 2 == 1),  # grip wanders off
+                'online': online,
             })
         ptp_glitch = 55 < (t % 300) < 70                 # brief PTP loss every 5 min
         antennas = [

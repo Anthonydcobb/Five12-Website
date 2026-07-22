@@ -77,6 +77,36 @@ def test_beltpack_battery_fields_mapped(adapter):
     assert a['online'] is True             # present in a node's bp[]
 
 
+def test_signal_quality_mapped_from_level(adapter):
+    """Both real fixtures report signalLevel 0 -> EXCELLENT -> 4 bars, matching
+    the Bolero GUI's getSignalIconClass/getSignalTooltip."""
+    packs = {p['name']: p for p in _norm(adapter)['beltpacks']}
+    assert packs['Anthony']['signalQuality'] == 4
+    assert packs['Anthony']['signalLabel'] == 'Excellent'
+    assert packs['TSB']['signalQuality'] == 4
+    assert packs['TSB']['signalLabel'] == 'Excellent'
+
+
+@pytest.mark.parametrize('level,bars,label', [
+    (0, 4, 'Excellent'),        # BP_SIGNAL_LEVELS.EXCELLENT
+    (1, 3, 'Good'),             # GOOD
+    (2, 2, 'Medium'),           # MEDIUM
+    (3, 1, 'Bad'),              # BAD
+    (0xFF, 0, 'Not Connected'), # INVALID (255)
+    (None, 0, 'Not Connected'), # field absent -> INVALID
+    (7, 0, 'Not Connected'),    # any unknown level -> INVALID
+])
+def test_signal_level_enum_matches_riedel(adapter, level, bars, label):
+    """The full signalLevel enum maps exactly as Riedel's app bundle does."""
+    ns = {'nodeStatus': [
+        {'nodeId': 132651929, 'ptpStatus': {'lockState': 2},
+         'bp': [{'id': 34, 'battery': {'status': 50}, 'signalLevel': level}]},
+    ]}
+    p = adapter._normalize(ns, NODE_CONFIG, {34: 'X'})['beltpacks'][0]
+    assert p['signalQuality'] == bars
+    assert p['signalLabel'] == label
+
+
 def test_charging_flag_from_usb_power(adapter):
     tsb = next(p for p in _norm(adapter)['beltpacks'] if p['name'] == 'TSB')
     assert tsb['charging'] is True         # usbPower 1
@@ -125,3 +155,5 @@ def test_sim_still_produces_the_contract():
     assert s['available'] and s['source'] == 'sim'
     for p in s['beltpacks']:
         assert 'healthPct' in p and 'charging' in p and 'batteryPct' in p
+        assert 'signalQuality' in p and 'signalLabel' in p
+        assert 0 <= p['signalQuality'] <= 4

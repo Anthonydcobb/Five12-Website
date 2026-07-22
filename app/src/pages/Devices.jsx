@@ -169,6 +169,28 @@ function BatteryBar({ pct }) {
   );
 }
 
+// Signal quality mirrors the Bolero GUI: 0–4 bars + a word (Excellent/Good/
+// Medium/Bad/Not Connected). Riedel colors 2–4 bars "happy", 1 bar "bad",
+// 0 bars "off" — reproduced here with the app's theme tokens.
+function SignalBars({ quality, label }) {
+  const q = quality ?? 0;
+  const color = q >= 2 ? 'var(--color-online)' : q === 1 ? 'var(--color-brand-hi)' : 'var(--color-text-muted)';
+  return (
+    <div className="flex items-center gap-1.5" title={label ?? ''}>
+      <div className="flex items-end gap-[1px] h-3" aria-label={`signal ${q} of 4`}>
+        {[1, 2, 3, 4].map((n) => (
+          <div
+            key={n}
+            style={{ height: `${n * 25}%`, background: n <= q ? color : 'var(--color-surface)' }}
+            className="w-[3px] rounded-[1px]"
+          />
+        ))}
+      </div>
+      <span className="text-[9px]" style={{ color }}>{label ?? '—'}</span>
+    </div>
+  );
+}
+
 function BoleroPanel({ sim }) {
   const { status, history } = useDevice('bolero', sim);
   if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
@@ -192,8 +214,9 @@ function BoleroPanel({ sim }) {
           <thead>
             <tr className="text-text-muted text-left text-[7px] uppercase tracking-widest">
               <th className="py-0.5 font-normal">Pack</th><th className="font-normal">Battery</th>
-              <th className="font-normal">Health</th><th className="font-normal">Antenna</th>
-              <th className="font-normal">Temp</th><th className="font-normal">State</th>
+              <th className="font-normal">Signal</th><th className="font-normal">Health</th>
+              <th className="font-normal">Antenna</th><th className="font-normal">Temp</th>
+              <th className="font-normal">State</th>
             </tr>
           </thead>
           <tbody>
@@ -201,6 +224,7 @@ function BoleroPanel({ sim }) {
               <tr key={p.id} className={'border-t border-[var(--color-surface)] ' + (p.online ? '' : 'opacity-40')}>
                 <td className="py-1 text-text">{p.name}</td>
                 <td><BatteryBar pct={p.batteryPct} /></td>
+                <td><SignalBars quality={p.signalQuality} label={p.signalLabel} /></td>
                 <td className="text-text-muted">{p.healthPct != null ? p.healthPct + '%' : '—'}</td>
                 <td className="text-text-muted">{p.antenna ?? '—'}</td>
                 <td className="text-text-muted">{p.tempC != null ? p.tempC + '°C' : '—'}</td>
