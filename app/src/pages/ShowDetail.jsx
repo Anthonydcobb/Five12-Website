@@ -73,7 +73,7 @@ export default function ShowDetail() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white">
+    <div className="flex min-h-[calc(100vh-4rem)] text-text">
       <ShowSidebar shows={shows} onCreate={handleCreateShow} />
       <main className="flex-1 p-6 flex flex-col">
         <div className="flex items-center mb-6">
@@ -82,19 +82,19 @@ export default function ShowDetail() {
           </h1>
           <button
             onClick={() => setShowPatchModal(true)}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded mr-4"
+            className="px-4 py-2 bg-online hover:brightness-110 text-bg font-semibold rounded mr-4 transition"
           >
             + Create Patch Sheet
           </button>
           <button
             onClick={() => navigate('/database')}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded mr-4"
+            className="px-4 py-2 bg-surface-2 hover:bg-border border border-border rounded mr-4 transition-colors"
           >
             Edit Database
           </button>
           <button
             onClick={handleDeleteShow}
-            className="px-4 py-2 bg-red-700 hover:bg-red-600 rounded text-white"
+            className="px-4 py-2 bg-brand hover:bg-brand-hi rounded text-white transition-colors"
           >
             Delete Show
           </button>
@@ -105,13 +105,13 @@ export default function ShowDetail() {
               <li key={p.id} className="flex items-center gap-2">
                 <button
                   onClick={() => navigate(`/patch/${showId}/${p.id}`)}
-                  className="flex-1 text-left px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded"
+                  className="flex-1 text-left px-3 py-2 bg-surface-2 hover:bg-border rounded transition-colors"
                 >
                   {p.name}
                 </button>
                 <button
                   onClick={(e) => handleDeletePatch(p.id, p.name, e)}
-                  className="px-2 py-2 text-gray-400 hover:text-red-400 hover:bg-gray-700 rounded text-sm"
+                  className="px-2 py-2 text-text-muted hover:text-brand-hi hover:bg-surface-2 rounded text-sm"
                   title="Delete patch sheet"
                 >
                   ✕
@@ -119,31 +119,33 @@ export default function ShowDetail() {
               </li>
             ))
           ) : (
-            <li className="text-gray-500">No patch sheets yet.</li>
+            <li className="text-text-muted">No patch sheets yet.</li>
           )}
         </ul>
 
         {showPatchModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-            <div className="bg-gray-800 p-6 rounded-lg w-1/3">
-              <h3 className="text-xl font-semibold mb-4 text-white">New Patch Sheet Name</h3>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-surface border border-border p-6 rounded-lg w-1/3 shadow-xl">
+              <h3 className="text-xl font-semibold mb-4">New Patch Sheet Name</h3>
               <input
                 type="text"
                 value={newPatchName}
                 onChange={e => setNewPatchName(e.target.value)}
-                className="w-full mb-4 px-3 py-2 bg-gray-700 text-white rounded"
+                onKeyDown={e => e.key === 'Enter' && handleCreatePatch()}
+                className="w-full mb-4 px-3 py-2 bg-bg border border-border rounded focus:outline-none focus:border-brand"
                 placeholder="Enter patch sheet name"
+                autoFocus
               />
               <div className="flex justify-end space-x-3">
                 <button
                   onClick={() => setShowPatchModal(false)}
-                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded"
+                  className="px-4 py-2 bg-surface-2 hover:bg-border rounded"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreatePatch}
-                  className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-white font-medium"
+                  className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded font-semibold"
                 >
                   OK
                 </button>

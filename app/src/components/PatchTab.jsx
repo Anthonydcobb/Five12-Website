@@ -57,7 +57,8 @@ export default function PatchTab({
     return sortConfig.direction === 'desc' ? sorted.reverse() : sorted;
   }, [rows, sortConfig]);
 
-  const palette = ['#93C5FD', '#86EFAC', '#FCD34D', '#F9A8D4', '#C4B5FD', '#6EE7B7', '#FCA5A5'];
+  // Dark, saturated tones for "color by" so light cell text stays legible.
+  const palette = ['#3b5b8c', '#3d6b52', '#8c6d3b', '#7a4a6b', '#4a4a8c', '#3d6b6b', '#8c4a4a'];
   const colorValues = colorBy ? [...new Set(rows.map(r => r[colorBy]))] : [];
   const colorMap = colorValues.reduce((acc, v, i) => ({ ...acc, [v]: palette[i % palette.length] }), {});
 
@@ -230,14 +231,14 @@ export default function PatchTab({
             }
           }}
           placeholder="101 > 105  or  201"
-          className="w-48 px-3 py-1.5 bg-gray-700 border border-gray-600 text-white text-sm rounded placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+          className="w-48 px-3 py-1.5 bg-surface-2 border border-border text-text text-sm rounded placeholder-text-muted focus:outline-none focus:border-brand font-mono"
         />
 
         <div className="flex items-center gap-2">
           <button
             onMouseDown={e => e.stopPropagation()}
             onClick={() => setShowPatchForm(true)}
-            className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded font-medium"
+            className="px-3 py-1.5 bg-online hover:brightness-110 text-bg text-sm rounded font-medium"
           >
             Patch
           </button>
@@ -245,7 +246,7 @@ export default function PatchTab({
             onMouseDown={e => e.stopPropagation()}
             onClick={() => setShowRepatchForm(true)}
             disabled={!selectedRowIds.length}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded font-medium disabled:opacity-40"
+            className="px-3 py-1.5 bg-gel hover:brightness-110 text-bg text-sm rounded font-medium disabled:opacity-40"
           >
             Re-Patch
           </button>
@@ -253,7 +254,7 @@ export default function PatchTab({
             onMouseDown={e => e.stopPropagation()}
             onClick={() => onUnpatch(selectedRowIds)}
             disabled={!selectedRowIds.length}
-            className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded font-medium disabled:opacity-40"
+            className="px-3 py-1.5 bg-warn hover:brightness-110 text-bg text-sm rounded font-medium disabled:opacity-40"
           >
             Unpatch
           </button>
@@ -261,23 +262,23 @@ export default function PatchTab({
             onMouseDown={e => e.stopPropagation()}
             onClick={() => { onRemoveFixture(selectedRowIds); setSelectedCells(new Set()); }}
             disabled={!selectedRowIds.length}
-            className="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white text-sm rounded font-medium disabled:opacity-40"
+            className="px-3 py-1.5 bg-brand hover:bg-brand-hi text-white text-sm rounded font-medium disabled:opacity-40"
           >
             Remove
           </button>
         </div>
 
         {selectedRowIds.length > 0 && (
-          <span className="text-gray-400 text-sm">{selectedRowIds.length} selected</span>
+          <span className="text-text-muted text-sm">{selectedRowIds.length} selected</span>
         )}
 
         <div className="ml-auto flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-gray-300">
+          <label className="flex items-center gap-2 text-sm text-text">
             Color by
             <select
               value={colorBy}
               onChange={e => setColorBy(e.target.value)}
-              className="bg-gray-700 border border-gray-600 text-white text-sm rounded px-2 py-1 focus:outline-none"
+              className="bg-surface-2 border border-border text-text text-sm rounded px-2 py-1 focus:outline-none"
             >
               <option value="">None</option>
               <option value="type">Fixture Type</option>
@@ -286,11 +287,11 @@ export default function PatchTab({
             </select>
           </label>
 
-          <label className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded cursor-pointer">
+          <label className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded cursor-pointer">
             Import
             <input type="file" accept=".xlsx" onChange={handleImport} className="hidden" />
           </label>
-          <button onClick={handleExport} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded">
+          <button onClick={handleExport} className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded">
             Export
           </button>
         </div>
@@ -300,7 +301,7 @@ export default function PatchTab({
       {colorBy && colorValues.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {colorValues.map(v => (
-            <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-0.5 rounded text-xs text-gray-900 font-medium">
+            <span key={v} style={{ backgroundColor: colorMap[v] }} className="px-2 py-0.5 rounded text-xs text-text font-medium">
               {v || 'Unset'}
             </span>
           ))}
@@ -308,22 +309,22 @@ export default function PatchTab({
       )}
 
       {/* Table */}
-      <div ref={tableRef} className="overflow-auto rounded border border-gray-600 shadow">
+      <div ref={tableRef} className="overflow-auto rounded border border-border shadow">
         <table className="min-w-full text-sm border-collapse">
           <thead>
-            <tr className="bg-gray-700 text-gray-200 sticky top-0">
-              <th className="w-9 px-2 py-2 border-b border-gray-600" />
+            <tr className="bg-surface-2 text-text sticky top-0">
+              <th className="w-9 px-2 py-2 border-b border-border" />
               {COLS.map(col => (
                 <th
                   key={col.key}
                   onClick={() => col.sortable && handleSort(col.key)}
-                  className={`px-3 py-2 border-b border-gray-600 text-left whitespace-nowrap text-xs font-semibold uppercase tracking-wide ${
-                    col.sortable ? 'cursor-pointer hover:bg-gray-600 select-none' : ''
+                  className={`px-3 py-2 border-b border-border text-left whitespace-nowrap text-xs font-semibold uppercase tracking-wide ${
+                    col.sortable ? 'cursor-pointer hover:bg-border select-none' : ''
                   }`}
                 >
                   {col.label}
                   {sortConfig.key === col.key && sortConfig.direction && (
-                    <span className="ml-1 text-blue-400">
+                    <span className="ml-1 text-gel">
                       {sortConfig.direction === 'asc' ? '▲' : '▼'}
                     </span>
                   )}
@@ -338,22 +339,22 @@ export default function PatchTab({
               const hasConflict = conflictIds.has(r.id);
               const bgColor = colorBy ? colorMap[r[colorBy]] : null;
 
-              let rowClass = idx % 2 === 0 ? 'bg-white' : 'bg-blue-50';
-              if (rowSelected) rowClass = 'bg-blue-200';
-              else if (hasConflict) rowClass = 'bg-red-100';
+              let rowClass = idx % 2 === 0 ? 'bg-surface' : 'bg-surface-2';
+              if (rowSelected) rowClass = 'bg-gel/15';
+              else if (hasConflict) rowClass = 'bg-brand-dim/50';
               else if (bgColor) rowClass = '';
 
               return (
                 <tr
                   key={r.id}
-                  className={`border-b border-gray-200 ${rowClass}`}
+                  className={`border-b border-border ${rowClass}`}
                   style={bgColor && !rowSelected && !hasConflict ? { backgroundColor: bgColor } : {}}
                 >
-                  <td className="px-2 py-1 border-r border-gray-200 text-center">
+                  <td className="px-2 py-1 border-r border-border text-center">
                     <button
                       onClick={e => { e.stopPropagation(); toggleRow(r.id); }}
                       className={`w-4 h-4 rounded border flex items-center justify-center mx-auto text-xs ${
-                        rowSelected ? 'bg-blue-500 border-blue-500 text-white' : 'border-gray-400 hover:border-gray-600'
+                        rowSelected ? 'bg-gel border-gel text-bg' : 'border-border hover:border-muted'
                       }`}
                     >
                       {rowSelected && '✓'}
@@ -367,8 +368,8 @@ export default function PatchTab({
                         key={col.key}
                         onMouseDown={() => onCellMouseDown(r.id, col.key)}
                         onMouseEnter={() => onCellMouseEnter(r.id, col.key)}
-                        className={`px-3 py-1 border-r border-gray-200 text-gray-900 ${
-                          cellSel ? 'bg-blue-300 outline outline-1 outline-blue-500' : ''
+                        className={`px-3 py-1 border-r border-border text-text ${
+                          cellSel ? 'bg-gel/25 outline outline-1 outline-gel' : ''
                         }`}
                       >
                         {col.editable ? (
@@ -399,10 +400,10 @@ export default function PatchTab({
                                 e.target.blur();
                               }
                             }}
-                            className="w-full bg-transparent focus:outline-none text-gray-900 min-w-0"
+                            className="w-full bg-transparent focus:outline-none text-text min-w-0"
                           />
                         ) : (
-                          <span className="block select-none text-gray-900">
+                          <span className="block select-none text-text">
                             {r[col.key] ?? ''}
                           </span>
                         )}
@@ -414,8 +415,8 @@ export default function PatchTab({
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={COLS.length + 1} className="px-4 py-10 text-center text-gray-400 bg-white">
-                  No fixtures patched yet. Click <span className="text-green-600 font-medium">Patch</span> to add fixtures.
+                <td colSpan={COLS.length + 1} className="px-4 py-10 text-center text-text-muted bg-surface">
+                  No fixtures patched yet. Click <span className="text-online font-medium">Patch</span> to add fixtures.
                 </td>
               </tr>
             )}

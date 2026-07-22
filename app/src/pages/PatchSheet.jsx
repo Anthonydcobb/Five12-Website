@@ -201,17 +201,17 @@ export default function PatchSheet() {
   const TABS = ['Patch', 'Universe View', 'Insights', 'Issues'];
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col">
+    <div className="min-h-screen bg-bg text-text flex flex-col">
 
       {/* Universe overflow dialog */}
       {overflowDialog && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-gray-600 rounded-lg p-6 w-80 shadow-xl">
-            <h3 className="text-white font-semibold mb-2">Universe Full</h3>
-            <p className="text-gray-300 text-sm mb-5 whitespace-pre-line">{overflowDialog}</p>
+          <div className="bg-surface border border-border rounded-lg p-6 w-80 shadow-xl">
+            <h3 className="text-text font-semibold mb-2">Universe Full</h3>
+            <p className="text-text text-sm mb-5 whitespace-pre-line">{overflowDialog}</p>
             <div className="flex justify-end gap-3">
-              <button onClick={() => { setOverflowDialog(null); overflowResolve.current?.(false); }} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm text-white">Cancel</button>
-              <button onClick={() => { setOverflowDialog(null); overflowResolve.current?.(true); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm text-white">Continue</button>
+              <button onClick={() => { setOverflowDialog(null); overflowResolve.current?.(false); }} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm text-text">Cancel</button>
+              <button onClick={() => { setOverflowDialog(null); overflowResolve.current?.(true); }} className="px-4 py-2 bg-brand hover:bg-brand-hi rounded text-sm text-text">Continue</button>
             </div>
           </div>
         </div>
@@ -220,15 +220,15 @@ export default function PatchSheet() {
       {/* Fixture number error dialog */}
       {fixtureNumError && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-red-500 rounded-lg p-6 w-96 shadow-xl">
-            <h3 className="text-red-400 font-semibold mb-3">Fixture Number Conflict</h3>
-            <p className="text-gray-300 text-sm mb-3">Fixture numbers must be unique.</p>
-            <div className="bg-gray-900 rounded p-3 text-sm mb-5 space-y-1">
-              <div className="text-gray-400">Fixture Type: <span className="text-white">{fixtureNumError.fixtureType}</span></div>
-              <div className="text-gray-400">Duplicate Number: <span className="text-red-400 font-mono font-bold">{fixtureNumError.number}</span></div>
+          <div className="bg-surface border border-brand rounded-lg p-6 w-96 shadow-xl">
+            <h3 className="text-brand-hi font-semibold mb-3">Fixture Number Conflict</h3>
+            <p className="text-text text-sm mb-3">Fixture numbers must be unique.</p>
+            <div className="bg-bg rounded p-3 text-sm mb-5 space-y-1">
+              <div className="text-text-muted">Fixture Type: <span className="text-text">{fixtureNumError.fixtureType}</span></div>
+              <div className="text-text-muted">Duplicate Number: <span className="text-brand-hi font-mono font-bold">{fixtureNumError.number}</span></div>
             </div>
             <div className="flex justify-end">
-              <button onClick={() => setFixtureNumError(null)} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm text-white">OK</button>
+              <button onClick={() => setFixtureNumError(null)} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm text-text">OK</button>
             </div>
           </div>
         </div>
@@ -237,26 +237,26 @@ export default function PatchSheet() {
       {/* Address conflict error dialog */}
       {conflictError && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 border border-red-500 rounded-lg p-6 w-96 shadow-xl">
-            <h3 className="text-red-400 font-semibold mb-3">Address Conflict</h3>
-            <p className="text-gray-300 text-sm mb-3">
-              <span className="text-white font-medium">{conflictError.fixtureType}</span> cannot be patched here. The following fixture is in the way:
+          <div className="bg-surface border border-brand rounded-lg p-6 w-96 shadow-xl">
+            <h3 className="text-brand-hi font-semibold mb-3">Address Conflict</h3>
+            <p className="text-text text-sm mb-3">
+              <span className="text-text font-medium">{conflictError.fixtureType}</span> cannot be patched here. The following fixture is in the way:
             </p>
-            <div className="bg-gray-900 rounded p-3 text-sm mb-5 space-y-1">
-              <div className="text-gray-400">Fix #: <span className="text-white font-mono">{conflictError.blockingFixture.fixture}</span></div>
-              <div className="text-gray-400">Fixture: <span className="text-white">{conflictError.blockingFixture.type}</span></div>
-              <div className="text-gray-400">Addresses: <span className="text-white">{conflictError.blockingFixture.address}–{conflictError.blockingFixture.endAddress}</span></div>
+            <div className="bg-bg rounded p-3 text-sm mb-5 space-y-1">
+              <div className="text-text-muted">Fix #: <span className="text-text font-mono">{conflictError.blockingFixture.fixture}</span></div>
+              <div className="text-text-muted">Fixture: <span className="text-text">{conflictError.blockingFixture.type}</span></div>
+              <div className="text-text-muted">Addresses: <span className="text-text">{conflictError.blockingFixture.address}–{conflictError.blockingFixture.endAddress}</span></div>
             </div>
             <div className="flex justify-end">
-              <button onClick={() => setConflictError(null)} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm text-white">OK</button>
+              <button onClick={() => setConflictError(null)} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm text-text">OK</button>
             </div>
           </div>
         </div>
       )}
 
       {/* Page header */}
-      <div className="px-6 pt-5 pb-0 border-b border-gray-700">
-        <div className="text-xs text-gray-500 uppercase tracking-wider mb-3">
+      <div className="px-6 pt-5 pb-0 border-b border-border">
+        <div className="text-xs text-text-muted uppercase tracking-wider mb-3">
           {showName} / {patchName}
         </div>
         <div className="flex gap-1">
@@ -266,13 +266,13 @@ export default function PatchSheet() {
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 text-sm rounded-t-md transition-colors relative ${
                 activeTab === tab
-                  ? 'bg-gray-800 text-white font-medium'
-                  : 'text-gray-500 hover:text-gray-300'
+                  ? 'bg-surface text-text font-medium'
+                  : 'text-text-muted hover:text-text'
               }`}
             >
               {tab}
               {tab === 'Issues' && conflicts.length > 0 && (
-                <span className="ml-1.5 bg-red-500 text-white text-xs px-1.5 py-0.5 rounded-full font-mono">
+                <span className="ml-1.5 bg-brand text-text text-xs px-1.5 py-0.5 rounded-full font-mono">
                   {conflicts.length}
                 </span>
               )}
@@ -282,7 +282,7 @@ export default function PatchSheet() {
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 bg-gray-800 p-6">
+      <div className="flex-1 bg-surface p-6">
         {activeTab === 'Patch' && (
           <PatchTab
             patchId={patchId}
@@ -304,16 +304,16 @@ export default function PatchSheet() {
         )}
         {activeTab === 'Issues' && (
           <div>
-            <h2 className="text-base font-semibold text-red-400 mb-4">
+            <h2 className="text-base font-semibold text-brand-hi mb-4">
               Address Conflicts {conflicts.length > 0 && `(${conflicts.length})`}
             </h2>
             {conflicts.length === 0 ? (
-              <p className="text-green-400 text-sm">No conflicts detected.</p>
+              <p className="text-online text-sm">No conflicts detected.</p>
             ) : (
               <ul className="space-y-2">
                 {conflicts.map((c, i) => (
-                  <li key={i} className="bg-red-900/40 border border-red-700/50 px-4 py-3 rounded text-sm text-gray-200">
-                    <span className="font-medium text-white">Universe {c.fixtureA.universe}: </span>
+                  <li key={i} className="bg-brand-dim/40 border border-brand/50 px-4 py-3 rounded text-sm text-text">
+                    <span className="font-medium text-text">Universe {c.fixtureA.universe}: </span>
                     Fix #{c.fixtureA.fixture} ({c.fixtureA.type}) at {c.fixtureA.address}–{c.fixtureA.endAddress}
                     {' '}overlaps Fix #{c.fixtureB.fixture} ({c.fixtureB.type}) at {c.fixtureB.address}–{c.fixtureB.endAddress}
                   </li>

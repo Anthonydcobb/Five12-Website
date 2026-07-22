@@ -40,12 +40,12 @@ export default function ShowSidebar({ shows, onCreate }) {
       <aside
         ref={sidebarRef}
         style={{ width }}
-        className="bg-gray-800 p-6 flex-shrink-0 relative"
+        className="bg-surface border-r border-border p-6 flex-shrink-0 relative"
       >
         <h2 className="text-2xl font-bold mb-4">My Shows</h2>
         <button
           onClick={() => setShowModal(true)}
-          className="w-full mb-6 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-lg font-medium"
+          className="w-full mb-6 px-4 py-2 bg-brand hover:bg-brand-hi text-white rounded text-lg font-medium transition-colors"
         >
           + Create New Show
         </button>
@@ -55,43 +55,45 @@ export default function ShowSidebar({ shows, onCreate }) {
               <li key={show.id}>
                 <Link
                   to={`/patch/${show.id}`}
-                  className="block px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded"
+                  className="block px-3 py-2 bg-surface-2 hover:bg-border rounded transition-colors"
                 >
                   {show.name}
                 </Link>
               </li>
             ))
           ) : (
-            <li className="text-gray-500">No shows created yet.</li>
+            <li className="text-text-muted">No shows created yet.</li>
           )}
         </ul>
         <div
           onMouseDown={handleMouseDown}
-          className="absolute top-0 right-0 h-full w-1 cursor-ew-resize"
+          className="absolute top-0 right-0 h-full w-1 cursor-ew-resize hover:bg-brand/40"
         />
       </aside>
 
       {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          <div className="bg-gray-800 p-6 rounded-lg w-1/3">
-            <h3 className="text-xl font-semibold mb-4 text-white">New Show Name</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-surface border border-border p-6 rounded-lg w-1/3 shadow-xl">
+            <h3 className="text-xl font-semibold mb-4">New Show Name</h3>
             <input
               type="text"
               value={newShowName}
               onChange={e => setNewShowName(e.target.value)}
-              className="w-full mb-4 px-3 py-2 bg-gray-700 text-white rounded"
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+              className="w-full mb-4 px-3 py-2 bg-bg border border-border rounded focus:outline-none focus:border-brand"
               placeholder="Enter show name"
+              autoFocus
             />
             <div className="flex justify-end space-x-3">
               <button
                 onClick={() => setShowModal(false)}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded"
+                className="px-4 py-2 bg-surface-2 hover:bg-border rounded"
               >
                 Cancel
               </button>
               <button
                 onClick={handleSubmit}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 rounded text-white font-medium"
+                className="px-4 py-2 bg-brand hover:bg-brand-hi rounded text-white font-medium"
               >
                 OK
               </button>

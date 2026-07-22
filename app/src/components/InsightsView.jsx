@@ -58,9 +58,9 @@ export default function InsightsView({ rows }) {
           { label: 'Total Channels', value: totalChannels },
           { label: 'Total Wattage', value: `${stats.totalWattage.toLocaleString()} W` },
         ].map(s => (
-          <div key={s.label} className="bg-gray-700 rounded-lg p-4">
-            <div className="text-2xl font-bold text-white">{s.value}</div>
-            <div className="text-xs text-gray-400 mt-1 uppercase tracking-wide">{s.label}</div>
+          <div key={s.label} className="bg-surface rounded-lg p-4">
+            <div className="text-2xl font-bold text-text">{s.value}</div>
+            <div className="text-xs text-text-muted mt-1 uppercase tracking-wide">{s.label}</div>
           </div>
         ))}
       </div>
@@ -68,10 +68,10 @@ export default function InsightsView({ rows }) {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
         {/* Fixture types */}
-        <div className="bg-gray-700 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-4">Fixture Types</h3>
+        <div className="bg-surface rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text uppercase tracking-wide mb-4">Fixture Types</h3>
           {sortedTypes.length === 0 ? (
-            <p className="text-gray-500 text-sm">No data</p>
+            <p className="text-text-muted text-sm">No data</p>
           ) : (
             <div className="space-y-3">
               {sortedTypes.map(([type, count]) => {
@@ -79,11 +79,11 @@ export default function InsightsView({ rows }) {
                 return (
                   <div key={type}>
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="text-gray-300 truncate">{type}</span>
-                      <span className="text-white font-mono ml-3">{count} <span className="text-gray-500 text-xs">({pct}%)</span></span>
+                      <span className="text-text truncate">{type}</span>
+                      <span className="text-text font-mono ml-3">{count} <span className="text-text-muted text-xs">({pct}%)</span></span>
                     </div>
-                    <div className="w-full bg-gray-600 rounded-full h-1.5">
-                      <div className="h-1.5 bg-green-400 rounded-full" style={{ width: `${pct}%` }} />
+                    <div className="w-full bg-border rounded-full h-1.5">
+                      <div className="h-1.5 bg-online rounded-full" style={{ width: `${pct}%` }} />
                     </div>
                   </div>
                 );
@@ -93,10 +93,10 @@ export default function InsightsView({ rows }) {
         </div>
 
         {/* Universe usage */}
-        <div className="bg-gray-700 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-4">Universe Usage</h3>
+        <div className="bg-surface rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text uppercase tracking-wide mb-4">Universe Usage</h3>
           {sortedUniverses.length === 0 ? (
-            <p className="text-gray-500 text-sm">No patched fixtures</p>
+            <p className="text-text-muted text-sm">No patched fixtures</p>
           ) : (
             <div className="space-y-3">
               {sortedUniverses.map(([univ, ch]) => {
@@ -105,14 +105,14 @@ export default function InsightsView({ rows }) {
                 return (
                   <div key={univ}>
                     <div className="flex justify-between text-sm mb-1">
-                      <span className="text-gray-300">Universe {univ}</span>
-                      <span className={`font-mono ${over ? 'text-red-400' : 'text-white'}`}>
+                      <span className="text-text">Universe {univ}</span>
+                      <span className={`font-mono ${over ? 'text-brand-hi' : 'text-text'}`}>
                         {ch} / 512 ch
                       </span>
                     </div>
-                    <div className="w-full bg-gray-600 rounded-full h-1.5">
+                    <div className="w-full bg-border rounded-full h-1.5">
                       <div
-                        className={`h-1.5 rounded-full ${over ? 'bg-red-500' : 'bg-blue-400'}`}
+                        className={`h-1.5 rounded-full ${over ? 'bg-brand' : 'bg-gel'}`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
@@ -126,21 +126,21 @@ export default function InsightsView({ rows }) {
 
       {/* By Location */}
       {Object.keys(stats.byLocation).length > 0 && (
-        <div className="bg-gray-700 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-4">By Location</h3>
+        <div className="bg-surface rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text uppercase tracking-wide mb-4">By Location</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-xs text-gray-400 uppercase tracking-wide border-b border-gray-600">
+                <tr className="text-xs text-text-muted uppercase tracking-wide border-b border-border">
                   <th className="pb-2 text-left font-semibold">Location</th>
                   <th className="pb-2 text-left font-semibold px-4">Universes</th>
                   <th className="pb-2 text-right font-semibold px-4">Channels</th>
                   <th className="pb-2 text-right font-semibold">Fixtures</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-600">
+              <tbody className="divide-y divide-border">
                 {Object.entries(stats.byLocation).sort().map(([loc, d]) => (
-                  <tr key={loc} className="text-gray-300">
+                  <tr key={loc} className="text-text">
                     <td className="py-2">{loc}</td>
                     <td className="py-2 px-4 font-mono text-xs">{d.universes.join(', ') || '—'}</td>
                     <td className="py-2 px-4 text-right font-mono">{d.channels}</td>
@@ -155,21 +155,21 @@ export default function InsightsView({ rows }) {
 
       {/* By Set */}
       {Object.keys(stats.bySet).length > 0 && (
-        <div className="bg-gray-700 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wide mb-4">By Set</h3>
+        <div className="bg-surface rounded-lg p-4">
+          <h3 className="text-sm font-semibold text-text uppercase tracking-wide mb-4">By Set</h3>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="text-xs text-gray-400 uppercase tracking-wide border-b border-gray-600">
+                <tr className="text-xs text-text-muted uppercase tracking-wide border-b border-border">
                   <th className="pb-2 text-left font-semibold">Set</th>
                   <th className="pb-2 text-left font-semibold px-4">Universes</th>
                   <th className="pb-2 text-right font-semibold px-4">Channels</th>
                   <th className="pb-2 text-right font-semibold">Fixtures</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-600">
+              <tbody className="divide-y divide-border">
                 {Object.entries(stats.bySet).sort().map(([set, d]) => (
-                  <tr key={set} className="text-gray-300">
+                  <tr key={set} className="text-text">
                     <td className="py-2">{set}</td>
                     <td className="py-2 px-4 font-mono text-xs">{d.universes.join(', ') || '—'}</td>
                     <td className="py-2 px-4 text-right font-mono">{d.channels}</td>

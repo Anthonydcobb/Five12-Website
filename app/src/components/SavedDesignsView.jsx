@@ -10,7 +10,7 @@ export default function SavedDesignsView({ templates, onSelect }) {
           <li key={t.id}>
             <button
               onClick={() => onSelect(t)}
-              className="w-full text-left px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded"
+              className="w-full text-left px-3 py-2 bg-surface-2 hover:bg-surface-2 rounded"
             >
               {t.name}
             </button>

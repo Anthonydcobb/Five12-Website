@@ -41,7 +41,7 @@ export default function BlankTemplatesView({ onSelectTpl }) {
               <span className="text-sm">{tpl.name}</span>
               <button
                 onClick={() => onSelectTpl(tpl)}
-                className="px-2 py-1 bg-blue-600 text-white rounded text-sm"
+                className="px-2 py-1 bg-brand text-white rounded text-sm"
               >
                 Use
               </button>

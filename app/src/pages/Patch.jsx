@@ -25,10 +25,10 @@ export default function Patch() {
   };
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white">
+    <div className="flex min-h-[calc(100vh-4rem)] text-text">
       <ShowSidebar shows={shows} onCreate={handleCreateShow} />
       <main className="flex-1 p-10">
-        <p className="text-gray-400">Select or create a show to get started.</p>
+        <p className="text-text-muted">Select or create a show to get started.</p>
       </main>
     </div>
   );

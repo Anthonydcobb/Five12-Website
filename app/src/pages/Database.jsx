@@ -128,17 +128,17 @@ export default function Database() {
   }, [rows]);
 
   return (
-    <div className="p-6 bg-gray-900 min-h-screen text-white">
+    <div className="p-6 bg-bg min-h-screen text-white">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Lighting Database</h1>
         <div className="flex gap-4">
           <button
             onClick={addRow}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded"
+            className="px-4 py-2 bg-online hover:brightness-110 rounded"
           >
             + Add Row
           </button>
-          <label className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded cursor-pointer text-sm">
+          <label className="px-4 py-2 bg-brand hover:bg-brand-hi rounded cursor-pointer text-sm">
             Import Excel
             <input
               type="file"
@@ -150,9 +150,9 @@ export default function Database() {
         </div>
       </div>
       <div className="overflow-auto">
-        <table className="min-w-full table-auto bg-gray-800 rounded">
+        <table className="min-w-full table-auto bg-surface rounded">
           <thead>
-            <tr className="bg-gray-700">
+            <tr className="bg-surface-2">
               <th className="px-4 py-2 border">Fixture</th>
               <th className="px-4 py-2 border">Channel Count</th>
               <th className="px-4 py-2 border">Wattage</th>
@@ -164,7 +164,7 @@ export default function Database() {
           </thead>
           <tbody>
             {sortedRows.map(row => (
-              <tr key={row.id} className="even:bg-gray-800 odd:bg-gray-900">
+              <tr key={row.id} className="even:bg-surface odd:bg-bg">
                 {['fixture'].map(field => (
                   <td key={field} className="px-4 py-2 border">
                     <input
@@ -204,7 +204,7 @@ export default function Database() {
                 <td className="px-4 py-2 border text-center">
                   <button
                     onClick={() => deleteRow(row.id)}
-                    className="text-red-500 hover:text-red-700"
+                    className="text-brand-hi hover:text-brand"
                   >
                     Delete
                   </button>

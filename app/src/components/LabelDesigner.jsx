@@ -133,9 +133,9 @@ export default function LabelDesigner({
   const sel = selectedIdx != null ? config.fields[selectedIdx] : null;
 
   return (
-    <div className="flex h-full bg-gray-900 text-white">
+    <div className="flex h-full bg-bg text-white">
       {/* ── Sidebar ───────────────────────────────────────────── */}
-      <div className="w-1/5 bg-gray-800 p-4 overflow-auto">
+      <div className="w-1/5 bg-surface p-4 overflow-auto">
         <h3 className="font-semibold mb-3">Tools</h3>
         <h4 className="font-semibold mb-2">Shapes</h4>
         <ul className="space-y-2 mb-6">
@@ -144,7 +144,7 @@ export default function LabelDesigner({
               <div
                 draggable
                 onDragStart={e=>handleDragStart(e,s.key)}
-                className="cursor-move px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded"
+                className="cursor-move px-2 py-1 bg-surface-2 hover:bg-border rounded"
               >{s.label}</div>
             </li>
           ))}
@@ -156,7 +156,7 @@ export default function LabelDesigner({
               <div
                 draggable
                 onDragStart={e=>handleDragStart(e,f)}
-                className="cursor-move px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded"
+                className="cursor-move px-2 py-1 bg-surface-2 hover:bg-border rounded"
               >{f.replace(/_/g,' ')}</div>
             </li>
           ))}
@@ -168,7 +168,7 @@ export default function LabelDesigner({
 
         {/* ── Toolbar ─────────────────────────────────────────── */}
         <div
-          className="h-12 flex items-center bg-gray-800 px-4 border-b border-gray-700"
+          className="h-12 flex items-center bg-surface px-4 border-b border-border"
           onMouseDown={e=>e.stopPropagation()}
         >
           {sel ? (
@@ -177,7 +177,7 @@ export default function LabelDesigner({
                 <label className="text-sm">
                   Stroke W:
                   <input type="number" min="0"
-                    className="ml-2 w-12 bg-gray-700 text-white p-1 rounded"
+                    className="ml-2 w-12 bg-surface-2 text-white p-1 rounded"
                     value={sel.strokeWidth}
                     onChange={e=>updateField(selectedIdx,{strokeWidth:+e.target.value})}
                   />
@@ -204,7 +204,7 @@ export default function LabelDesigner({
                 <label className="text-sm">
                   Width:
                   <input type="number" min="1"
-                    className="ml-2 w-12 bg-gray-700 text-white p-1 rounded"
+                    className="ml-2 w-12 bg-surface-2 text-white p-1 rounded"
                     value={sel.strokeWidth}
                     onChange={e=>updateField(selectedIdx,{strokeWidth:+e.target.value})}
                   />
@@ -226,7 +226,7 @@ export default function LabelDesigner({
                     fontWeight: sel.fontWeight==='bold'?'normal':'bold'
                   })}
                   className={`px-2 py-1 font-bold rounded ${
-                    sel.fontWeight==='bold'?'bg-gray-600':''}`}
+                    sel.fontWeight==='bold'?'bg-border':''}`}
                 >B</button>
                 {/* Italic */}
                 <button
@@ -234,7 +234,7 @@ export default function LabelDesigner({
                     fontStyle: sel.fontStyle==='italic'?'normal':'italic'
                   })}
                   className={`px-2 py-1 italic rounded ml-2 ${
-                    sel.fontStyle==='italic'?'bg-gray-600':''}`}
+                    sel.fontStyle==='italic'?'bg-border':''}`}
                 >I</button>
                 {/* Underline */}
                 <button
@@ -243,13 +243,13 @@ export default function LabelDesigner({
                       sel.textDecoration==='underline'?'none':'underline'
                   })}
                   className={`px-2 py-1 underline rounded ml-2 ${
-                    sel.textDecoration==='underline'?'bg-gray-600':''}`}
+                    sel.textDecoration==='underline'?'bg-border':''}`}
                 >U</button>
 
                 <label className="text-sm ml-4">
                   Size:
                   <input type="number" min="1"
-                    className="ml-2 w-16 bg-gray-700 text-white p-1 rounded"
+                    className="ml-2 w-16 bg-surface-2 text-white p-1 rounded"
                     value={sel.fontSize}
                     onChange={e=>updateField(selectedIdx,{fontSize:+e.target.value})}
                   />
@@ -267,7 +267,7 @@ export default function LabelDesigner({
                 <label className="text-sm ml-4">
                   Font:
                   <select
-                    className="ml-2 bg-gray-700 text-white p-1 rounded"
+                    className="ml-2 bg-surface-2 text-white p-1 rounded"
                     value={sel.fontFamily}
                     onChange={e=>updateField(selectedIdx,{fontFamily:e.target.value})}
                   >
@@ -285,7 +285,7 @@ export default function LabelDesigner({
                       key={a}
                       onClick={()=>updateField(selectedIdx,{textAlign:a})}
                       title={a}
-                      className={`px-2 py-1 rounded text-xs ${sel.textAlign===a?'bg-gray-500':'bg-gray-700 hover:bg-gray-600'}`}
+                      className={`px-2 py-1 rounded text-xs ${sel.textAlign===a?'bg-border':'bg-surface-2 hover:bg-border'}`}
                     >
                       {a==='left'?'⬅':a==='center'?'⬛':'➡'}
                     </button>
@@ -294,7 +294,7 @@ export default function LabelDesigner({
               </>
             )
           ) : (
-            <span className="text-gray-400 italic">
+            <span className="text-text-muted italic">
               Select an element to edit its properties
             </span>
           )}
@@ -302,7 +302,7 @@ export default function LabelDesigner({
           {sel && (
             <button
               onClick={()=>setSelectedIdx(null)}
-              className="ml-auto bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded text-sm"
+              className="ml-auto bg-surface-2 hover:bg-border px-2 py-1 rounded text-sm"
             >
               Deselect
             </button>
@@ -333,12 +333,12 @@ export default function LabelDesigner({
                 <button
                   onClick={onPrev}
                   disabled={previewIndex === 0}
-                  className="px-2 py-1 bg-gray-700 text-white rounded disabled:opacity-50"
+                  className="px-2 py-1 bg-surface-2 text-white rounded disabled:opacity-50"
                 >◀</button>
                 <button
                   onClick={onNext}
                   disabled={previewIndex === previewTotal-1}
-                  className="px-2 py-1 bg-gray-700 text-white rounded disabled:opacity-50"
+                  className="px-2 py-1 bg-surface-2 text-white rounded disabled:opacity-50"
                 >▶</button>
               </div>
             )}
@@ -445,13 +445,13 @@ export default function LabelDesigner({
                     )}
                     {/* drag‐handle */}
                     {isText && selectedIdx===idx && (
-                      <div className="drag-handle absolute top-1 right-1 w-4 h-4 bg-gray-600 rounded cursor-move z-30" />
+                      <div className="drag-handle absolute top-1 right-1 w-4 h-4 bg-border rounded cursor-move z-30" />
                     )}
                     {/* delete */}
                     {selectedIdx===idx && (
                       <button
                         onClick={()=>removeField(idx)}
-                        className="absolute top-1 left-1 text-red-500 font-bold"
+                        className="absolute top-1 left-1 text-brand-hi font-bold"
                       >×</button>
                     )}
                   </div>

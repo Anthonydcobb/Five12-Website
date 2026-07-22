@@ -12,7 +12,7 @@ export default function UniverseView({ rows, conflicts = [] }) {
   const sortedUniverses = Object.keys(grouped).sort((a, b) => a - b);
 
   return (
-    <div className="p-6 bg-gray-900 min-h-screen">
+    <div className="p-6 bg-bg min-h-screen">
       {sortedUniverses.map(univ => (
         <UniverseRow
           key={univ}

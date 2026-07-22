@@ -20,15 +20,15 @@ function maskToPrefix(mask) {
 function StatusDot({ status }) {
   const up = status === 'Up';
   return (
-    <span className={`inline-block w-2 h-2 rounded-full ${up ? 'bg-green-400' : 'bg-gray-600'}`} />
+    <span className={`inline-block w-2 h-2 rounded-full ${up ? 'bg-online' : 'bg-border'}`} />
   );
 }
 
 function AdapterCard({ adapter, onConfigure, selected }) {
   return (
     <div
-      className={`bg-gray-800 border rounded-lg p-4 cursor-pointer transition-colors ${
-        selected ? 'border-blue-500' : 'border-gray-700 hover:border-gray-500'
+      className={`bg-surface border rounded-lg p-4 cursor-pointer transition-colors ${
+        selected ? 'border-brand glow-red' : 'border-border hover:border-muted'
       }`}
       onClick={() => onConfigure(adapter)}
     >
@@ -36,45 +36,45 @@ function AdapterCard({ adapter, onConfigure, selected }) {
         <span className="font-medium text-sm truncate mr-2">{adapter.name}</span>
         <div className="flex items-center gap-1.5 shrink-0">
           <StatusDot status={adapter.status} />
-          <span className="text-xs text-gray-500">{adapter.status}</span>
+          <span className="text-xs text-text-muted">{adapter.status}</span>
         </div>
       </div>
 
-      <p className="text-xs text-gray-500 truncate mb-3">{adapter.description}</p>
+      <p className="text-xs text-text-muted truncate mb-3">{adapter.description}</p>
 
       <div className="space-y-1 font-mono text-xs">
         {adapter.ip ? (
           <>
             <div className="flex gap-2">
-              <span className="text-gray-500 w-8">IP</span>
-              <span className="text-white">{adapter.ip}</span>
+              <span className="text-text-muted w-8">IP</span>
+              <span className="text-text">{adapter.ip}</span>
             </div>
             <div className="flex gap-2">
-              <span className="text-gray-500 w-8">SN</span>
-              <span className="text-gray-300">{prefixToMask(adapter.prefix)}</span>
-              <span className="text-gray-600">/{adapter.prefix}</span>
+              <span className="text-text-muted w-8">SN</span>
+              <span className="text-text">{prefixToMask(adapter.prefix)}</span>
+              <span className="text-text-muted">/{adapter.prefix}</span>
             </div>
             {adapter.gateway && (
               <div className="flex gap-2">
-                <span className="text-gray-500 w-8">GW</span>
-                <span className="text-gray-300">{adapter.gateway}</span>
+                <span className="text-text-muted w-8">GW</span>
+                <span className="text-text">{adapter.gateway}</span>
               </div>
             )}
           </>
         ) : (
-          <span className="text-gray-600 italic">No IP assigned</span>
+          <span className="text-text-muted italic">No IP assigned</span>
         )}
       </div>
 
       <div className="mt-3 flex items-center justify-between">
         <span className={`text-xs px-2 py-0.5 rounded-full ${
           adapter.dhcp
-            ? 'bg-blue-900/50 text-blue-300 border border-blue-700/50'
-            : 'bg-gray-700 text-gray-400'
+            ? 'bg-gel/15 text-gel border border-gel/40'
+            : 'bg-surface-2 text-text-muted border border-border'
         }`}>
           {adapter.dhcp ? 'DHCP' : 'Static'}
         </span>
-        <span className="text-xs text-gray-600 font-mono">{adapter.mac}</span>
+        <span className="text-xs text-text-muted font-mono">{adapter.mac}</span>
       </div>
     </div>
   );
@@ -127,20 +127,20 @@ function ConfigPanel({ adapter, onClose, onSuccess }) {
   };
 
   return (
-    <div className="bg-gray-800 border border-blue-500 rounded-lg p-5">
+    <div className="bg-surface border border-brand rounded-lg p-5 glow-red">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-medium">Configure: <span className="text-blue-300">{adapter.name}</span></h3>
-        <button onClick={onClose} className="text-gray-500 hover:text-white text-lg leading-none">×</button>
+        <h3 className="font-medium">Configure: <span className="text-brand-hi">{adapter.name}</span></h3>
+        <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
       </div>
 
       {/* Mode toggle */}
-      <div className="flex bg-gray-900 border border-gray-700 rounded overflow-hidden text-sm mb-4 w-fit">
+      <div className="flex bg-bg border border-border rounded overflow-hidden text-sm mb-4 w-fit">
         {['dhcp', 'static'].map(m => (
           <button
             key={m}
             onClick={() => setMode(m)}
             className={`px-4 py-1.5 font-medium transition-colors ${
-              mode === m ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+              mode === m ? 'bg-brand text-white' : 'text-text-muted hover:text-text'
             }`}
           >
             {m === 'dhcp' ? 'DHCP' : 'Static'}
@@ -151,48 +151,48 @@ function ConfigPanel({ adapter, onClose, onSuccess }) {
       {mode === 'static' && (
         <div className="grid grid-cols-1 gap-3 mb-4 max-w-sm">
           <label className="block">
-            <span className="text-xs text-gray-500 mb-1 block">IP Address</span>
+            <span className="text-xs text-text-muted mb-1 block">IP Address</span>
             <input
               value={ip}
               onChange={e => setIp(e.target.value)}
               placeholder="192.168.1.100"
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-500"
+              className="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-brand"
             />
           </label>
           <label className="block">
-            <span className="text-xs text-gray-500 mb-1 block">Subnet (mask or /prefix)</span>
+            <span className="text-xs text-text-muted mb-1 block">Subnet (mask or /prefix)</span>
             <div className="flex items-center gap-2">
               <input
                 value={prefix.includes('.') ? prefix : prefixToMask(prefix)}
                 onChange={e => handlePrefix(e.target.value)}
                 placeholder="255.255.255.0"
-                className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-500"
+                className="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-brand"
               />
-              <span className="text-gray-500 text-sm font-mono whitespace-nowrap">
+              <span className="text-text-muted text-sm font-mono whitespace-nowrap">
                 /{prefix.includes('.') ? (maskToPrefix(prefix) ?? '?') : prefix}
               </span>
             </div>
           </label>
           <label className="block">
-            <span className="text-xs text-gray-500 mb-1 block">Default Gateway</span>
+            <span className="text-xs text-text-muted mb-1 block">Default Gateway</span>
             <input
               value={gateway}
               onChange={e => setGateway(e.target.value)}
               placeholder="192.168.1.1"
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-500"
+              className="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-brand"
             />
           </label>
         </div>
       )}
 
       {mode === 'dhcp' && (
-        <p className="text-sm text-gray-400 mb-4">
+        <p className="text-sm text-text-muted mb-4">
           Switch this adapter to DHCP — the router will assign an IP automatically.
         </p>
       )}
 
       {error && (
-        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-xs rounded px-3 py-2 mb-3">
+        <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-xs rounded px-3 py-2 mb-3">
           {error}
         </div>
       )}
@@ -200,7 +200,7 @@ function ConfigPanel({ adapter, onClose, onSuccess }) {
       <button
         onClick={apply}
         disabled={applying}
-        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded text-sm font-medium"
+        className="px-4 py-2 bg-brand hover:bg-brand-hi disabled:opacity-40 rounded text-sm font-medium text-white"
       >
         {applying ? 'Applying…' : 'Apply'}
       </button>
@@ -257,23 +257,23 @@ function ProfileSection({ adapters, onApply }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Saved Profiles</h2>
+        <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wider">Saved Profiles</h2>
         <button
           onClick={() => setShowForm(v => !v)}
-          className="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded"
+          className="text-xs px-3 py-1 bg-surface-2 hover:bg-border rounded"
         >
           {showForm ? 'Cancel' : '+ New Profile'}
         </button>
       </div>
 
       {error && (
-        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-xs rounded px-3 py-2 mb-3">
+        <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-xs rounded px-3 py-2 mb-3">
           {error}
         </div>
       )}
 
       {showForm && (
-        <div className="bg-gray-800 border border-gray-700 rounded-lg p-4 mb-3 grid grid-cols-2 gap-3">
+        <div className="bg-surface border border-border rounded-lg p-4 mb-3 grid grid-cols-2 gap-3">
           {[
             { label: 'Profile Name', key: 'name', placeholder: 'sACN Network' },
             { label: 'IP Address',   key: 'ip',   placeholder: '192.168.0.2' },
@@ -281,21 +281,21 @@ function ProfileSection({ adapters, onApply }) {
             { label: 'Default Gateway', key: 'gateway', placeholder: '192.168.0.1' },
           ].map(({ label, key, placeholder }) => (
             <label key={key} className="block">
-              <span className="text-xs text-gray-500 mb-1 block">{label}</span>
+              <span className="text-xs text-text-muted mb-1 block">{label}</span>
               <input
                 value={form[key]}
                 onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
-                className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-500"
+                className="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-brand"
               />
             </label>
           ))}
           <label className="block col-span-2">
-            <span className="text-xs text-gray-500 mb-1 block">Adapter</span>
+            <span className="text-xs text-text-muted mb-1 block">Adapter</span>
             <select
               value={form.adapter}
               onChange={e => setForm(f => ({ ...f, adapter: e.target.value }))}
-              className="w-full bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+              className="w-full bg-bg border border-border rounded px-3 py-1.5 text-sm focus:outline-none focus:border-brand"
             >
               <option value="">Select adapter…</option>
               {adapters.map(a => (
@@ -307,7 +307,7 @@ function ProfileSection({ adapters, onApply }) {
             <button
               onClick={save}
               disabled={!form.name || !form.adapter || !form.ip}
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded text-sm"
+              className="px-4 py-1.5 bg-brand hover:bg-brand-hi disabled:opacity-40 rounded text-sm text-white"
             >
               Save Profile
             </button>
@@ -316,15 +316,15 @@ function ProfileSection({ adapters, onApply }) {
       )}
 
       {profiles.length === 0 && !showForm && (
-        <p className="text-gray-600 text-sm">No saved profiles yet. Create one to quick-switch IP configs.</p>
+        <p className="text-text-muted text-sm">No saved profiles yet. Create one to quick-switch IP configs.</p>
       )}
 
       <div className="space-y-2">
         {profiles.map(p => (
-          <div key={p.id} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-4 py-3">
+          <div key={p.id} className="flex items-center justify-between bg-surface border border-border rounded-lg px-4 py-3">
             <div>
               <span className="font-medium text-sm">{p.name}</span>
-              <div className="font-mono text-xs text-gray-500 mt-0.5">
+              <div className="font-mono text-xs text-text-muted mt-0.5">
                 {p.adapter} · {p.ip}/{p.prefix}{p.gateway ? ` · GW ${p.gateway}` : ''}
               </div>
             </div>
@@ -332,13 +332,13 @@ function ProfileSection({ adapters, onApply }) {
               <button
                 onClick={() => applyProfile(p)}
                 disabled={applying === p.id}
-                className="text-xs px-3 py-1.5 bg-blue-700 hover:bg-blue-600 disabled:opacity-40 rounded font-medium"
+                className="text-xs px-3 py-1.5 bg-brand hover:bg-brand-hi disabled:opacity-40 rounded font-medium text-white"
               >
                 {applying === p.id ? 'Applying…' : 'Apply'}
               </button>
               <button
                 onClick={() => remove(p.id)}
-                className="text-xs px-2 py-1.5 text-gray-500 hover:text-red-400 rounded"
+                className="text-xs px-2 py-1.5 text-text-muted hover:text-brand-hi rounded"
               >
                 ×
               </button>
@@ -382,45 +382,45 @@ export default function IPConfig() {
   const selectedAdapter = adapters.find(a => a.name === selected);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white p-6">
+    <div className="min-h-[calc(100vh-4rem)] text-text p-6">
       <div className="max-w-4xl mx-auto space-y-6">
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold">IP Config</h1>
-            <p className="text-gray-500 text-xs mt-0.5">View and manage network adapter addresses</p>
+            <h1 className="text-2xl font-bold uppercase tracking-wide">IP Config</h1>
+            <p className="text-text-muted text-xs mt-0.5">View and manage network adapter addresses</p>
           </div>
           <button
             onClick={load}
             disabled={loading}
-            className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-40 rounded text-sm"
+            className="px-3 py-1.5 bg-surface-2 hover:bg-border disabled:opacity-40 rounded text-sm"
           >
             {loading ? 'Loading…' : 'Refresh'}
           </button>
         </div>
 
         {success && (
-          <div className="bg-green-900/30 border border-green-700/50 text-green-300 text-sm rounded px-4 py-2">
+          <div className="bg-online/10 border border-online/40 text-online text-sm rounded px-4 py-2">
             Applied successfully. It may take a moment for the new address to become active.
           </div>
         )}
 
         {error && (
-          <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-sm rounded px-4 py-2">
+          <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-sm rounded px-4 py-2">
             {error}
           </div>
         )}
 
         {/* Adapters */}
         <div>
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-3">
+          <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wider mb-3">
             Network Adapters
-            {adapters.length > 0 && <span className="ml-2 text-gray-600 normal-case font-normal">— click to configure</span>}
+            {adapters.length > 0 && <span className="ml-2 text-text-muted normal-case font-normal">— click to configure</span>}
           </h2>
 
           {loading && adapters.length === 0 ? (
-            <p className="text-gray-600 text-sm">Loading adapters…</p>
+            <p className="text-text-muted text-sm">Loading adapters…</p>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {adapters.map(a => (

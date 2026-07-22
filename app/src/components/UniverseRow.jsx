@@ -4,7 +4,9 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
     const channels = Array(512).fill(null);
     const fixtureColorMap = new Map();
     let colorIndex = 0;
-    const blueShades = ['bg-blue-500', 'bg-blue-400', 'bg-blue-300', 'bg-blue-600'];
+    // Theme accents used to differentiate adjacent fixtures — red is reserved
+    // for conflicts, so cycle through cyan / green / amber instead.
+    const blueShades = ['bg-gel', 'bg-online', 'bg-warn'];
 
     fixtures.forEach(fix => {
         const start = fix.address - 1;
@@ -44,12 +46,12 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
 
     return (
         <div className="mb-10 relative">
-            <h3 className="mb-2 text-white text-lg">Universe {universe}</h3>
+            <h3 className="mb-2 text-text text-lg">Universe {universe}</h3>
 
             {/* Tooltip UI */}
             {hoverInfo && (
                 <div
-                    className="absolute z-10 bg-gray-900 text-white text-sm p-3 rounded-md shadow-lg border border-gray-700 pointer-events-none"
+                    className="absolute z-10 bg-bg text-text text-sm p-3 rounded-md shadow-lg border border-border pointer-events-none"
                     style={{
                         left: hoverInfo.x + 12,
                         top: hoverInfo.y - 20,
@@ -58,7 +60,7 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
                 >
                     {hoverInfo.fix ? (
                         <>
-                            <div className="font-semibold text-blue-400 mb-1">Fix #{hoverInfo.fix.fixture}</div>
+                            <div className="font-semibold text-gel mb-1">Fix #{hoverInfo.fix.fixture}</div>
                             <div><strong>Type:</strong> {hoverInfo.fix.type}</div>
                             <div><strong>Ch Count:</strong> {hoverInfo.fix.channelCount}</div>
                             <div><strong>Ch:</strong> {hoverInfo.channel}</div>
@@ -70,7 +72,7 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
             )}
 
             <div
-                className="grid grid-cols-64 gap-[1px] bg-gray-700 rounded overflow-hidden"
+                className="grid grid-cols-64 gap-[1px] bg-surface-2 rounded overflow-hidden"
                 onMouseLeave={() => setHoverInfo(null)}
             >
                 {channels.map((fix, i) => (
@@ -80,9 +82,9 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
                                 ? conflicts.some(c =>
                                     (c.fixtureA.id === fix.id || c.fixtureB.id === fix.id)
                                 )
-                                    ? 'bg-red-600 hover:bg-red-500'
+                                    ? 'bg-brand hover:bg-brand-hi'
                                     : `${fix.color} hover:opacity-80`
-                                : 'bg-gray-800 hover:bg-gray-600'
+                                : 'bg-surface hover:bg-border'
                             }`}
                         onMouseEnter={e => {
                             const rect = e.target.getBoundingClientRect();
@@ -98,19 +100,19 @@ export default function UniverseRow({ universe, fixtures, conflicts = [] }) {
                 ))}
             </div>
 
-            <div className="mt-2 text-sm text-gray-400 space-y-1">
+            <div className="mt-2 text-sm text-text-muted space-y-1">
                 <div>
-                    Next available channel: <span className="text-white font-medium">{nextAvailable || 'None'}</span>
+                    Next available channel: <span className="text-text font-medium">{nextAvailable || 'None'}</span>
                 </div>
                 <div>
-                    Total open channels: <span className="text-white font-medium">{totalOpen}</span>
+                    Total open channels: <span className="text-text font-medium">{totalOpen}</span>
                 </div>
                 {openGaps.length > 0 && (
                     <div>
                         Gaps:
                         <ul className="list-disc ml-6 mt-1">
                             {openGaps.map((gap, i) => (
-                                <li key={i} className="text-white">
+                                <li key={i} className="text-text">
                                     {gap.start} &gt; {gap.end} open: {gap.end - gap.start + 1}ch
                                 </li>
                             ))}
