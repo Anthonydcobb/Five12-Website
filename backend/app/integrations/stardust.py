@@ -123,6 +123,47 @@ def universes_outputting(node):
     return sorted({p['universe'] for p in node.get('ports', []) if p['transmitting']})
 
 
+# ── Stardust control plane (WebSocket) — per-output config ──────────────────
+# The LumenRadio GUI drives everything over ws://<ip>/ws with JSON _type_ frames
+# [VERIFIED 2026-07-22 from the GUI bundle main.7bc0d075.chunk.js]. We poll it
+# READ-ONLY for the outputs config (source universe + CRMX radio type) that
+# Art-Net cannot provide. We send ONLY Get* frames, never a Settings frame.
+
+OUTPUT_LETTERS = {1: 'A', 2: 'B', 3: 'C', 4: 'D', 5: 'E', 6: 'F', 7: 'G', 8: 'H'}
+
+# rf_protocols[i] raw enum -> label, keyed by device output count N. CRMX2 can
+# be split across outputs, so the same raw value reads differently by N.
+# Transcribed verbatim from the bundle's `It` table.
+CRMX_LABELS = {
+    2: {'CRMX': 'CRMX Classic', 'CRMX2_1_4': 'CRMX²',
+        'WDMX_G3': 'W-DMX G3', 'WDMX_G4S': 'W-DMX G4S'},
+    4: {'CRMX': 'CRMX Classic', 'CRMX2_1_4': '1/2 CRMX²',
+        'CRMX2_2_4': 'CRMX²', 'WDMX_G3': 'W-DMX G3', 'WDMX_G4S': 'W-DMX G4S'},
+    6: {'CRMX': 'CRMX Classic', 'CRMX2_1_4': '1/3 CRMX²',
+        'CRMX2_2_4': '2/3 CRMX²', 'CRMX2_3_4': 'CRMX²',
+        'WDMX_G3': 'W-DMX G3', 'WDMX_G4S': 'W-DMX G4S'},
+    8: {'CRMX': 'CRMX Classic', 'CRMX2_1_4': '1/4 CRMX²',
+        'CRMX2_2_4': '2/4 CRMX²', 'CRMX2_3_4': '3/4 CRMX²',
+        'CRMX2': 'CRMX²', 'WDMX_G3': 'W-DMX G3', 'WDMX_G4S': 'W-DMX G4S'},
+}
+
+
+def _output_letter(n):
+    """Output/universe number (1-based) -> letter A..H, matching the GUI."""
+    return OUTPUT_LETTERS.get(n, ' ')
+
+
+def _artnet_addr(v):
+    """Art-Net universe int -> 'net/sub/uni', decoded exactly as the GUI does."""
+    return '{}/{}/{}'.format((v >> 8) & 0x7F, (v >> 4) & 0x0F, v & 0x0F)
+
+
+def _crmx_label(raw, n):
+    """Raw rf_protocols enum + device output count -> friendly CRMX label.
+    Unknown N falls back to the 8-output table; unknown raw returns verbatim."""
+    return CRMX_LABELS.get(n, CRMX_LABELS[8]).get(raw, raw)
+
+
 def _local_ipv4s():
     """Every local IPv4 to poll from. Thin wrapper kept so this call site and
     the FIVE12_ARTNET_SRC pin read exactly as before; the implementation moved
