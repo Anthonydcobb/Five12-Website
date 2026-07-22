@@ -1,6 +1,6 @@
 # Lighting Network — State & Handoff
 
-Last updated: 2026-07-21
+Last updated: 2026-07-22
 
 Field survey of the show network, and the source of the "confirmed on rig" OUI
 entries in `backend/app/vendors/__init__.py`. Originally captured as loose
@@ -43,7 +43,10 @@ All four are seeded as `NetworkSubnet` rows and scanned automatically.
 Firmware 13.0.5.26 / boot 1.0.0.11, 12 ports each. Serials read over SNMP where
 configured: `.97` = `70VG5C5GA0121`, `.98` = `70VG5C5NA0143`.
 
-**Unidentified** — `172.16.2.2`, `10.0.7.2`, `10.31.0.11`, `10.31.7.102`, `192.168.1.11`
+**Unidentified** — `172.16.2.2`, `10.0.7.2`, `10.31.0.11`, `10.31.7.102`
+
+**Bolero antennas** — `192.168.1.11` = MBS LM 2 (local), `192.168.1.12` = MBS LM 1.
+See "Bolero comms" below.
 
 **Known non-gear** — `172.16.0.94` = Eltons Mac Pro (`E4-50-EB-BB-A9-F1`), expected on the network
 
@@ -73,7 +76,72 @@ Note the Hog processors send **no** E1.31 universe discovery packets, so
 discovery-driven multicast joins alone find nothing. The listener joins
 universes 1–16 unconditionally for this reason (`FIVE12_SACN_UNIVERSES`).
 
+## Bolero comms (`192.168.1.0/24`) [VERIFIED 2026-07-22]
+
+Read-only beltpack/antenna telemetry, shown in the Devices page `Bolero` panel.
+Backend `backend/app/integrations/bolero.py` polls; it never writes to a live
+comms system. Two antennas (Riedel calls them nodes / "MBS LM"): `192.168.1.11`
+= MBS LM 2 (local, the address the GUI and API are reached on), `192.168.1.12`
+= MBS LM 1.
+
+### REST API (mapped from the real unit, HAR capture)
+
+Base `http://192.168.1.11/rest/…`, plain HTTP. Auth is HTTP Basic with the
+factory READ-ONLY account the GUI itself uses (`user`/`userPass`); override via
+`FIVE12_BOLERO_USER`/`FIVE12_BOLERO_PASS`. No login flow.
+
+- `GET /rest/nodeStatus` — antennas + **live per-pack battery**. Each node's
+  `bp[]` are the packs currently attached to that antenna; each carries
+  `battery{status(=charge %), currentCharge(mAh), usbPower, batteryTemperature,
+  batteryHealth, maxCharge}`, `signalLevel` (see below), `timeslots{free,usable,
+  interfered,warning}`, and the node has `ptpStatus{lockState}` (synced when
+  `==2`).
+- `GET /rest/nodeConfig` — `nodeId → name` (MBS LM 2 = .11, MBS LM 1 = .12).
+- `GET /rest/bp` — DECT `id → bpConfig.bpName` (crew names). ~98 KB, so cached
+  300 s; the small live status polls every cycle.
+- `ws://192.168.1.11/wsapp` exists for live push — out of scope (we poll).
+
+**Config (not committed** — `backend/.env` is gitignored): `FIVE12_BOLERO_HOST=
+192.168.1.11`. Without it the panel says "FIVE12_BOLERO_HOST not configured"
+rather than guessing, so any fresh checkout / other machine needs this line
+re-added.
+
+### Panel columns
+
+Pack · Battery (live charge) · **Signal** (0–4 bars + word) · Health % (battery
+state-of-health, NOT signal) · Antenna · Temp · State (⚡ when charging). Sorted
+lowest-battery first. `?sim=1` is the simulator fallback.
+
+### Signal quality [VERIFIED 2026-07-22 against the GUI bundle]
+
+`signalLevel` in `/rest/nodeStatus` is **not** a 0/1 scale (an earlier note
+guessed that) — it is Riedel's `BP_SIGNAL_LEVELS` enum, read straight from their
+app bundle `http://192.168.1.11/scripts/app-028c6fe2a3.js`
+(`getSignalIconClass` / `getSignalTooltip`). The GUI maps it directly to bars +
+a word and does **not** consult `timeslots`:
+
+| `signalLevel` | Bars | Word |
+|---|---|---|
+| 0 | 4 | Excellent |
+| 1 | 3 | Good |
+| 2 | 2 | Medium |
+| 3 | 1 | Bad |
+| 0xFF / missing | 0 | Not Connected |
+
+`bolero.py` reproduces this exactly (`_signal_quality`), emitting `signalQuality`
+(0–4) + `signalLabel` per pack. On the live rig all packs sit at level 0 →
+"Excellent". Verified end-to-end 2026-07-22 (commit `9ae789e`, 8 packs on MBS LM 2).
+
 ## Fixed
+
+**Every device read permanently ONLINE — timezone bug** (fixed 2026-07-22, commit
+`464b9b6`). `to_dict()` emitted a bare `.isoformat()` on naive-UTC datetimes with
+no `Z`/offset; per the ECMAScript spec an offset-less string parses as LOCAL
+time, so the browser placed every timestamp 4h in the future (UTC-4), made
+elapsed time negative, and `negative < 90_000` is always true — nothing could
+ever go offline. Fixed at the source with `_utc_iso()` in `models.py` (trailing
+`Z`) plus a `parseUtc()` guard in `NetworkMonitor.jsx`. This had also silently
+disabled the "remove offline" button, whose count uses the same predicate.
 
 HogNet `172.31.0.0/16` had been bound to a Microsoft KM-TEST Loopback adapter — a
 virtual adapter with no physical port — so every ARP for `172.31.x` went nowhere
