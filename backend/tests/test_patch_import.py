@@ -87,3 +87,29 @@ def test_apply_mapping_ignore_keyword():
     headers = ["Add", "Junk"]
     out = apply_mapping(headers, [["5", "x"]], {"Add": "address", "Junk": "ignore"})
     assert out[0]["address"] == 5 and out[0]["type"] is None
+
+
+import pandas as pd
+from io import BytesIO
+from app.patch_import import read_table
+
+def _xlsx_bytes(rows):
+    bio = BytesIO()
+    pd.DataFrame(rows).to_excel(bio, header=False, index=False, engine="openpyxl")
+    return bio.getvalue()
+
+def test_read_table_csv():
+    data = b"Fix Type,Add,Ch\nPAR64,101,8\n"
+    grid = read_table(data, "foreign.csv")
+    assert grid[0] == ["Fix Type", "Add", "Ch"]
+    assert grid[1][0] == "PAR64"
+
+def test_read_table_xlsx_parity():
+    data = _xlsx_bytes([["Fix Type", "Add", "Ch"], ["PAR64", 101, 8]])
+    grid = read_table(data, "foreign.xlsx")
+    assert grid[0] == ["Fix Type", "Add", "Ch"]
+    assert grid[1][0] == "PAR64"
+
+def test_read_table_blank_cells_are_none():
+    grid = read_table(b"a,,c\n1,,3\n", "x.csv")
+    assert grid[1][1] is None

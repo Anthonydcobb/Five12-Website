@@ -3,6 +3,7 @@ alias matching, mapping and address derivation. No Flask/DB dependencies."""
 import math
 import re
 from io import BytesIO
+import pandas as pd
 
 CANONICAL_FIELDS = [
     "set", "fixture", "universe", "address", "endAddress", "type",
@@ -127,3 +128,15 @@ def apply_mapping(headers, data_rows, mapping):
             continue
         results.append(canonical)
     return results
+
+
+def read_table(data, filename):
+    name = (filename or "").lower()
+    bio = BytesIO(data)
+    if name.endswith(".csv"):
+        df = pd.read_csv(bio, header=None, dtype=object,
+                         na_values=[""], keep_default_na=True)
+    else:
+        df = pd.read_excel(bio, header=None, dtype=object, engine="openpyxl")
+    df = df.where(pd.notnull(df), None)
+    return df.values.tolist()
