@@ -27,6 +27,7 @@ import os
 import select
 import socket
 import struct
+import threading
 import time
 
 from . import DeviceAdapter, check_thresholds, require_private_host
@@ -36,6 +37,12 @@ log = logging.getLogger(__name__)
 
 ARTNET_PORT = 6454
 POLL_TIMEOUT = 1.2
+# Discovery binds UDP 6454 and listens ~POLL_TIMEOUT. The status, units, and
+# detect polls each call it on their own cadence; when two overlap they compete
+# for the single ArtPollReply (SO_REUSEADDR hands each datagram to only one
+# socket), so a unit that answers one poll vanishes from the other. Serialize
+# discovery and let all callers share a result this fresh.
+NODES_TTL = 2.5
 # (Net<<8)|(Sub<<4)|SwOut with every bit set — Art-Net's "port not assigned to
 # a universe" sentinel. [VERIFIED 2026-07-20] a Stardust reports 32767 on all
 # eight replies, so it must never be shown as a real universe.
@@ -240,6 +247,10 @@ class StardustAdapter(DeviceAdapter):
         self._outputs_cache = None
         self._outputs_cache_at = 0.0
         self._outputs_cache_host = None
+        # Shared, serialized Art-Net discovery (see NODES_TTL).
+        self._nodes_cache = None
+        self._nodes_cache_at = 0.0
+        self._nodes_lock = threading.Lock()
 
     # ── Art-Net plumbing ──
     def _open_socket(self, src='', timeout=POLL_TIMEOUT):
@@ -323,6 +334,27 @@ class StardustAdapter(DeviceAdapter):
                 s.close()
         return list(nodes.values())
 
+    def _discover_nodes_cached(self):
+        """Serialized, briefly-cached wrapper around _discover_nodes.
+
+        The lock guarantees only one poll listens on 6454 at a time (removing
+        the reply contention between overlapping status/units/detect polls), and
+        NODES_TTL lets a second caller reuse a poll this recent instead of
+        launching its own. Errors propagate uncached so callers still see them.
+        """
+        now = time.time()
+        if self._nodes_cache is not None and now - self._nodes_cache_at < NODES_TTL:
+            return self._nodes_cache
+        with self._nodes_lock:
+            # A peer may have refreshed the cache while we waited for the lock.
+            now = time.time()
+            if self._nodes_cache is not None and now - self._nodes_cache_at < NODES_TTL:
+                return self._nodes_cache
+            nodes = self._discover_nodes()
+            self._nodes_cache = nodes
+            self._nodes_cache_at = time.time()
+            return nodes
+
     @staticmethod
     def _is_stardust(node):
         blob = (node['shortName'] + ' ' + node['longName']).lower()
@@ -334,7 +366,7 @@ class StardustAdapter(DeviceAdapter):
         if self.sim:
             return self._sim_units()
         try:
-            nodes = self._discover_nodes()
+            nodes = self._discover_nodes_cached()
         except (OSError, ValueError):
             return []
         return [{'mac': n['mac'], 'ip': n['ip'],
@@ -358,7 +390,7 @@ class StardustAdapter(DeviceAdapter):
         if self.sim:
             return {'found': True, 'address': '10.0.0.80', 'detail': 'simulated'}
         try:
-            nodes = self._discover_nodes()
+            nodes = self._discover_nodes_cached()
         except (OSError, ValueError) as exc:
             return {'found': False, 'address': None, 'detail': f'Art-Net poll failed: {exc}'}
         hits = [n for n in nodes if self._is_stardust(n)]
@@ -447,7 +479,7 @@ class StardustAdapter(DeviceAdapter):
         # survives — the TOD unicast has to leave the same interface that
         # heard the ArtPollReply or it goes out the default route and dies.
         try:
-            nodes = self._discover_nodes()
+            nodes = self._discover_nodes_cached()
         except (OSError, ValueError) as exc:
             return {'available': False, 'reason': f'Art-Net poll failed: {exc}'}
         hits = [n for n in nodes if self._is_stardust(n)]

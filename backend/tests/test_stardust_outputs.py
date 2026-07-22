@@ -188,6 +188,31 @@ def test_ws_fetch_throttled_by_ttl():
     assert third['outputs'] == first['outputs']
 
 
+def test_discovery_shared_across_callers_within_ttl():
+    """Overlapping status/units/detect polls must share one serialized
+    discovery (not compete for the single ArtPollReply); a poll this fresh is
+    reused, and forcing staleness triggers exactly one more real poll."""
+    a = StardustAdapter(sim=False)
+    node = {'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+            'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': []}
+    calls = {'n': 0}
+
+    def _poll():
+        calls['n'] += 1
+        return [node]
+
+    a._discover_nodes = _poll
+    first = a._discover_nodes_cached()
+    a._discover_nodes_cached()
+    a._discover_nodes_cached()
+    assert calls['n'] == 1          # three callers, one real poll
+    assert first == [node]
+
+    a._nodes_cache_at = 0.0         # force staleness
+    a._discover_nodes_cached()
+    assert calls['n'] == 2
+
+
 def test_sim_exposes_outputs():
     s = StardustAdapter(sim=True).get_status()
     assert s['available'] and s['source'] == 'sim'
