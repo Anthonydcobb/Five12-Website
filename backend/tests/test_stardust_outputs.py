@@ -155,6 +155,39 @@ def test_real_status_outputs_none_when_ws_fails():
     assert status['outputs'] is None
 
 
+def test_ws_fetch_throttled_by_ttl():
+    """The slow /ws fetch must not run on every poll: within OUTPUTS_TTL the
+    cached outputs are reused, and a later failed refetch keeps the last good
+    list rather than blanking it."""
+    a = StardustAdapter(sim=False)
+    node = {'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+            'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': []}
+    a._discover_nodes = lambda: [node]
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+
+    calls = {'n': 0}
+
+    def _fetch(ip):
+        calls['n'] += 1
+        return (
+            {'universe_nrs': [1], 'output_names': ['X'], 'output_powers_mw': [100],
+             'rf_protocols': ['CRMX'], 'enabled_universe_nrs': [1]},
+            {'universe_map': {'5': [1]}}, {'universe_map': {}},
+        )
+
+    a._ws_fetch_settings = _fetch
+    first = a._real_status()
+    second = a._real_status()          # within TTL → served from cache
+    assert calls['n'] == 1
+    assert second['outputs'] == first['outputs']
+
+    # Force staleness, then a failing refetch must keep the cached outputs.
+    a._outputs_cache_at = 0.0
+    a._ws_fetch_settings = lambda ip: (_ for _ in ()).throw(OSError('down'))
+    third = a._real_status()
+    assert third['outputs'] == first['outputs']
+
+
 def test_sim_exposes_outputs():
     s = StardustAdapter(sim=True).get_status()
     assert s['available'] and s['source'] == 'sim'

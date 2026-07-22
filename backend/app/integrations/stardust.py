@@ -41,6 +41,11 @@ POLL_TIMEOUT = 1.2
 # eight replies, so it must never be shown as a real universe.
 UNIVERSE_UNASSIGNED = 0x7FFF
 WS_TIMEOUT = 2.5   # seconds; ws://<ip>/ws connect + read budget for outputs
+# The outputs config changes rarely, but the /ws fetch costs ~WS_TIMEOUT and
+# would otherwise run on every fast status poll — enough to make the whole
+# panel flap. Fetch it at most this often and serve the last good result in
+# between; a failed refresh keeps the cached outputs rather than blanking them.
+OUTPUTS_TTL = 20.0
 OP_POLL = 0x2000
 OP_POLL_REPLY = 0x2100
 OP_TOD_REQUEST = 0x8000
@@ -231,6 +236,10 @@ class StardustAdapter(DeviceAdapter):
         self._sim_t0 = time.time()
         # Optional pin: unicast target instead of broadcast discovery
         self.host = os.getenv('FIVE12_STARDUST_HOST', '').strip() or None
+        # Throttled cache for the /ws outputs config (see OUTPUTS_TTL).
+        self._outputs_cache = None
+        self._outputs_cache_at = 0.0
+        self._outputs_cache_host = None
 
     # ── Art-Net plumbing ──
     def _open_socket(self, src='', timeout=POLL_TIMEOUT):
@@ -398,6 +407,29 @@ class StardustAdapter(DeviceAdapter):
             ws.close()
         return got.get('timo', {}), got.get('sacn', {}), got.get('artnet', {})
 
+    def _cached_outputs(self, ws_host):
+        """Merged outputs for ws_host, refetched over /ws at most every
+        OUTPUTS_TTL so the slow WS poll stays out of the hot status path.
+
+        Returns the last good list (or None). A stale entry triggers one
+        refetch; a failed refetch logs and keeps whatever was cached. Changing
+        ws_host invalidates the cache so a moved/renamed unit refetches at once.
+        """
+        now = time.time()
+        fresh = (self._outputs_cache_host == ws_host
+                 and now - self._outputs_cache_at < OUTPUTS_TTL)
+        if fresh:
+            return self._outputs_cache
+        try:
+            timo, sacn, artnet = self._ws_fetch_settings(ws_host)
+            if timo.get('universe_nrs'):
+                self._outputs_cache = _merge_outputs(timo, sacn, artnet)
+                self._outputs_cache_at = now
+                self._outputs_cache_host = ws_host
+        except Exception as exc:  # noqa: BLE001 — outputs are best-effort
+            log.warning('Stardust /ws outputs fetch failed: %s', exc)
+        return self._outputs_cache
+
     # ── status + RDM TOD ──
     def get_status(self):
         status = self._sim_status() if self.sim else self._real_status()
@@ -476,12 +508,7 @@ class StardustAdapter(DeviceAdapter):
         }
         ws_host = node.get('ip') or self.host
         if ws_host:
-            try:
-                timo, sacn, artnet = self._ws_fetch_settings(ws_host)
-                if timo.get('universe_nrs'):
-                    status['outputs'] = _merge_outputs(timo, sacn, artnet)
-            except Exception as exc:  # noqa: BLE001 — outputs are best-effort
-                log.warning('Stardust /ws outputs fetch failed: %s', exc)
+            status['outputs'] = self._cached_outputs(ws_host)
         return status
 
     # ── simulator ──

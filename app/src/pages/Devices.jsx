@@ -259,9 +259,20 @@ function BoleroPanel({ sim }) {
 
 // ── Stardust panel ───────────────────────────────────────────────────────────
 
+const STARDUST_HOLD_MS = 30000;  // keep the last good reading through brief Art-Net discovery misses
+
 function StardustPanel({ sim }) {
-  const { status } = useDevice('stardust', sim);
+  const { status: live } = useDevice('stardust', sim);
   const [units, setUnits] = useState([]);
+  // The real unit answers the Art-Net discovery poll only intermittently, so a
+  // single miss would otherwise blank the whole panel. Hold the last available
+  // reading for a short grace window and show a "reconnecting" hint instead.
+  const lastGood = useRef(null);
+  const lastGoodAt = useRef(0);
+  if (live?.available) { lastGood.current = live; lastGoodAt.current = Date.now(); }
+  const held = lastGood.current && Date.now() - lastGoodAt.current < STARDUST_HOLD_MS;
+  const status = live?.available ? live : (held ? lastGood.current : live);
+  const reconnecting = Boolean(live && !live.available && held);
   const uq = sim ? '?sim=1' : '';
   const loadUnits = useCallback(async () => {
     try { const { data } = await axios.get(`/api/devices/stardust/units${uq}`); setUnits(data); }
@@ -287,6 +298,7 @@ function StardustPanel({ sim }) {
         </span>
         <span className="text-[9px] font-mono text-text-muted">{status.address} · {status.universesUp}/8 universes · {status.fixturesDiscovered} RDM fixtures</span>
         {status.source === 'sim' && <span className="text-[8px] font-mono text-purple-400 border border-purple-800 rounded-sm px-1">SIM</span>}
+        {reconnecting && <span className="text-[8px] font-mono text-warn border border-warn/50 rounded-sm px-1">RECONNECTING…</span>}
       </div>
       <AlertChips alerts={status.alerts} />
 
@@ -339,27 +351,32 @@ function StardustPanel({ sim }) {
       {status.outputs?.length > 0 && (
         <div>
           <div className="text-[8px] text-text-muted uppercase tracking-widest mb-1">Outputs — source, universe &amp; CRMX type</div>
-          <table className="w-full text-[9px] font-mono">
+          <table className="w-full text-[11px] font-mono border-collapse">
             <thead>
-              <tr className="text-text-muted text-left text-[7px] uppercase tracking-widest">
-                <th className="font-normal py-0.5">Output</th><th className="font-normal">Name</th>
-                <th className="font-normal">Source</th><th className="font-normal">Universe/Addr</th>
-                <th className="font-normal">CRMX Type</th><th className="font-normal">Power</th>
+              <tr className="text-text-muted text-left text-[8px] uppercase tracking-widest border-b border-[var(--color-border)]">
+                <th className="font-normal py-1 pr-2 w-8">Out</th><th className="font-normal pr-2">Name</th>
+                <th className="font-normal pr-2">Source</th><th className="font-normal pr-2">Universe / Addr</th>
+                <th className="font-normal pr-2">CRMX Type</th><th className="font-normal text-right">Power</th>
               </tr>
             </thead>
             <tbody>
               {status.outputs.map((o) => (
                 <tr key={o.output} className={'border-t border-[var(--color-surface)] ' + (o.enabled ? '' : 'opacity-40')}>
-                  <td className="py-0.5 text-text">{o.output}</td>
-                  <td className="text-text-muted">{o.name || '—'}</td>
-                  <td className="text-text-muted">{o.source}</td>
-                  <td className="text-text-muted">{o.universe ?? '—'}</td>
-                  <td className="text-text-muted">{o.crmxType || '—'}</td>
-                  <td className="text-text-muted">{o.powerMw != null ? o.powerMw + ' mW' : '—'}</td>
+                  <td className="py-1 pr-2 font-bold text-brand-hi">{o.output}</td>
+                  <td className="pr-2 text-text">{o.name || <span className="text-text-muted">—</span>}</td>
+                  <td className="pr-2">
+                    {o.source === 'None'
+                      ? <span className="text-text-muted">unassigned</span>
+                      : <span className="text-online">{o.source}</span>}
+                  </td>
+                  <td className="pr-2 text-text">{o.universe ?? <span className="text-text-muted">—</span>}</td>
+                  <td className="pr-2 text-text">{o.crmxType || '—'}</td>
+                  <td className="text-right text-text-muted">{o.powerMw != null ? o.powerMw + ' mW' : '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <div className="text-[8px] text-text-muted font-mono mt-1">dimmed = output disabled · "unassigned" = no source patched to that output</div>
         </div>
       )}
 
