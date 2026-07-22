@@ -612,7 +612,7 @@ export default function NetworkMonitor() {
   const secondsAgo = lastScan ? Math.floor((Date.now() - lastScan) / 1000) : null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'monospace' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: 'var(--color-bg)', color: 'var(--color-text)', fontFamily: 'var(--font-mono)' }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', borderBottom: '1px solid var(--color-surface)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
