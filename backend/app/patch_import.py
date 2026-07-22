@@ -57,3 +57,14 @@ def guess_field(header):
 
 def guess_mapping(headers):
     return {h: guess_field(h) for h in headers}
+
+
+def detect_header_row(grid, scan_limit=15):
+    """Return the index of the row whose cells best match known column
+    aliases. Ties break to the earliest row; fallback is row 0."""
+    best_idx, best_score = 0, 0
+    for idx, row in enumerate(grid[:scan_limit]):
+        score = sum(1 for cell in row if normalize_header(cell) in _ALL_ALIASES)
+        if score > best_score:
+            best_score, best_idx = score, idx
+    return best_idx

@@ -1,4 +1,4 @@
-from app.patch_import import normalize_header, guess_field, guess_mapping
+from app.patch_import import normalize_header, guess_field, guess_mapping, detect_header_row
 
 def test_normalize_header_strips_punct_and_case():
     assert normalize_header("Fix #") == "fix"
@@ -23,3 +23,20 @@ def test_guess_mapping():
     m = guess_mapping(["Fixture Type", "DMX Addr", "Ch", "Dimmer"])
     assert m == {"Fixture Type": "type", "DMX Addr": "address",
                  "Ch": "channelCount", "Dimmer": None}
+
+def test_detect_header_row_first_row():
+    grid = [["Fix #", "Uni", "Add", "Fix Type"], ["1", "1", "1", "PAR"]]
+    assert detect_header_row(grid) == 0
+
+def test_detect_header_row_with_title_rows_above():
+    grid = [
+        ["My Show Patch", None, None, None],
+        [None, None, None, None],
+        ["Fix #", "Universe", "Address", "Fixture Type"],
+        ["1", "1", "1", "PAR"],
+    ]
+    assert detect_header_row(grid) == 2
+
+def test_detect_header_row_fallback_zero():
+    grid = [["a", "b"], ["c", "d"]]
+    assert detect_header_row(grid) == 0
