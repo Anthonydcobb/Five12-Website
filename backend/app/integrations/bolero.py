@@ -1,35 +1,44 @@
 """Riedel Bolero adapter — read-only beltpack/antenna telemetry.
 
-[VERIFIED] Bolero Standalone is configured over IP via a web UI backed by a
-REST API (the third-party DECT app speaks the same API), with live WebSocket
-updates carrying battery, signal, antenna status, PTP sync and temperature.
+[VERIFIED 2026-07-22] Mapped against a real Bolero Standalone at 192.168.1.11
+(HAR capture). The web GUI is an AngularJS app over a plain REST surface:
 
-[NEEDS VERIFICATION] The exact REST endpoints and payload schemas are NOT
-publicly documented — DECT reverse-engineered them. Every path/field in
-ENDPOINTS/_normalize below is a PLACEHOLDER to be corrected from a real
-unit's browser DevTools session (Network/WS tabs). That mapping is the
-gating task; until it's done, the real adapter reports 'endpoint map
-unverified' rather than guessing silently.
+  GET /rest/nodeStatus  antennas + LIVE per-pack battery (each node's bp[] are
+                        the packs currently attached to that antenna)
+  GET /rest/nodeConfig  nodeId -> antenna name (MBS LM 2 = .11, MBS LM 1 = .12)
+  GET /rest/bp          DECT id -> crew name (bpConfig.bpName), ~98 KB
 
-Read-only in v1 (the research doc's 80/20: battery board first). Writing to
-a live comms system mid-show is deliberately out of scope.
+Auth is HTTP Basic with the factory READ-ONLY account the GUI itself uses
+(user/userPass); overridable via env. No login flow. There is also a
+ws://…/wsapp live-push socket — deliberately out of scope for v1 polling.
 
-Configuration: FIVE12_BOLERO_HOST=<ip-of-antenna/AP> (must be a private IP).
+Read-only in v1: writing to a live comms system mid-show is out of scope.
+
+Configuration:
+  FIVE12_BOLERO_HOST=<ip-of-antenna>   (must be a private IP)
+  FIVE12_BOLERO_USER / FIVE12_BOLERO_PASS  (default to the read-only account)
 """
 
+import logging
 import math
 import os
 import time
 
 from . import DeviceAdapter, check_thresholds, require_private_host, tcp_reachable
 
-# ── The single place to fix when the real API is mapped ─────────────────────
-# [NEEDS VERIFICATION] placeholders — map against a real unit before trusting.
+log = logging.getLogger(__name__)
+
+# ── Real REST endpoints, verified against a unit ────────────────────────────
 ENDPOINTS = {
-    'beltpacks': '/api/beltpacks',    # roster: battery/signal/antenna/temp
-    'antennas': '/api/antennas',      # antenna + PTP sync state
+    'antennas': '/rest/nodeStatus',   # antennas + live per-pack battery
+    'nodes': '/rest/nodeConfig',      # nodeId -> antenna name
+    'roster': '/rest/bp',             # DECT id -> crew name (large; cached)
 }
-VERIFIED_AGAINST_UNIT = False   # flip to True once DevTools mapping is done
+VERIFIED_AGAINST_UNIT = True
+
+# The roster is ~98 KB and changes rarely; the live battery (nodeStatus) is
+# small and polled every cycle. Refresh the id->name map no more than this.
+NAME_CACHE_TTL = 300.0
 
 ALERT_RULES = [
     ('lowestBatteryPct', 'lt', 20, 'Beltpack battery at {value}%', 'crit'),
@@ -47,18 +56,22 @@ class BoleroAdapter(DeviceAdapter):
         self.sim = sim
         self._sim_t0 = time.time()
         self.host = os.getenv('FIVE12_BOLERO_HOST', '').strip() or None
+        self.user = os.getenv('FIVE12_BOLERO_USER', 'user')
+        self.password = os.getenv('FIVE12_BOLERO_PASS', 'userPass')
+        self._name_cache = {}
+        self._name_cache_at = 0.0
 
     def detect(self):
         if self.sim:
-            return {'found': True, 'address': self.host or '10.0.0.60', 'detail': 'simulated'}
+            return {'found': True, 'address': self.host or '192.168.1.11', 'detail': 'simulated'}
         if not self.host:
             return {'found': False, 'address': None,
-                    'detail': 'set FIVE12_BOLERO_HOST to the antenna/AP address'}
+                    'detail': 'set FIVE12_BOLERO_HOST to the antenna address'}
         try:
             ip = require_private_host(self.host)
         except ValueError as exc:
             return {'found': False, 'address': None, 'detail': str(exc)}
-        found = tcp_reachable(ip, 443) or tcp_reachable(ip, 80)
+        found = tcp_reachable(ip, 80) or tcp_reachable(ip, 443)
         return {'found': found, 'address': ip,
                 'detail': 'web port open' if found else 'host unreachable'}
 
@@ -73,52 +86,88 @@ class BoleroAdapter(DeviceAdapter):
             })
         return status
 
+    # ── real hardware ──────────────────────────────────────────────────────
+    def _fetch_json(self, path):
+        """GET a /rest endpoint on the configured PRIVATE host over Basic auth.
+        Host is re-validated every call so it can never be a non-private
+        target, and it is never derived from request input."""
+        import requests
+        ip = require_private_host(self.host)
+        resp = requests.get(f'http://{ip}{path}',
+                            auth=(self.user, self.password), timeout=3)
+        resp.raise_for_status()
+        return resp.json()
+
+    def _name_map(self):
+        """Cached DECT id -> crew name from /rest/bp. Refreshed at most every
+        NAME_CACHE_TTL; a failed refresh keeps the last good map rather than
+        blanking every pack's name."""
+        now = time.time()
+        if self._name_cache and now - self._name_cache_at < NAME_CACHE_TTL:
+            return self._name_cache
+        try:
+            data = self._fetch_json(ENDPOINTS['roster'])
+            self._name_cache = {
+                bp['id']: (bp.get('bpConfig', {}).get('bpName') or f"Pack {bp['id']}")
+                for bp in data.get('bp', []) if 'id' in bp
+            }
+            self._name_cache_at = now
+        except Exception as exc:  # noqa: BLE001
+            log.warning('Bolero roster fetch failed, keeping cached names: %s', exc)
+        return self._name_cache
+
     def _real_status(self):
         if not self.host:
-            return {'available': False,
-                    'reason': 'FIVE12_BOLERO_HOST not configured'}
-        if not VERIFIED_AGAINST_UNIT:
-            # Refuse to pretend: shipping guesses against a live intercom is
-            # how integrations silently lie. Map the API first (DevTools),
-            # correct ENDPOINTS/_normalize, then flip VERIFIED_AGAINST_UNIT.
-            return {'available': False,
-                    'reason': 'Bolero endpoint map not yet verified against a '
-                              'real unit — see ENDPOINTS in bolero.py'}
-        import requests
+            return {'available': False, 'reason': 'FIVE12_BOLERO_HOST not configured'}
         try:
-            ip = require_private_host(self.host)
-            base = f'http://{ip}'
-            packs = requests.get(base + ENDPOINTS['beltpacks'], timeout=3).json()
-            ants = requests.get(base + ENDPOINTS['antennas'], timeout=3).json()
+            node_status = self._fetch_json(ENDPOINTS['antennas'])
+            node_config = self._fetch_json(ENDPOINTS['nodes'])
+            names = self._name_map()
         except Exception as exc:  # noqa: BLE001
             return {'available': False, 'reason': f'Bolero unreachable: {exc}'}
-        return self._normalize(packs, ants)
+        return self._normalize(node_status, node_config, names)
 
-    def _normalize(self, packs_raw, ants_raw):
-        """[NEEDS VERIFICATION] shape of real payloads — adapt when mapped."""
-        packs = [{
-            'id': p.get('id'),
-            'name': p.get('name') or f"Pack {p.get('id')}",
-            'batteryPct': p.get('battery'),
-            'signal': p.get('signal'),
-            'antenna': p.get('antenna'),
-            'tempC': p.get('temperature'),
-            'online': bool(p.get('online', True)),
-        } for p in (packs_raw or [])]
-        antennas = [{
-            'id': a.get('id'),
-            'name': a.get('name') or f"Antenna {a.get('id')}",
-            'online': bool(a.get('online', True)),
-            'ptpSynced': bool(a.get('ptpSynced', True)),
-            'packCount': a.get('packCount'),
-        } for a in (ants_raw or [])]
-        online = [p for p in packs if p['online']]
-        batts = [p['batteryPct'] for p in online if isinstance(p.get('batteryPct'), (int, float))]
+    def _normalize(self, node_status, node_config, name_map):
+        """Join the real payloads into the panel contract.
+
+        A pack is 'attached' to exactly the antenna whose bp[] lists it, which
+        is how the operator sees it in the GUI. `online` is therefore True for
+        every pack present in a node's bp[].
+        """
+        names_by_id = {n['nodeId']: n.get('name') for n in node_config.get('nodeConfig', [])}
+
+        antennas, beltpacks = [], []
+        for node in node_status.get('nodeStatus', []):
+            nid = node.get('nodeId')
+            aname = names_by_id.get(nid) or f'Antenna {nid}'
+            ptp_synced = node.get('ptpStatus', {}).get('lockState') == 2
+            packs = node.get('bp', []) or []
+            antennas.append({
+                'id': nid, 'name': aname, 'online': True,
+                'ptpSynced': ptp_synced, 'packCount': len(packs),
+            })
+            for bp in packs:
+                batt = bp.get('battery', {}) or {}
+                pid = bp.get('id')
+                beltpacks.append({
+                    'id': pid,
+                    'name': name_map.get(pid) or f'Pack {pid}',
+                    'batteryPct': batt.get('status'),
+                    'mAh': batt.get('currentCharge'),
+                    'healthPct': batt.get('batteryHealth'),
+                    'tempC': batt.get('batteryTemperature'),
+                    'charging': bool(batt.get('usbPower')),
+                    'antenna': aname,
+                    'online': True,
+                })
+
+        beltpacks.sort(key=lambda p: p['batteryPct'] if isinstance(p.get('batteryPct'), (int, float)) else 999)
+        batts = [p['batteryPct'] for p in beltpacks if isinstance(p.get('batteryPct'), (int, float))]
         return {
             'available': True, 'source': 'rest',
-            'beltpacks': sorted(packs, key=lambda p: p.get('batteryPct') or 999),
             'antennas': antennas,
-            'packsOnline': len(online),
+            'beltpacks': beltpacks,
+            'packsOnline': len(beltpacks),
             'lowestBatteryPct': min(batts) if batts else None,
             'ptpSynced': all(a['ptpSynced'] for a in antennas) if antennas else None,
         }
@@ -132,13 +181,14 @@ class BoleroAdapter(DeviceAdapter):
             start = 95 - i * 9
             drain = t / 60 * (0.55 + i * 0.13)          # %/min, varies per pack
             batt = max(2, round(start - drain))
-            sig = round(72 + 20 * math.sin(t / 37 + i * 1.7))
             packs.append({
                 'id': i + 1, 'name': name,
                 'batteryPct': batt,
-                'signal': max(15, min(99, sig)),
-                'antenna': 'ANT-A' if i % 2 == 0 else 'ANT-B',
+                'mAh': round(batt / 100 * 4800),
+                'healthPct': max(70, 100 - i * 3),
                 'tempC': round(28 + 6 * math.sin(t / 91 + i), 1),
+                'charging': i == 0 and int(t / 120) % 2 == 1,   # SM docks now and then
+                'antenna': 'ANT-A' if i % 2 == 0 else 'ANT-B',
                 'online': not (i == 5 and int(t / 240) % 2 == 1),  # grip wanders off
             })
         ptp_glitch = 55 < (t % 300) < 70                 # brief PTP loss every 5 min
