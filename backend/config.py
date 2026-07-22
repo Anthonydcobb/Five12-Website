@@ -17,6 +17,13 @@ class DevelopmentConfig:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    # Gates the Windows network stack in app/__init__.py — the ARP scanner, the
+    # sACN listener, and the /api/network/* blueprint. On by default for local
+    # dev on the rig (and so the test suite, which exercises those routes, keeps
+    # working); set FIVE12_NETWORK_TOOLS=0 to run the web app without it, e.g. a
+    # hosted deploy that cannot shell out to arp/ping/netsh.
+    ENABLE_NETWORK_TOOLS = os.getenv("FIVE12_NETWORK_TOOLS", "1") == "1"
+
 
 class DesktopConfig:
     DEBUG = False
@@ -31,3 +38,6 @@ class DesktopConfig:
 
     SQLALCHEMY_DATABASE_URI = f"sqlite:///{os.path.join(DATA_DIR, 'five12.db')}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # The desktop app IS the network monitor — always on.
+    ENABLE_NETWORK_TOOLS = True

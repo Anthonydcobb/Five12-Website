@@ -40,13 +40,11 @@ def create_app(test_config=None):
     from .device_routes import devices as devices_bp
     app.register_blueprint(devices_bp)
 
-    # Windows network/RF endpoints register only when enabled (desktop, or dev
-    # with FIVE12_NETWORK_TOOLS=1). On a hosted deploy they'd shell out to
-    # powershell/arp/netsh and 500 — so they simply don't exist there.
+    # The network monitor (ARP scanner, sACN listener, /api/network/*) registers
+    # only when enabled (desktop, or dev — see config.ENABLE_NETWORK_TOOLS, on by
+    # default there). On a hosted deploy it'd shell out to arp/ping/netsh and 500,
+    # so FIVE12_NETWORK_TOOLS=0 turns it off and the routes simply don't exist.
     if app.config.get('ENABLE_NETWORK_TOOLS'):
-        from .network_tools import net_tools
-        app.register_blueprint(net_tools)
-
         from .network_routes import net as network_bp
         app.register_blueprint(network_bp)
 
