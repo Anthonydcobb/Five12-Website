@@ -360,6 +360,33 @@ function StardustPanel({ sim }) {
         ))}
       </div>
 
+      {status.outputs?.length > 0 && (
+        <div>
+          <div className="text-[8px] text-text-muted uppercase tracking-widest mb-1">Outputs — source, universe &amp; CRMX type</div>
+          <table className="w-full text-[9px] font-mono">
+            <thead>
+              <tr className="text-text-muted text-left text-[7px] uppercase tracking-widest">
+                <th className="font-normal py-0.5">Output</th><th className="font-normal">Name</th>
+                <th className="font-normal">Source</th><th className="font-normal">Universe/Addr</th>
+                <th className="font-normal">CRMX Type</th><th className="font-normal">Power</th>
+              </tr>
+            </thead>
+            <tbody>
+              {status.outputs.map((o) => (
+                <tr key={o.output} className={'border-t border-[var(--color-surface)] ' + (o.enabled ? '' : 'opacity-40')}>
+                  <td className="py-0.5 text-text">{o.output}</td>
+                  <td className="text-text-muted">{o.name || '—'}</td>
+                  <td className="text-text-muted">{o.source}</td>
+                  <td className="text-text-muted">{o.universe ?? '—'}</td>
+                  <td className="text-text-muted">{o.crmxType || '—'}</td>
+                  <td className="text-text-muted">{o.powerMw != null ? o.powerMw + ' mW' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {status.universes?.some((u) => u.fixtures.length > 0) && (
         <div>
           <div className="text-[8px] text-text-muted uppercase tracking-widest mb-1">RDM discovery</div>
