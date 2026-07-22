@@ -61,21 +61,20 @@ function Sparkline({ samples, field, color = 'var(--color-gel)', height = 34 }) 
   );
 }
 
-function useDevice(id, sim) {
+function useDevice(id) {
   const [status, setStatus] = useState(null);
   const [history, setHistory] = useState([]);
   useEffect(() => {
     let alive = true;
-    const q = sim ? '?sim=1' : '';
     const poll = async () => {
       try {
-        const { data } = await axios.get(`/api/devices/${id}/status${q}`);
+        const { data } = await axios.get(`/api/devices/${id}/status`);
         if (alive) setStatus(data);
       } catch { if (alive) setStatus({ available: false, reason: 'backend unreachable' }); }
     };
     const hist = async () => {
       try {
-        const { data } = await axios.get(`/api/devices/${id}/history${q}`);
+        const { data } = await axios.get(`/api/devices/${id}/history`);
         if (alive) setHistory(data);
       } catch { /* keep last */ }
     };
@@ -83,7 +82,7 @@ function useDevice(id, sim) {
     const i1 = setInterval(poll, POLL_MS);
     const i2 = setInterval(hist, POLL_MS * 4);
     return () => { alive = false; clearInterval(i1); clearInterval(i2); };
-  }, [id, sim]);
+  }, [id]);
   return { status, history };
 }
 
@@ -103,8 +102,8 @@ function fmtUptime(s) {
   return d > 0 ? `${d}d ${h}h` : `${h}h ${m}m`;
 }
 
-function StarlinkPanel({ sim }) {
-  const { status, history } = useDevice('starlink', sim);
+function StarlinkPanel() {
+  const { status, history } = useDevice('starlink');
   if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
   if (!status.available) return <Unavailable status={status} />;
   const online = status.online;
@@ -115,7 +114,6 @@ function StarlinkPanel({ sim }) {
           <Dot ok={online} /> {status.state}
         </span>
         <span className="text-[9px] font-mono text-text-muted">uptime {fmtUptime(status.uptimeS)}</span>
-        {status.source === 'sim' && <span className="text-[8px] font-mono text-purple-400 border border-purple-800 rounded-sm px-1">SIM</span>}
       </div>
       <AlertChips alerts={status.alerts} />
       <div className="flex gap-2 flex-wrap">
@@ -191,8 +189,8 @@ function SignalBars({ quality, label }) {
   );
 }
 
-function BoleroPanel({ sim }) {
-  const { status, history } = useDevice('bolero', sim);
+function BoleroPanel() {
+  const { status, history } = useDevice('bolero');
   if (!status) return <div className="text-[10px] font-mono text-text-muted p-4">loading…</div>;
   if (!status.available) return <Unavailable status={status} />;
   return (
@@ -204,7 +202,6 @@ function BoleroPanel({ sim }) {
         <span className="text-[9px] font-mono text-text-muted">
           PTP {status.ptpSynced ? 'synced' : status.ptpSynced === false ? 'LOST' : '—'}
         </span>
-        {status.source === 'sim' && <span className="text-[8px] font-mono text-purple-400 border border-purple-800 rounded-sm px-1">SIM</span>}
       </div>
       <AlertChips alerts={status.alerts} />
 
@@ -261,8 +258,8 @@ function BoleroPanel({ sim }) {
 
 const STARDUST_HOLD_MS = 30000;  // keep the last good reading through brief Art-Net discovery misses
 
-function StardustPanel({ sim }) {
-  const { status: live } = useDevice('stardust', sim);
+function StardustPanel() {
+  const { status: live } = useDevice('stardust');
   const [units, setUnits] = useState([]);
   // The real unit answers the Art-Net discovery poll only intermittently, so a
   // single miss would otherwise blank the whole panel. Hold the last available
@@ -273,11 +270,10 @@ function StardustPanel({ sim }) {
   const held = lastGood.current && Date.now() - lastGoodAt.current < STARDUST_HOLD_MS;
   const status = live?.available ? live : (held ? lastGood.current : live);
   const reconnecting = Boolean(live && !live.available && held);
-  const uq = sim ? '?sim=1' : '';
   const loadUnits = useCallback(async () => {
-    try { const { data } = await axios.get(`/api/devices/stardust/units${uq}`); setUnits(data); }
+    try { const { data } = await axios.get(`/api/devices/stardust/units`); setUnits(data); }
     catch { setUnits([]); }
-  }, [uq]);
+  }, []);
   useEffect(() => {
     loadUnits();
     const i = setInterval(loadUnits, 10000);
@@ -297,7 +293,6 @@ function StardustPanel({ sim }) {
           <Dot ok={status.universesUp > 0} /> {status.node}
         </span>
         <span className="text-[9px] font-mono text-text-muted">{status.address} · {status.universesUp}/8 universes · {status.fixturesDiscovered} RDM fixtures</span>
-        {status.source === 'sim' && <span className="text-[8px] font-mono text-purple-400 border border-purple-800 rounded-sm px-1">SIM</span>}
         {reconnecting && <span className="text-[8px] font-mono text-warn border border-warn/50 rounded-sm px-1">RECONNECTING…</span>}
       </div>
       <AlertChips alerts={status.alerts} />
@@ -420,7 +415,6 @@ const PANELS = {
 };
 
 export default function Devices() {
-  const [sim, setSim] = useState(true);
   const [detected, setDetected] = useState([]);
   const [tab, setTab] = useState('starlink');
 
@@ -428,14 +422,14 @@ export default function Devices() {
     let alive = true;
     const poll = async () => {
       try {
-        const { data } = await axios.get(`/api/devices${sim ? '?sim=1' : ''}`);
+        const { data } = await axios.get('/api/devices');
         if (alive) setDetected(data);
       } catch { if (alive) setDetected([]); }
     };
     poll();
     const i = setInterval(poll, 10000);
     return () => { alive = false; clearInterval(i); };
-  }, [sim]);
+  }, []);
 
   const Panel = PANELS[tab];
 
@@ -444,10 +438,6 @@ export default function Devices() {
       <div className="flex items-center gap-4 px-4 py-2 bg-[var(--color-bg)] border-b border-[var(--color-surface-2)]">
         <h1 className="text-[11px] font-bold tracking-widest text-gel uppercase font-mono">Devices</h1>
         <span className="text-[9px] font-mono text-text-muted">device-aware panels · read-only telemetry</span>
-        <label className="ml-auto flex items-center gap-1.5 text-[9px] font-mono text-purple-300 cursor-pointer">
-          <input type="checkbox" checked={sim} onChange={(e) => setSim(e.target.checked)} className="accent-purple-500" />
-          SIM MODE (no hardware needed)
-        </label>
       </div>
 
       {/* detection cards */}
@@ -470,7 +460,7 @@ export default function Devices() {
       </div>
 
       <div className="px-4 pb-6 max-w-4xl">
-        {Panel && <Panel sim={sim} />}
+        {Panel && <Panel />}
       </div>
     </div>
   );

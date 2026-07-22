@@ -1,52 +1,52 @@
-// File: src/components/Header.jsx
+// File: src/components/Header.jsx — Five12 Logic design (1b Spotlight Stage)
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import logo from '../assets/logo.svg';
 
+const NAV = [
+  { to: '/', label: 'Home' },
+  { to: '/patch', label: 'Patch' },
+  { to: '/labels', label: 'Labels' },
+  { to: '/network', label: 'Network' },
+  { to: '/devices', label: 'Devices' },
+  { to: '/ip-config', label: 'IP Config' },
+  { to: '/rf', label: 'RF Scanner' },
+];
+
 export default function Header() {
+  const { pathname } = useLocation();
+  const isActive = (to) => (to === '/' ? pathname === '/' : pathname.startsWith(to));
+
   return (
-    <header className="bg-gray-800 text-white p-4">
-      <div className="max-w-screen-xl mx-auto flex items-center justify-between">
-        <Link to="/">
-          <img src={logo} alt="Five12 Logo" className="h-12" />
+    <header className="sticky top-0 z-40 border-b border-border bg-bg/85 backdrop-blur-md">
+      <div className="mx-auto flex max-w-screen-2xl items-center justify-between px-6 py-3">
+        <Link to="/" className="shrink-0" style={{ filter: 'drop-shadow(0 0 18px oklch(60% 0.23 27 / 0.45))' }}>
+          <img src={logo} alt="Five12 Logic" className="h-10" />
         </Link>
         <nav>
-          <ul className="flex space-x-6">
-            <li>
-              <Link to="/" className="hover:underline">
-                Home
-              </Link>
-            </li>
-            <li>
-              <Link to="/patch" className="hover:underline">
-                Patch
-              </Link>
-            </li>
-            <li>
-              <Link to="/labels" className="hover:underline">
-                Labels
-              </Link>
-            </li>
-            <li>
-              <Link to="/effects-playground" className="hover:underline">
-                Effects Playground
-              </Link>
-            </li>
-            <li>
-              <Link to="/network" className="hover:underline">
-                Network
-              </Link>
-            </li>
-            <li>
-              <Link to="/ip-config" className="hover:underline">
-                IP Config
-              </Link>
-            </li>
-            <li>
-              <Link to="/nodes" className="hover:underline">
-                Nodes
-              </Link>
-            </li>
+          <ul className="flex items-center gap-1">
+            {NAV.map(({ to, label }) => {
+              const active = isActive(to);
+              return (
+                <li key={to}>
+                  <Link
+                    to={to}
+                    className={`relative rounded-lg px-3 py-2 font-display text-[15px] font-semibold uppercase tracking-wide transition-colors ${
+                      active ? 'text-brand-hi' : 'text-text-muted hover:text-text'
+                    }`}
+                    style={active ? { textShadow: '0 0 18px oklch(68% 0.22 27 / 0.55)' } : undefined}
+                  >
+                    {label}
+                    {active && (
+                      <span
+                        className="absolute inset-x-2 -bottom-px h-px rounded-full bg-brand"
+                        style={{ boxShadow: '0 0 10px oklch(60% 0.23 27 / 0.9)' }}
+                      />
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
         </nav>
       </div>
