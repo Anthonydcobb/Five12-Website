@@ -32,6 +32,16 @@ Branch: **`edit_export`**. Nothing pushed. All work committed.
 - `app/src/pages/Devices.jsx` — StardustPanel: output-card grid + LINK button (confirm + linking state). Sim wiring removed.
 - `docs/superpowers/specs/2026-07-22-stardust-output-cards-design.md` — the design/spec.
 
+## Next up (diagnosed, not yet built)
+
+- **Network Monitor devices flap offline/online** (sACN/HogNet/Bolero). Root cause
+  CONFIRMED: scan cycle over the huge subnets (a /8 + two /16s) exceeds the 90s offline
+  threshold, so devices age out between sweeps. Full diagnosis, live evidence, fix
+  options, and verify command in **`docs/handoff-2026-07-22-network-monitor-flap.md`**.
+  Recommended fix: fast per-cycle re-probe of known device IPs; quick stopgap: raise the
+  threshold (both scanner.py and NetworkMonitor.jsx). Gear is fine — it's a monitor
+  artifact, not a real network issue.
+
 ## Open items / decisions
 
 - **UNLINK intentionally NOT exposed** — operator's explicit call. Do not add without a new decision.
