@@ -363,6 +363,49 @@ def analyze_patch_import(patch_id):
         return jsonify({'error': str(e)}), 500
 
 
+@bp.route('/api/patch-sheets/<int:patch_id>/import/commit', methods=['POST'])
+def commit_patch_import(patch_id):
+    try:
+        if 'file' not in request.files:
+            return {'error': 'No file uploaded'}, 400
+        f = request.files['file']
+        mapping = json.loads(request.form.get('mapping', '{}'))
+        header_idx = int(request.form.get('headerRowIndex', 0))
+        grid = read_table(f.read(), f.filename)
+        if not grid:
+            return {'error': 'The file appears to be empty.'}, 400
+        headers = [('' if c is None else str(c)).strip()
+                   for c in grid[header_idx]]
+        data_rows = grid[header_idx + 1:]
+        canonical_rows = apply_mapping(headers, data_rows, mapping)
+        for row in canonical_rows:
+            db.session.add(PatchRow(
+                patch_id=patch_id,
+                set_name=row.get('set'),
+                fixture=row.get('fixture'),
+                universe=row.get('universe'),
+                address=row.get('address'),
+                end_address=row.get('endAddress'),
+                type=row.get('type'),
+                channel_count=row.get('channelCount'),
+                location=row.get('location'),
+                wattage=row.get('wattage'),
+                weight=row.get('weight'),
+                firmware=row.get('firmware'),
+                notes=row.get('notes'),
+            ))
+        db.session.commit()
+        non_blank = sum(1 for cells in data_rows
+                        if any(c not in (None, '') for c in cells))
+        inserted = len(canonical_rows)
+        return jsonify({'inserted': inserted,
+                        'skipped': max(0, non_blank - inserted)})
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Patch import commit failed")
+        return jsonify({'error': str(e)}), 500
+
+
 @bp.route('/api/fixtures/import-excel', methods=['POST'])
 def import_fixtures_excel():
     try:
