@@ -11,6 +11,7 @@ Branch: **`edit_export`**. Nothing pushed. All work committed.
 | `113214d` | **Removed sim mode** (frontend only — the Devices "SIM MODE" toggle, defaulted on). Backend sim endpoints/tests left intact. **Parked the Console** — removed `/console` route + nav link; `Console.jsx`, engine, `LightSimulator.jsx` kept on disk with a PARKED banner. |
 | `6e1642b` | **Output cards light up.** The U1–U8 grid keyed off Art-Net transmitting (never reported by a real Stardust → all grey). Now driven by `status.outputs` (A–H), lit when `enabled && source != 'None'`, showing source/universe/CRMX type. |
 | `1786528` | **CRMX Link button** + prominent universe. `link_output()` = the integration's ONE hardware write. |
+| `d7c2637` | **Multi-unit selector.** Multiple Stardusts on the net; select one by MAC. `get_status(mac)`/`link_output(out_nr, mac)`, sticky re-keyed per MAC (`_last_seen`), chip-row selector (hidden when ≤1 unit). Live-verified with 2 real units (`D8:3A:DD:1A:70:D1` @10.0.5.5, `E4:5F:01:AC:24:D4` @10.31.1.201). Spec: `docs/superpowers/specs/2026-07-22-stardust-multi-unit-design.md`. Known limit: history sparkline still shared across units. |
 
 ## Key facts learned (verified against the live rig at 10.0.1.3)
 
