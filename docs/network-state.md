@@ -1,6 +1,6 @@
 # Lighting Network — State & Handoff
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 Field survey of the show network, and the source of the "confirmed on rig" OUI
 entries in `backend/app/vendors/__init__.py`. Originally captured as loose
@@ -34,7 +34,23 @@ All four are seeded as `NetworkSubnet` rows and scanned automatically.
 
 **Stardust** — `10.0.5.1`.
 
-**Hog 4** — `172.31.0.4` (server, dual-homed with `10.0.0.4`), plus `10.0.0.11`, `10.0.0.22`.
+**Hog 4 family** [NAMED 2026-07-23] — each unit is dual-homed (HogNet 172.31.0.x +
+sACN/FixtureNet 10.0.0.x, consecutive MACs per chassis):
+
+| Name | HogNet | sACN | HogNet MAC |
+|---|---|---|---|
+| Princess Donut (console) | `172.31.0.139` | `10.0.0.139` | `00:90:A1:30:12:96` |
+| Hobbs | `172.31.0.22` | `10.0.0.22` | `00:90:A1:26:12:71` |
+| Calvin | `172.31.0.11` | `10.0.0.11` | `00:90:A1:26:09:75` |
+| Hog FL HPU #4 | `172.31.0.4` | `10.0.0.4` | `00:90:A1:24:00:97` |
+
+Shows run on port **6612** on this rig (not the 6600 default).
+
+**Stardust units** [LABELED 2026-07-23] — 4 known, MAC-persistent labels in the app:
+MAIN Unit Backup `E4:5F:01:AB:9F:65` (10.0.5.2), MAIN UNIT PRIMARY `…89:B3:00`
+(10.0.5.1), FMB #6 `…AC:24:D4` (10.31.1.201), FMB #5 `…AC:23:14` (10.0.1.3).
+The Devices panel lists live ArtPoll responders only; units powered off don't
+appear (verified 3 of 4 genuinely absent overnight 7/22→7/23, not an app fault).
 
 **Luminex GigaCore12 (6)** — `172.16.1.4`, `.11`, `.12`, `.21`, `.31`, `.36`
 
@@ -134,6 +150,38 @@ a word and does **not** consult `timeslots`:
 
 ## Fixed
 
+**HogPC couldn't join shows — flash-and-return on Connect** (fixed 2026-07-23).
+Four stacked faults, unpicked in order: (1) the KM-TEST Loopback still held
+`172.31.210.220/16` (open item 1) — REMOVED via `Remove-NetIPAddress`; (2)
+Princess Donut's HogNet mask was `255.255.255.0` — corrected to `/16` at the
+console (same fault class as the 7/22 Stardust); (3) HogPC's FixtureNet was
+bound to the *Bluetooth* adapter GUID (blank FN IP on the start screen) —
+repointed to the sACN NIC in Hog Control Panel; (4) **the killer**: Hog's data
+dir `Documents\ETC\HogPC` is OneDrive-redirected (Known Folder Move), and the
+pulled show cache (`Shows\<show>\blackbox`) got poisoned under sync — Hog's
+desktop component crashed reopening it on every Connect (an earlier 786 MB
+`desktop-Win32-golden.exe.dmp` shows prior history). Fix: data moved to
+`C:\Hog4PC` and `Documents\ETC\HogPC` replaced with a **junction → C:\Hog4PC**,
+so Hog's default path physically lands outside OneDrive. Stale caches parked in
+`C:\Hog4PC\_stale\`. Verified: two successful joins. If a reopen ever flashes
+again, delete `C:\Hog4PC\Shows\<show>` and reconnect fresh. NOTE: HogPC's own
+process names don't contain "Hog" — the launcher is `launcher-win32-golden`,
+desktop is `desktop-Win32-golden`, install lives under
+`C:\Program Files (x86)\ETC\HogPC`, settings in `%APPDATA%\ETC\Persistent`.
+
+**backend/.env was never actually loading — python-dotenv missing** (fixed
+2026-07-23, commit `5468b6e`). Flask's CLI only auto-loads `.env` when
+python-dotenv is installed; it never was, so `FIVE12_BOLERO_HOST` (and DB_*)
+only reached the app when the launching shell happened to export them. A
+backend restart in a clean shell silently broke the Bolero panel. Now declared
+in requirements.txt; `.env` loads on every `flask run`.
+
+**Second occurrence of the wrong-interpreter trap** (2026-07-23): a backend
+started with PATH `python` lacked `websocket-client`, so the Stardust outputs
+`/ws` fetch failed silently (`outputs: null`, panel said "outputs config
+unavailable"). Same class as the 7/21 puresnmp false alarm — always launch with
+`backend/.venv/Scripts/python.exe`; verify by behaviour, not process paths.
+
 **Devices flapped offline/online — revisit interval exceeded the offline threshold**
 (fixed 2026-07-22). "Online" is `last_seen` within `OFFLINE_THRESHOLD` (90s), but the
 wide discovery sweep refreshed a device's `last_seen` only once per full pass — measured
@@ -217,12 +265,15 @@ its label `Bollero Antenna #1` intact on the next sweep.
 
 ## Open
 
-1. **Two Hog consoles still not visible on `172.31.x`.** The Loopback adapter
-   still holds `172.31.210.220/16` and continues to win source selection for
-   HogNet. Still present as of 2026-07-21 — both `172.31.210.220` and
-   `172.31.220.220` appear in the interface list. Fix (needs admin):
-   `Remove-NetIPAddress -InterfaceAlias 'Loopback' -IPAddress '172.31.210.220'`
-   or set `-SkipAsSource $true` plus `-InterfaceMetric 9999`.
+1. ~~Two Hog consoles still not visible on `172.31.x` / Loopback squatting~~
+   **RESOLVED 2026-07-23** — loopback's `172.31.210.220` removed; contributing
+   cause was also Princess Donut's `/24` mask (now `/16`). Residue: a
+   `172.31.0.220` alias remains on the HOG NIC (added while diagnosing; now
+   redundant — remove at leisure with
+   `Remove-NetIPAddress -InterfaceAlias 'HOG' -IPAddress '172.31.0.220'`).
+   Follow-up worth doing at a dark moment: Princess Donut's session crashed
+   when a client disconnected — make a fresh show backup and run a show-file
+   health check on the console.
 2. **Wi-Fi `172.16.11.11/23` overlaps Management `/16`.** Venue Wi-Fi (~50 phones
    with randomized MACs) shares the range; the more specific /23 wins, routing
    `172.16.10-11.x` out the Wi-Fi via a FortiGate. Renumber Management to a /24.
