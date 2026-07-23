@@ -75,6 +75,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [printers, setPrinters] = useState([]);
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
   const [preview, setPreview] = useState(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -109,6 +110,13 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     }).filter(Boolean);
   }, [rows, mapping, tpl]);
 
+  // jump back to the first label on a structural source/template change
+  useEffect(() => { setPreviewIndex(0); }, [tpl, source, csv]);
+  // keep the index valid if the record count shrinks (e.g. mapping edit)
+  useEffect(() => {
+    setPreviewIndex(i => Math.min(i, Math.max(0, records.length - 1)));
+  }, [records.length]);
+
   const pickTemplate = async (id) => {
     setError(null); setPreview(null);
     if (!id) { setTpl(null); return; }
@@ -126,15 +134,28 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     setMapping(deriveMapping(tpl, srcKey, source === 'csv' ? (csv?.headers || []) : PATCH_FIELDS));
   }, [source, csv]);   // intentionally not on tpl — pickTemplate handles that
 
-  // live preview of the first record
+  // live preview of the currently-jogged record
   useEffect(() => {
     if (!tpl || !records.length || ready !== true) { setPreview(null); return; }
+    const rec = records[Math.min(previewIndex, records.length - 1)];
     let alive = true;
-    renderPreview(tpl.labelXml, records[0])
+    renderPreview(tpl.labelXml, rec)
       .then(png => { if (alive) setPreview(png); })
       .catch(() => { if (alive) setPreview(null); });
     return () => { alive = false; };
-  }, [tpl, records, ready]);
+  }, [tpl, records, previewIndex, ready]);
+
+  // left/right arrows step the preview, unless focus is in an input/select
+  useEffect(() => {
+    const max = records.length - 1;
+    const onKey = (e) => {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowLeft') setPreviewIndex(i => Math.max(0, i - 1));
+      else if (e.key === 'ArrowRight') setPreviewIndex(i => Math.min(max, i + 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [records.length]);
 
   const doPrint = async () => {
     if (records.length > 200 &&
@@ -225,10 +246,34 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                 ))}
               </tbody>
             </table>
-            <div className="bg-bg border border-border rounded-lg p-3 flex items-center justify-center min-h-[140px]">
-              {preview
-                ? <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
-                : <span className="text-text-muted text-xs">preview appears when mapped</span>}
+            <div className="flex flex-col gap-2">
+              <div className="bg-bg border border-border rounded-lg p-3 flex items-center justify-center min-h-[140px]">
+                {preview
+                  ? <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
+                  : <span className="text-text-muted text-xs">preview appears when mapped</span>}
+              </div>
+              {records.length > 0 && (
+                <div className="flex items-center justify-center gap-2 text-sm text-text-muted">
+                  <button type="button" aria-label="previous label"
+                    onClick={() => setPreviewIndex(i => Math.max(0, i - 1))}
+                    disabled={previewIndex <= 0}
+                    className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">‹</button>
+                  <span className="flex items-center gap-1">
+                    Label
+                    <input type="number" min={1} max={records.length} value={previewIndex + 1}
+                      onChange={e => {
+                        const n = parseInt(e.target.value, 10);
+                        if (!Number.isNaN(n)) setPreviewIndex(Math.min(records.length - 1, Math.max(0, n - 1)));
+                      }}
+                      className="w-14 bg-bg border border-border rounded px-1 py-0.5 text-center text-text" />
+                    of {records.length}
+                  </span>
+                  <button type="button" aria-label="next label"
+                    onClick={() => setPreviewIndex(i => Math.min(records.length - 1, i + 1))}
+                    disabled={previewIndex >= records.length - 1}
+                    className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">›</button>
+                </div>
+              )}
             </div>
           </div>
         )}
