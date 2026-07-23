@@ -121,6 +121,28 @@ class DymoTemplate(db.Model):
         return d
 
 
+class DymoCsvSource(db.Model):
+    __tablename__ = 'dymo_csv_sources'
+    id         = db.Column(db.Integer, primary_key=True)
+    name       = db.Column(db.String(200), nullable=False)
+    headers    = db.Column(db.JSON, nullable=False)   # ["Fixture ID", "Address", ...]
+    rows       = db.Column(db.JSON, nullable=False)    # [{header: value, ...}, ...]
+    row_count  = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False)
+
+    def to_dict(self, include_rows=False):
+        d = {
+            'id': self.id,
+            'name': self.name,
+            'headers': self.headers,
+            'rowCount': self.row_count,
+            'createdAt': _utc_iso(self.created_at),
+        }
+        if include_rows:
+            d['rows'] = self.rows
+        return d
+
+
 from datetime import datetime, timezone
 
 
