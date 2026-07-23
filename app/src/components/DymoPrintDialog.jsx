@@ -83,9 +83,11 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     const ok = await dymoReady();
     setReady(ok);
     if (ok) {
-      const ps = await getPrinters();
-      setPrinters(ps);
-      if (ps.length && !ps.includes(printer)) setPrinter(ps[0]);
+      try {
+        const ps = await getPrinters();
+        setPrinters(ps);
+        if (ps.length && !ps.includes(printer)) setPrinter(ps[0]);
+      } catch { setPrinters([]); }
     }
   };
   useEffect(() => { probe(); }, []);
@@ -96,11 +98,18 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const columns = source === 'csv' ? (csv?.headers || []) : PATCH_FIELDS;
   const rows = source === 'csv' ? (csv?.rows || [])
     : source === 'selection' ? selectedRows : (patchRows || []);
-  const records = useMemo(() => rows.map(r =>
-    Object.fromEntries(Object.entries(mapping)
-      .filter(([, col]) => col)
-      .map(([v, col]) => [v, String(r[col] ?? '')])))
-    .filter(rec => Object.values(rec).some(v => v !== '')), [rows, mapping]);
+  const records = useMemo(() => {
+    if (!tpl) return [];
+    return rows.map(r => {
+      const mappedVals = Object.entries(mapping)
+        .filter(([, col]) => col)
+        .map(([v, col]) => [v, String(r[col] ?? '')]);
+      if (!mappedVals.some(([, val]) => val !== '')) return null;   // fully blank row
+      const rec = Object.fromEntries(tpl.variables.map(v => [v, '']));
+      for (const [v, val] of mappedVals) rec[v] = val;
+      return rec;
+    }).filter(Boolean);
+  }, [rows, mapping, tpl]);
 
   const pickTemplate = async (id) => {
     setError(null); setPreview(null);

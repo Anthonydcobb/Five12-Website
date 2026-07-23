@@ -1,4 +1,6 @@
 # backend/app/models.py
+from sqlalchemy.dialects import mysql
+
 from . import db
 
 class Show(db.Model):
@@ -100,7 +102,7 @@ class DymoTemplate(db.Model):
     __tablename__ = 'dymo_templates'
     id             = db.Column(db.Integer, primary_key=True)
     name           = db.Column(db.String(120), nullable=False)
-    label_xml      = db.Column(db.Text, nullable=False)
+    label_xml      = db.Column(db.Text().with_variant(mysql.MEDIUMTEXT(), 'mysql'), nullable=False)
     variables      = db.Column(db.JSON, nullable=False)
     # {"patch": {var: canonicalField}, "csv": {var: csvHeader}} — last used
     saved_mappings = db.Column(db.JSON, nullable=True)

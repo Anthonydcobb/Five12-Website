@@ -26,7 +26,7 @@ def test_no_variables_returns_empty():
     xml = '<DesktopLabel><DYMOLabel><ObjectInfo><TextObject><Name></Name></TextObject></ObjectInfo></DYMOLabel></DesktopLabel>'
     assert extract_variables(xml) == []
 
-import io, json as _json
+import io
 
 def _upload(client, xml=SAMPLE, name='Fixture Tag'):
     return client.post('/api/dymo-templates',
@@ -81,3 +81,8 @@ def test_upload_strips_extension_from_filename_fallback(client, db):
                     content_type='multipart/form-data')
     assert r.status_code == 201
     assert r.get_json()['name'] == 'cable wrap'
+
+def test_upload_tolerates_utf8_bom(client, db):
+    r = _upload(client, xml='﻿' + SAMPLE, name='BOM Tag')
+    assert r.status_code == 201
+    assert r.get_json()['variables'] == ['FixNum', 'Uni']

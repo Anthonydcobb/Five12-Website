@@ -14,7 +14,7 @@ def upload_template():
     if 'file' not in request.files:
         return jsonify({'error': 'No file uploaded'}), 400
     f = request.files['file']
-    xml = f.read().decode('utf-8', errors='replace')
+    xml = f.read().decode('utf-8-sig', errors='replace')
     try:
         variables = extract_variables(xml)
     except ValueError:

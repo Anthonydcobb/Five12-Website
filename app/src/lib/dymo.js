@@ -1,37 +1,53 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
 let _fw = null;
-
 let _loading = null;
+
+function _inject(url) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('failed to load DYMO framework'));
+    document.head.appendChild(s);
+  });
+}
 
 async function fw() {
   if (_fw) return _fw;
-  if (!window.dymo?.label?.framework) {
-    if (!_loading) {
-      _loading = (async () => {
+  if (!_loading) {
+    _loading = (async () => {
+      if (!window.dymo?.label?.framework) {
         const { default: url } = await import('../vendor/dymo.connect.framework.js?url');
-        await new Promise((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = url;
-          s.onload = resolve;
-          s.onerror = () => reject(new Error('failed to load DYMO framework'));
-          document.head.appendChild(s);
-        });
-      })();
-    }
-    await _loading;
+        await _inject(url);
+      }
+      const f = window.dymo.label.framework;
+      await new Promise((res) => f.init(res));
+      return f;
+    })();
   }
-  const f = window.dymo.label.framework;
-  await new Promise((res) => f.init(res));
-  _fw = f;
-  return f;
+  _fw = await _loading;
+  return _fw;
+}
+
+export function resetDymo() {
+  // Drop every cached layer (incl. the framework's own faulty-instance cache,
+  // which only a fresh script evaluation can clear).
+  _fw = null;
+  _loading = null;
+  try { delete window.dymo; } catch { window.dymo = undefined; }
 }
 
 export async function dymoReady() {
   try {
     const f = await fw();
     const env = f.checkEnvironment();
-    return !!(env && env.isBrowserSupported && env.isFrameworkInstalled);
-  } catch { return false; }
+    const ok = !!(env && env.isBrowserSupported && env.isFrameworkInstalled);
+    if (!ok) resetDymo();
+    return ok;
+  } catch {
+    resetDymo();
+    return false;
+  }
 }
 
 export async function getPrinters() {
