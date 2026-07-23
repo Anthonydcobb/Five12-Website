@@ -114,7 +114,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   useEffect(() => { setPreviewIndex(0); }, [tpl, source, csv]);
   // keep the index valid if the record count shrinks (e.g. mapping edit)
   useEffect(() => {
-    setPreviewIndex(i => Math.min(i, Math.max(0, records.length - 1)));
+    setPreviewIndex(i => Math.min(Math.max(i, 0), Math.max(0, records.length - 1)));
   }, [records.length]);
 
   const pickTemplate = async (id) => {
@@ -147,11 +147,11 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
 
   // left/right arrows step the preview, unless focus is in an input/select
   useEffect(() => {
-    const max = records.length - 1;
+    const max = Math.max(0, records.length - 1);
     const onKey = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
       if (e.key === 'ArrowLeft') setPreviewIndex(i => Math.max(0, i - 1));
-      else if (e.key === 'ArrowRight') setPreviewIndex(i => Math.min(max, i + 1));
+      else if (e.key === 'ArrowRight') setPreviewIndex(i => Math.max(0, Math.min(max, i + 1)));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
