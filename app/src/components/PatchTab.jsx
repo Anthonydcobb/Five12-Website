@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import PatchForm from './PatchForm';
 import RepatchForm from './RepatchForm';
 import ImportWizard from './ImportWizard';
+import DymoPrintDialog from './DymoPrintDialog';
 
 const COLS = [
   { key: 'set',          label: 'Set',          editable: true,  sortable: true  },
@@ -35,6 +36,7 @@ export default function PatchTab({
   const [showPatchForm, setShowPatchForm] = useState(false);
   const [showRepatchForm, setShowRepatchForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showDymo, setShowDymo] = useState(false);
   const [selectedCells, setSelectedCells] = useState(new Set());
   const [isDragging, setIsDragging] = useState(false);
   const [command, setCommand] = useState('');
@@ -286,6 +288,10 @@ export default function PatchTab({
           <button onClick={handleExport} className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded">
             Export
           </button>
+          <button onClick={() => setShowDymo(true)}
+            className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded">
+            Labels
+          </button>
         </div>
       </div>
 
@@ -436,6 +442,13 @@ export default function PatchTab({
           patchId={patchId}
           onClose={() => setShowImport(false)}
           onImported={(n) => { setShowImport(false); alert(`Imported ${n} rows`); window.location.reload(); }}
+        />
+      )}
+      {showDymo && (
+        <DymoPrintDialog
+          patchRows={rows}
+          selectedRows={rows.filter(r => selectedRowIds.includes(r.id))}
+          onClose={() => setShowDymo(false)}
         />
       )}
     </div>

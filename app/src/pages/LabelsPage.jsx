@@ -3,6 +3,7 @@ import axios from 'axios';
 
 import LabelDesigner  from '../components/LabelDesigner';
 import LabelPreview   from '../components/LabelPreview';
+import DymoSection    from '../components/DymoSection';
 import { generateLabelsPDF, AVERY } from '../utils/labelPdf';
 
 // Only show one entry per unique size (skip 8xxx duplicates in the picker)
@@ -163,13 +164,13 @@ export default function LabelsPage() {
           <h2 className="text-sm font-bold tracking-widest text-text-muted uppercase mb-3">Label Creator</h2>
 
           <nav className="flex rounded overflow-hidden border border-border">
-            {['design','patch'].map(v => (
+            {['design','patch','dymo'].map(v => (
               <button
                 key={v}
                 onClick={() => setView(v)}
                 className={`flex-1 py-1.5 text-xs font-medium capitalize transition-colors ${view === v ? 'bg-brand text-white' : 'text-text-muted hover:bg-surface-2'}`}
               >
-                {v === 'design' ? 'Design' : 'Patch'}
+                {v === 'design' ? 'Design' : v === 'patch' ? 'Patch' : 'DYMO'}
               </button>
             ))}
           </nav>
@@ -459,6 +460,13 @@ export default function LabelsPage() {
               ) : selectedPatch ? (
                 <p className="text-text-muted text-sm">No fixtures in this patch sheet.</p>
               ) : null}
+            </div>
+          )}
+
+          {/* ── DYMO view ───────────────────────────────── */}
+          {view === 'dymo' && (
+            <div className="p-4">
+              <DymoSection />
             </div>
           )}
 
