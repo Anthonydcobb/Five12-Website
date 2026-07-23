@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { dymoReady, getPrinters, renderPreview, printMerge } from '../lib/dymo';
+import { parseRangeExpr } from '../lib/rangeExpr';
 
 const PATCH_FIELDS = ['set','fixture','universe','address','endAddress','type',
   'channelCount','location','wattage','weight','firmware','notes'];
@@ -76,6 +77,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
   const [preview, setPreview] = useState(null);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [scopeMode, setScopeMode] = useState('all');   // 'all' | 'custom'
+  const [rangeExpr, setRangeExpr] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -109,6 +112,11 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       return Object.values(rec).some((x) => x !== '') ? rec : null;
     }).filter(Boolean);
   }, [rows, mapping, tpl]);
+
+  const printList = useMemo(() => {
+    if (scopeMode === 'all') return records;
+    return parseRangeExpr(rangeExpr, records.length).map(i => records[i]);
+  }, [records, scopeMode, rangeExpr]);
 
   // jump back to the first label on a structural source/template change
   useEffect(() => { setPreviewIndex(0); }, [tpl, source, csv]);
@@ -158,11 +166,11 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   }, [records.length]);
 
   const doPrint = async () => {
-    if (records.length > 200 &&
-        !window.confirm(`Print ${records.length} labels?`)) return;
+    if (printList.length > 200 &&
+        !window.confirm(`Print ${printList.length} labels?`)) return;
     setBusy(true); setError(null);
     try {
-      await printMerge(printer, tpl.labelXml, records);
+      await printMerge(printer, tpl.labelXml, printList);
       localStorage.setItem(LAST_PRINTER_KEY, printer);
       try {
         const srcKey = source === 'csv' ? 'csv' : 'patch';
@@ -278,21 +286,38 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-3">
-          <label className="flex items-center gap-2 text-sm text-text-muted">
-            Printer
-            <select value={printer} onChange={e => setPrinter(e.target.value)}
-              className="bg-bg border border-border rounded px-2 py-1 text-text">
-              {printers.length === 0 && <option value="">none found</option>}
-              {printers.map(p => <option key={p} value={p}>{p}</option>)}
-            </select>
-          </label>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-text-muted">Print</span>
+              <button type="button" onClick={() => setScopeMode('all')}
+                className={`px-3 py-1.5 rounded border ${scopeMode==='all' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>All</button>
+              <button type="button" onClick={() => setScopeMode('custom')}
+                className={`px-3 py-1.5 rounded border ${scopeMode==='custom' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>Custom</button>
+              {scopeMode === 'custom' && (
+                <span className="flex items-center gap-2">
+                  <input type="text" value={rangeExpr} onChange={e => setRangeExpr(e.target.value)}
+                    placeholder="2-4, 10-15"
+                    className="w-32 bg-bg border border-border rounded px-2 py-1 text-text" />
+                  <span className="text-xs text-text-muted">{printList.length} labels</span>
+                </span>
+              )}
+            </div>
+            <label className="flex items-center gap-2 text-sm text-text-muted">
+              Printer
+              <select value={printer} onChange={e => setPrinter(e.target.value)}
+                className="bg-bg border border-border rounded px-2 py-1 text-text">
+                {printers.length === 0 && <option value="">none found</option>}
+                {printers.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
             <button onClick={doPrint}
-              disabled={busy || !tpl || !printer || records.length === 0 || ready !== true}
+              disabled={busy || !tpl || !printer || printList.length === 0 || ready !== true}
               className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
-              {busy ? 'Printing…' : `Print ${records.length} labels`}
+              {busy ? 'Printing…' : (scopeMode === 'all' ? `Print all ${records.length}` : `Print ${printList.length} labels`)}
             </button>
           </div>
         </div>
