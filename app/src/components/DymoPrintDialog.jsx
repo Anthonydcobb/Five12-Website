@@ -82,6 +82,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [rangeExpr, setRangeExpr] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [printedMsg, setPrintedMsg] = useState(null);
 
   const probe = async () => {
     setReady(null);
@@ -185,10 +186,13 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [records.length]);
 
+  // clear the "Printed" confirmation once the print context changes
+  useEffect(() => { setPrintedMsg(null); }, [tpl, source, csv, scopeMode, rangeExpr]);
+
   const doPrint = async () => {
     if (printList.length > 200 &&
         !window.confirm(`Print ${printList.length} labels?`)) return;
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setPrintedMsg(null);
     try {
       await printMerge(printer, tpl.labelXml, printList);
       localStorage.setItem(LAST_PRINTER_KEY, printer);
@@ -200,7 +204,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       } catch (e) {
         console.warn('mapping save failed (labels already printed):', e);
       }
-      onClose();
+      // Keep the dialog open so the user can print again — they close it via ×/Done.
+      setPrintedMsg(`Printed ${printList.length} label${printList.length === 1 ? '' : 's'}.`);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -214,6 +219,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
         </div>
 
         {error && <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-sm rounded px-3 py-2 mb-3">{error}</div>}
+
+        {printedMsg && <div className="bg-online/15 border border-online/40 text-online text-sm rounded px-3 py-2 mb-3">{printedMsg}</div>}
 
         {ready === false && (
           <div className="bg-warn/15 border border-warn/40 text-warn text-sm rounded px-3 py-2 mb-3 flex items-center justify-between">
@@ -231,7 +238,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
               {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </label>
-          <label className="block">
+          <div className="block">
             <span className="text-xs text-text-muted mb-1 block">Source</span>
             <div className="flex gap-2 text-sm">
               {patchRows && <button onClick={() => setSource('sheet')}
@@ -274,7 +281,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                 ))}
               </div>
             )}
-          </label>
+          </div>
         </div>
 
         {tpl && (
