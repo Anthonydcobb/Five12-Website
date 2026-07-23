@@ -1,5 +1,5 @@
 // Parse a printer-style page-range expression into 0-based positions.
-// "2-4, 10-15, 20" over max=N -> [1,2,3, 9,10,11,12,13,14, 19] (each clamped to [1,N]).
+// "2-4, 10-15, 20" over max=N -> [1,2,3, 9,10,11,12,13,14, 19] (positions outside [1,N] are dropped).
 // Order is as-written; duplicates are kept; malformed tokens are ignored.
 export function parseRangeExpr(expr, max) {
   if (!max || max < 1) return [];
