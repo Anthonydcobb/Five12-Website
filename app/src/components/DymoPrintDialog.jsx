@@ -57,6 +57,14 @@ function guessMapping(variables, columns) {
   return out;
 }
 
+// prefill mapping from a template's saved mappings for this source, falling back to a guess
+const deriveMapping = (t, srcKey, cols) => {
+  const saved = (t.savedMappings || {})[srcKey];
+  return saved && Object.keys(saved).length
+    ? Object.fromEntries(t.variables.map(v => [v, cols.includes(saved[v]) ? saved[v] : '']))
+    : guessMapping(t.variables, cols);
+};
+
 export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [ready, setReady] = useState(null);          // null=probing
   const [templates, setTemplates] = useState([]);
@@ -100,13 +108,16 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     try {
       const t = await fetch(`/api/dymo-templates/${id}`).then(readJson);
       setTpl(t);
-      const srcKey = source === 'csv' ? 'csv' : 'patch';
-      const saved = (t.savedMappings || {})[srcKey];
-      setMapping(saved && Object.keys(saved).length
-        ? Object.fromEntries(t.variables.map(v => [v, columns.includes(saved[v]) ? saved[v] : '']))
-        : guessMapping(t.variables, columns));
+      setMapping(deriveMapping(t, source === 'csv' ? 'csv' : 'patch', columns));
     } catch (e) { setError(e.message); }
   };
+
+  // re-derive the mapping whenever the source context changes while a template is selected
+  useEffect(() => {
+    if (!tpl) return;
+    const srcKey = source === 'csv' ? 'csv' : 'patch';
+    setMapping(deriveMapping(tpl, srcKey, source === 'csv' ? (csv?.headers || []) : PATCH_FIELDS));
+  }, [source, csv]);   // intentionally not on tpl — pickTemplate handles that
 
   // live preview of the first record
   useEffect(() => {
@@ -125,10 +136,14 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     try {
       await printMerge(printer, tpl.labelXml, records);
       localStorage.setItem(LAST_PRINTER_KEY, printer);
-      const srcKey = source === 'csv' ? 'csv' : 'patch';
-      await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
+      try {
+        const srcKey = source === 'csv' ? 'csv' : 'patch';
+        await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
+      } catch (e) {
+        console.warn('mapping save failed (labels already printed):', e);
+      }
       onClose();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -176,6 +191,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                   if (!f) return;
                   setCsv(parseCsv(await f.text()));
                   setSource('csv');
+                  e.target.value = '';
                 }} />
               </label>
             </div>
