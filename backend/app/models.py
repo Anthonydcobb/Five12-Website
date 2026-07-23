@@ -96,6 +96,29 @@ class LabelTemplate(db.Model):
         return f"<LabelTemplate {self.name!r}>"
 
 
+class DymoTemplate(db.Model):
+    __tablename__ = 'dymo_templates'
+    id             = db.Column(db.Integer, primary_key=True)
+    name           = db.Column(db.String(120), nullable=False)
+    label_xml      = db.Column(db.Text, nullable=False)
+    variables      = db.Column(db.JSON, nullable=False)
+    # {"patch": {var: canonicalField}, "csv": {var: csvHeader}} — last used
+    saved_mappings = db.Column(db.JSON, nullable=True)
+    created_at     = db.Column(db.DateTime, nullable=False)
+
+    def to_dict(self, include_xml=False):
+        d = {
+            'id': self.id,
+            'name': self.name,
+            'variables': self.variables,
+            'savedMappings': self.saved_mappings or {},
+            'createdAt': _utc_iso(self.created_at),
+        }
+        if include_xml:
+            d['labelXml'] = self.label_xml
+        return d
+
+
 from datetime import datetime, timezone
 
 
