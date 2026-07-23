@@ -160,11 +160,17 @@ repointed to the sACN NIC in Hog Control Panel; (4) **the killer**: Hog's data
 dir `Documents\ETC\HogPC` is OneDrive-redirected (Known Folder Move), and the
 pulled show cache (`Shows\<show>\blackbox`) got poisoned under sync — Hog's
 desktop component crashed reopening it on every Connect (an earlier 786 MB
-`desktop-Win32-golden.exe.dmp` shows prior history). Fix: data moved to
-`C:\Hog4PC` and `Documents\ETC\HogPC` replaced with a **junction → C:\Hog4PC**,
-so Hog's default path physically lands outside OneDrive. Stale caches parked in
-`C:\Hog4PC\_stale\`. Verified: two successful joins. If a reopen ever flashes
-again, delete `C:\Hog4PC\Shows\<show>` and reconnect fresh. NOTE: HogPC's own
+`desktop-Win32-golden.exe.dmp` shows prior history). Fix: clear the cached
+show so Connect pulls a fresh copy. Verified: two successful joins.
+**DO NOT junction `Documents\ETC\HogPC` on this machine** — tried 2026-07-23;
+this OneDrive build FOLLOWS junctions and entered a recursive sync loop
+(nested `_stale\…-onedrive-tree` copies until path-too-long), renamed the
+junction aside and won. Final state: `Documents\ETC\HogPC` is a plain real
+folder (cache lives in OneDrive; accepted), archives/stashes live in
+`C:\Hog4PC\_stale\`. **Standing remedy when a Connect flashes again:** quit
+Hog, delete `Documents\ETC\HogPC\Shows\<show>`, reconnect fresh (5 seconds).
+Durable alternative if it keeps biting: turn off OneDrive's Documents backup
+(KFM) — operator's call. NOTE: HogPC's own
 process names don't contain "Hog" — the launcher is `launcher-win32-golden`,
 desktop is `desktop-Win32-golden`, install lives under
 `C:\Program Files (x86)\ETC\HogPC`, settings in `%APPDATA%\ETC\Persistent`.
