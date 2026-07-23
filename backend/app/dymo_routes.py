@@ -22,7 +22,10 @@ def upload_template():
     if not variables:
         return jsonify({'error': 'template has no named variables — name the '
                                  'text objects in DYMO Connect'}), 400
-    name = (request.form.get('name') or f.filename or 'Untitled').rsplit('.', 1)[0][:120]
+    name = (request.form.get('name') or '').strip()
+    if not name:
+        name = (f.filename or 'Untitled').rsplit('.', 1)[0]
+    name = name[:120]
     t = DymoTemplate(name=name, label_xml=xml, variables=variables,
                      created_at=datetime.utcnow())
     db.session.add(t)
@@ -44,7 +47,7 @@ def get_template(tid):
 @dymo.put('/<int:tid>/mapping')
 def save_mapping(tid):
     t = DymoTemplate.query.get_or_404(tid)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True) or {}
     source, mapping = data.get('source'), data.get('mapping')
     if source not in ('patch', 'csv') or not isinstance(mapping, dict):
         return jsonify({'error': "source must be 'patch'|'csv' with a mapping dict"}), 400

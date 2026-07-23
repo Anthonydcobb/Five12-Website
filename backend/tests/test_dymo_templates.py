@@ -69,3 +69,15 @@ def test_delete(client, db):
     tid = _upload(client, name='Gone').get_json()['id']
     assert client.delete(f'/api/dymo-templates/{tid}').status_code == 200
     assert all(t['id'] != tid for t in client.get('/api/dymo-templates').get_json())
+
+def test_upload_keeps_dots_in_explicit_name(client, db):
+    r = _upload(client, name='Rig 2.1')
+    assert r.status_code == 201
+    assert r.get_json()['name'] == 'Rig 2.1'
+
+def test_upload_strips_extension_from_filename_fallback(client, db):
+    r = client.post('/api/dymo-templates',
+                    data={'file': (io.BytesIO(SAMPLE.encode()), 'cable wrap.dymo')},
+                    content_type='multipart/form-data')
+    assert r.status_code == 201
+    assert r.get_json()['name'] == 'cable wrap'
