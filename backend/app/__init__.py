@@ -43,6 +43,9 @@ def create_app(test_config=None):
     from .dymo_routes import dymo as dymo_bp
     app.register_blueprint(dymo_bp)
 
+    from .dymo_routes import csv_sources as dymo_csv_bp
+    app.register_blueprint(dymo_csv_bp)
+
     # The network monitor (ARP scanner, sACN listener, /api/network/*) registers
     # only when enabled (desktop, or dev — see config.ENABLE_NETWORK_TOOLS, on by
     # default there). On a hosted deploy it'd shell out to arp/ping/netsh and 500,
