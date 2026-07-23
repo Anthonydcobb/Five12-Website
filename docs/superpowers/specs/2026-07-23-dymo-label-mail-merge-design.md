@@ -50,6 +50,9 @@ class DymoTemplate(db.Model):
     name       = db.Column(db.String(120), nullable=False)
     label_xml  = db.Column(db.Text, nullable=False)      # raw .dymo contents
     variables  = db.Column(db.JSON, nullable=False)      # ["FixNum", "Uni", ...]
+    # last-used column mapping per source type, auto-saved after a successful
+    # print: {"patch": {var: canonicalField}, "csv": {var: csvHeader}}
+    saved_mappings = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime, nullable=False)  # UTC
 ```
 
@@ -68,6 +71,9 @@ Endpoints (camelCase JSON, matching app conventions):
 - `GET /api/dymo-templates/<id>` — full record incl. `labelXml` (the print
   dialog fetches it when selected).
 - `DELETE /api/dymo-templates/<id>`.
+- `PUT /api/dymo-templates/<id>/mapping` — body `{"source": "patch"|"csv",
+  "mapping": {var: column}}`; merges into `saved_mappings` under that source
+  key. Called by the dialog after a successful print.
 
 Variable extraction rule: any element with a `Name` child/attribute belonging
 to a text-type object in the label XML (DYMO label formats name objects
@@ -96,12 +102,22 @@ Dialog steps:
    **client-side** (first row = column names; minimal RFC-4180 parser, no
    external dep) and never touches the patch-import endpoints — no DB writes
    are involved, so the browser alone is sufficient.
-3. **Mapping** — table of template variables, each with a select of source
-   columns (+ Ignore/blank), auto-guessed with the same normalize/alias logic
-   family as the importer (e.g. `FixNum` → fixture, `Uni` → universe,
-   `Addr` → address, `Type` → type, `Loc` → location); patch-source columns are
-   the canonical patch fields, CSV-source columns are the CSV headers. Live
-   sample column shows the first row's value per variable.
+3. **Mapping** — table of template variables (each row = one named text box),
+   each with a select of source columns (+ Ignore/blank). Pre-fill priority:
+   (1) the template's **saved mapping** for this source type, else (2)
+   auto-guess via the importer's normalize/alias logic family (e.g. `FixNum` →
+   fixture, `Uni` → universe, `Addr` → address, `Type` → type, `Loc` →
+   location). Patch-source columns are the canonical patch fields; CSV-source
+   columns are the CSV headers. The label preview **re-renders live as the
+   mapping changes** (first row's values), so the operator sees which box each
+   column feeds. (Clicking a box inside the preview image to assign it is a
+   possible later enhancement — requires object positions; out of v1 scope.)
+
+   **Remembered mappings:** after each successful print, the used mapping is
+   saved on the template — `saved_mappings` JSON column on `DymoTemplate`,
+   shaped `{"patch": {var: field}, "csv": {var: csvHeader}}` — via
+   `PUT /api/dymo-templates/<id>/mapping`. Next session pre-fills from it;
+   the operator only remaps when something changed.
 4. **Preview & print** — the framework renders a PNG preview of the FIRST
    merged label (service-side render); printer picker via `getPrinters()`
    (last choice remembered in `localStorage`); `Print N labels` builds a
