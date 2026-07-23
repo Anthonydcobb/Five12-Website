@@ -72,6 +72,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [tpl, setTpl] = useState(null);              // full record incl labelXml
   const [source, setSource] = useState(patchRows ? 'sheet' : 'csv'); // sheet|selection|csv
   const [csv, setCsv] = useState(null);              // {headers, rows}
+  const [recentCsvs, setRecentCsvs] = useState([]);
   const [mapping, setMapping] = useState({});        // {var: column}
   const [printers, setPrinters] = useState([]);
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
@@ -98,6 +99,9 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   useEffect(() => {
     fetch('/api/dymo-templates').then(readJson).then(setTemplates).catch(e => setError(e.message));
   }, []);
+  const loadRecentCsvs = () =>
+    fetch('/api/dymo-csv-sources').then(readJson).then(setRecentCsvs).catch(() => {});
+  useEffect(() => { loadRecentCsvs(); }, []);
 
   const columns = source === 'csv' ? (csv?.headers || []) : PATCH_FIELDS;
   const rows = source === 'csv' ? (csv?.rows || [])
@@ -132,6 +136,22 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       const t = await fetch(`/api/dymo-templates/${id}`).then(readJson);
       setTpl(t);
       setMapping(deriveMapping(t, source === 'csv' ? 'csv' : 'patch', columns));
+    } catch (e) { setError(e.message); }
+  };
+
+  const loadRecentCsv = async (id) => {
+    try {
+      const full = await fetch(`/api/dymo-csv-sources/${id}`).then(readJson);
+      setCsv({ headers: full.headers, rows: full.rows });
+      setSource('csv');
+    } catch (e) { setError(e.message); }
+  };
+
+  const deleteRecentCsv = async (id, ev) => {
+    ev.stopPropagation();
+    try {
+      await fetch(`/api/dymo-csv-sources/${id}`, { method: 'DELETE' }).then(readJson);
+      loadRecentCsvs();
     } catch (e) { setError(e.message); }
   };
 
@@ -225,12 +245,35 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                 <input type="file" accept=".csv" className="hidden" onChange={async e => {
                   const f = e.target.files[0];
                   if (!f) return;
-                  setCsv(parseCsv(await f.text()));
+                  const parsed = parseCsv(await f.text());
+                  setCsv(parsed);
                   setSource('csv');
                   e.target.value = '';
+                  // remember this CSV for reprinting (never blocks printing)
+                  fetch('/api/dymo-csv-sources', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: f.name, headers: parsed.headers, rows: parsed.rows }),
+                  }).then(readJson).then(loadRecentCsvs).catch(e => console.warn('CSV history save failed:', e));
                 }} />
               </label>
             </div>
+            {recentCsvs.length > 0 && (
+              <div className="mt-2 border border-border rounded max-h-40 overflow-auto">
+                <div className="text-xs text-text-muted px-2 py-1 border-b border-border">Recent CSVs</div>
+                {recentCsvs.map(rc => (
+                  <div key={rc.id} onClick={() => loadRecentCsv(rc.id)}
+                    className="flex items-center justify-between gap-2 px-2 py-1 text-sm cursor-pointer hover:bg-surface-2">
+                    <span className="truncate">{rc.name}</span>
+                    <span className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-text-muted">{rc.rowCount} rows · {new Date(rc.createdAt).toLocaleDateString()}</span>
+                      <button type="button" aria-label={`delete ${rc.name}`}
+                        onClick={(ev) => deleteRecentCsv(rc.id, ev)}
+                        className="text-text-muted hover:text-brand-hi leading-none">×</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </label>
         </div>
 
