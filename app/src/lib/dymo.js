@@ -1,4 +1,6 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
+import { mergeLabel } from './labelMerge';
+
 let _fw = null;
 let _loading = null;
 
@@ -57,26 +59,14 @@ export async function getPrinters() {
     .map((p) => p.name);
 }
 
-function applyValues(f, labelXml, values) {
-  const label = f.openLabelXml(labelXml);
-  for (const [name, val] of Object.entries(values)) {
-    try { label.setObjectText(name, val ?? ''); } catch { /* absent object */ }
-  }
-  return label;
-}
-
 export async function renderPreview(labelXml, values) {
   const f = await fw();
-  const label = applyValues(f, labelXml, values);
-  return f.renderLabel(label.getLabelXml(), '', '');  // base64 PNG
+  return f.renderLabel(mergeLabel(labelXml, values), '', '');
 }
 
 export async function printMerge(printerName, labelXml, records) {
   const f = await fw();
-  const set = new f.LabelSetBuilder();
   for (const rec of records) {
-    const r = set.addRecord();
-    for (const [name, val] of Object.entries(rec)) r.setText(name, val ?? '');
+    f.printLabel(printerName, '', mergeLabel(labelXml, rec), '');
   }
-  f.printLabel(printerName, '', labelXml, set.toString());
 }

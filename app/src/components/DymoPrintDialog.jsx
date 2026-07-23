@@ -100,14 +100,12 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     : source === 'selection' ? selectedRows : (patchRows || []);
   const records = useMemo(() => {
     if (!tpl) return [];
-    return rows.map(r => {
-      const mappedVals = Object.entries(mapping)
-        .filter(([, col]) => col)
-        .map(([v, col]) => [v, String(r[col] ?? '')]);
-      if (!mappedVals.some(([, val]) => val !== '')) return null;   // fully blank row
-      const rec = Object.fromEntries(tpl.variables.map(v => [v, '']));
-      for (const [v, val] of mappedVals) rec[v] = val;
-      return rec;
+    return rows.map((r) => {
+      const rec = {};
+      for (const [v, col] of Object.entries(mapping)) {
+        if (col) rec[v] = String(r[col] ?? '');
+      }
+      return Object.values(rec).some((x) => x !== '') ? rec : null;
     }).filter(Boolean);
   }, [rows, mapping, tpl]);
 
