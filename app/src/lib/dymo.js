@@ -1,5 +1,5 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
-import { mergeLabel } from './labelMerge';
+import { mergeLabel, mergeLabelSet } from './labelMerge';
 
 let _fw = null;
 let _loading = null;
@@ -66,6 +66,14 @@ export async function renderPreview(labelXml, values) {
 
 export async function printMerge(printerName, labelXml, records) {
   const f = await fw();
+  // Native DesktopLabel mail-merge prints all rows in ONE continuous job (no
+  // per-label gap re-seek). Falls back to one job per record for templates that
+  // aren't column-bound mail-merge labels.
+  const setXml = mergeLabelSet(labelXml, records);
+  if (setXml) {
+    f.printLabel(printerName, '', setXml, '');
+    return;
+  }
   for (const rec of records) {
     f.printLabel(printerName, '', mergeLabel(labelXml, rec), '');
   }
