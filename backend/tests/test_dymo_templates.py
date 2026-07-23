@@ -25,3 +25,47 @@ def test_invalid_xml_raises():
 def test_no_variables_returns_empty():
     xml = '<DesktopLabel><DYMOLabel><ObjectInfo><TextObject><Name></Name></TextObject></ObjectInfo></DYMOLabel></DesktopLabel>'
     assert extract_variables(xml) == []
+
+import io, json as _json
+
+def _upload(client, xml=SAMPLE, name='Fixture Tag'):
+    return client.post('/api/dymo-templates',
+                       data={'file': (io.BytesIO(xml.encode()), 'tag.dymo'),
+                             'name': name},
+                       content_type='multipart/form-data')
+
+def test_upload_and_list_roundtrip(client, db):
+    r = _upload(client)
+    assert r.status_code == 201
+    body = r.get_json()
+    assert body['name'] == 'Fixture Tag'
+    assert body['variables'] == ['FixNum', 'Uni']
+    lst = client.get('/api/dymo-templates').get_json()
+    assert any(t['id'] == body['id'] for t in lst)
+    assert 'labelXml' not in lst[0]
+    one = client.get(f"/api/dymo-templates/{body['id']}").get_json()
+    assert one['labelXml'].startswith('<?xml')
+
+def test_upload_rejects_no_variables(client, db):
+    xml = '<DesktopLabel><DYMOLabel/></DesktopLabel>'
+    r = _upload(client, xml=xml, name='empty')
+    assert r.status_code == 400
+    assert 'named' in r.get_json()['error']
+
+def test_upload_rejects_bad_xml(client, db):
+    assert _upload(client, xml='<<<', name='bad').status_code == 400
+
+def test_saved_mapping_put_and_merge(client, db):
+    tid = _upload(client, name='MapMe').get_json()['id']
+    r = client.put(f'/api/dymo-templates/{tid}/mapping',
+                   json={'source': 'patch', 'mapping': {'FixNum': 'fixture'}})
+    assert r.status_code == 200
+    r = client.put(f'/api/dymo-templates/{tid}/mapping',
+                   json={'source': 'csv', 'mapping': {'Uni': 'Universe Col'}})
+    got = client.get(f'/api/dymo-templates/{tid}').get_json()['savedMappings']
+    assert got == {'patch': {'FixNum': 'fixture'}, 'csv': {'Uni': 'Universe Col'}}
+
+def test_delete(client, db):
+    tid = _upload(client, name='Gone').get_json()['id']
+    assert client.delete(f'/api/dymo-templates/{tid}').status_code == 200
+    assert all(t['id'] != tid for t in client.get('/api/dymo-templates').get_json())
