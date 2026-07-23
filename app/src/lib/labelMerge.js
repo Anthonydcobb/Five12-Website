@@ -27,84 +27,52 @@ export function mergeLabel(labelXml, values) {
   return new XMLSerializer().serializeToString(doc);
 }
 
-// Native DesktopLabel mail-merge. DYMO Connect labels can carry their own
-// <DataTable> (columns + rows) with column-bound boxes (<DataMappingTextSpan>
-// + <ColumnName>). Printing such a label emits ONE label per DataRow in a
-// single continuous job — which is what avoids the per-job gap re-seek ("buzz")
-// that printing one job per record causes. We rebuild the DataTable's rows from
-// our records (each keyed by box/variable name) and set each bound box's preview
-// <Text> to the first record, so the single-label render/preview is also correct.
+// Multi-record printing via a DYMO "LabelSet". One printLabel() call feeds every
+// record to the printer as a SINGLE continuous job, so the LabelWriter never
+// re-seeks the label gap between labels (the "buzz"/misregistration that printing
+// one job per record causes). The DYMO web service iterates the <LabelRecord>s
+// and merges each <ObjectData> into the like-named text object.
 //
-// Returns null when the template is NOT a native-merge label (no <DataTable> or
-// no column-bound boxes); the caller then falls back to per-record printing.
-export function mergeLabelSet(labelXml, records) {
-  if (!records || records.length === 0) return null;
+// IMPORTANT: the service APPENDS ObjectData onto whatever text the object already
+// holds (the DesktopLabel doubled-text bug). So the label XML passed ALONGSIDE
+// this set must have those boxes emptied first — printMerge does that with
+// mergeLabel(labelXml, blanks) — turning append-onto-empty into just the value.
+//
+// `boxNames` are the TextObject names to fill; `records` are keyed by those names.
+export function buildLabelSetXml(records, boxNames) {
+  const cdata = (v) =>
+    `<![CDATA[${String(v == null ? '' : v).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
+  const attr = (s) =>
+    String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const body = records.map((rec) =>
+    '  <LabelRecord>\n' +
+    boxNames.map((b) => `    <ObjectData Name="${attr(b)}">${cdata(rec[b])}</ObjectData>`).join('\n') +
+    '\n  </LabelRecord>'
+  ).join('\n');
+  return `<?xml version="1.0" encoding="utf-8"?>\n<LabelSet>\n${body}\n</LabelSet>`;
+}
+
+// The label to send ALONGSIDE a LabelSet: every mapped box emptied (so the
+// service's append-onto-existing-text can't double), and any embedded <DataTable>
+// rows cleared so only the LabelSet drives how many labels print.
+export function blankLabel(labelXml, boxNames) {
   const doc = new DOMParser().parseFromString(labelXml, 'application/xml');
   if (doc.getElementsByTagName('parsererror').length) {
     throw new Error('Could not parse label XML');
   }
+  const fallbackFont = firstFontInfoInDoc(doc);
+  const wanted = new Set(boxNames);
+  const objects = doc.getElementsByTagName('TextObject');
+  for (let i = 0; i < objects.length; i++) {
+    const name = directChildText(objects[i], 'Name');
+    if (name != null && wanted.has(name)) setTextObjectText(doc, objects[i], '', fallbackFont);
+  }
   const dataTable = doc.getElementsByTagName('DataTable')[0];
-  if (!dataTable) return null;
-  const columnsEl = firstChild(dataTable, 'Columns');
-  const rowsEl = firstChild(dataTable, 'Rows');
-  if (!columnsEl || !rowsEl) return null;
-
-  const columns = [...columnsEl.children]
-    .filter((c) => c.tagName === 'DataColumn')
-    .map((c) => (c.textContent || '').trim());
-  if (!columns.length) return null;
-
-  // column name -> the box (TextObject) name feeding it, read from each binding.
-  const spans = doc.getElementsByTagName('DataMappingTextSpan');
-  if (!spans.length) return null; // not a native-merge template
-  const colToBox = {};
-  for (let i = 0; i < spans.length; i++) {
-    const col = directChildText(spans[i], 'ColumnName');
-    const box = enclosingTextObjectName(spans[i]);
-    if (col && box) colToBox[col] = box;
+  if (dataTable) {
+    const rowsEl = firstChild(dataTable, 'Rows');
+    if (rowsEl) while (rowsEl.firstChild) rowsEl.removeChild(rowsEl.firstChild);
   }
-
-  const cellFor = (rec, col) => {
-    const box = colToBox[col];
-    const v = box ? rec[box] : '';
-    return v == null ? '' : String(v);
-  };
-
-  // Rebuild <Rows>: one <DataRow> per record, values in column order.
-  while (rowsEl.firstChild) rowsEl.removeChild(rowsEl.firstChild);
-  for (const rec of records) {
-    const row = doc.createElement('DataRow');
-    for (const col of columns) {
-      const val = doc.createElement('Value');
-      val.textContent = cellFor(rec, col);
-      row.appendChild(val);
-    }
-    rowsEl.appendChild(row);
-  }
-
-  // Preview text = first record (renders/prints correctly even if a consumer
-  // ignores the DataTable and falls back to the box's own text).
-  const first = records[0];
-  for (let i = 0; i < spans.length; i++) {
-    const col = directChildText(spans[i], 'ColumnName');
-    setSpanText(doc, spans[i], cellFor(first, col));
-  }
-
   return new XMLSerializer().serializeToString(doc);
-}
-
-// Name of the TextObject that encloses a given descendant element (or null).
-function enclosingTextObjectName(el) {
-  let n = el.parentNode;
-  while (n && n.tagName !== 'TextObject') n = n.parentNode;
-  return n ? directChildText(n, 'Name') : null;
-}
-
-// Set a span's direct <Text> child (handles a self-closing <Text/> element).
-function setSpanText(doc, span, value) {
-  let textEl = firstChild(span, 'Text');
-  if (!textEl) { textEl = doc.createElement('Text'); span.insertBefore(textEl, span.firstChild); }
-  textEl.textContent = value;
 }
 
 function directChildText(el, tag) {

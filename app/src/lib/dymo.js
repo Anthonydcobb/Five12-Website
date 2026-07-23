@@ -1,5 +1,5 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
-import { mergeLabel, mergeLabelSet } from './labelMerge';
+import { mergeLabel, buildLabelSetXml, blankLabel } from './labelMerge';
 
 let _fw = null;
 let _loading = null;
@@ -66,14 +66,18 @@ export async function renderPreview(labelXml, values) {
 
 export async function printMerge(printerName, labelXml, records) {
   const f = await fw();
-  // Native DesktopLabel mail-merge prints all rows in ONE continuous job (no
-  // per-label gap re-seek). Falls back to one job per record for templates that
-  // aren't column-bound mail-merge labels.
-  const setXml = mergeLabelSet(labelXml, records);
-  if (setXml) {
-    f.printLabel(printerName, '', setXml, '');
+  const boxNames = records.length ? Object.keys(records[0]) : [];
+  if (boxNames.length) {
+    // One continuous job for all records: empty the mapped boxes, then feed the
+    // values via a LabelSet. Boxes MUST be empty first — the DYMO service appends
+    // ObjectData onto existing text, so an empty box yields the value alone
+    // (printing the populated template directly is what doubled the text before).
+    const blankXml = blankLabel(labelXml, boxNames);
+    const setXml = buildLabelSetXml(records, boxNames);
+    f.printLabel(printerName, '', blankXml, setXml);
     return;
   }
+  // No mapped boxes to merge — print each record's label as-is.
   for (const rec of records) {
     f.printLabel(printerName, '', mergeLabel(labelXml, rec), '');
   }
