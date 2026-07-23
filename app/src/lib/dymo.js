@@ -1,9 +1,25 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
 let _fw = null;
 
+let _loading = null;
+
 async function fw() {
   if (_fw) return _fw;
-  await import('../vendor/dymo.connect.framework.js'); // attaches window.dymo
+  if (!window.dymo?.label?.framework) {
+    if (!_loading) {
+      _loading = (async () => {
+        const { default: url } = await import('../vendor/dymo.connect.framework.js?url');
+        await new Promise((resolve, reject) => {
+          const s = document.createElement('script');
+          s.src = url;
+          s.onload = resolve;
+          s.onerror = () => reject(new Error('failed to load DYMO framework'));
+          document.head.appendChild(s);
+        });
+      })();
+    }
+    await _loading;
+  }
   const f = window.dymo.label.framework;
   await new Promise((res) => f.init(res));
   _fw = f;
