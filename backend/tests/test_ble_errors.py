@@ -7,9 +7,7 @@ from app.five12_ble import errors as e
 
 
 def test_all_errors_carry_code_and_operator_message():
-    for cls in (e.AdapterUnavailable, e.DeviceNotFound, e.DeviceBusy,
-                e.ToolboxHoldingConnection, e.CharacteristicMissing,
-                e.OperationTimeout, e.NotOwner):
+    for cls in e.BleError.__subclasses__():
         err = cls()
         assert err.code, cls.__name__
         assert err.operator_message, cls.__name__
@@ -37,8 +35,15 @@ def test_errors_are_raisable():
 
 
 def test_codes_are_unique():
-    codes = [cls().code for cls in (
-        e.AdapterUnavailable, e.DeviceNotFound, e.DeviceBusy,
-        e.ToolboxHoldingConnection, e.CharacteristicMissing,
-        e.OperationTimeout, e.NotOwner)]
+    codes = [cls().code for cls in e.BleError.__subclasses__()]
     assert len(codes) == len(set(codes))
+
+
+def test_subclass_list_covers_the_newer_error_classes():
+    """Guards against the hardcoded-tuple gap this test used to have: an
+    earlier review predicted ScanLoopUnavailable and UnexpectedBleFailure
+    would go untested, and they did. Deriving from __subclasses__() above
+    means any future class is automatically covered too."""
+    names = {cls.__name__ for cls in e.BleError.__subclasses__()}
+    assert 'ScanLoopUnavailable' in names
+    assert 'UnexpectedBleFailure' in names

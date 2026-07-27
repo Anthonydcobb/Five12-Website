@@ -102,6 +102,15 @@ export default function CintennaPanel() {
     )
   }
 
+  if (roster.error) {
+    return (
+      <div className="text-[10px] font-mono text-text-muted py-2 leading-relaxed">
+        Could not reach the Bluetooth scan service.<br />
+        Reload this page; if it keeps happening, check the backend log.
+      </div>
+    )
+  }
+
   const fields = snapshot?.fields || {}
   // Roster is replaced wholesale on every 5s poll; reconcile the selection
   // against it so a radio that walked out of range doesn't keep rendering

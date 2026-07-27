@@ -86,6 +86,16 @@ def device_snapshot(os_id):
     at a time; the scan service already owns such a loop for the life of the
     process (see BleScanService.loop), so this route submits its coroutine to
     that loop instead of racing it with a second one on the request thread.
+
+    That "submit to the one shared loop" trick only avoids a two-loops-one-
+    adapter collision if this handler ever runs on at most one OS thread at a
+    time waiting on run_coroutine_threadsafe — true for gunicorn's default
+    sync worker (the Procfile's choice) but NOT for a greenlet/coroutine-based
+    worker (gevent, eventlet) or an ASGI server (uvicorn), where many "threads"
+    of request handling are actually multiplexed cooperatively and the
+    blocking future.result() call below would behave differently. If this app
+    ever moves off sync gunicorn workers, this whole approach needs rechecking
+    before it can be trusted again.
     """
     service = _service()
 

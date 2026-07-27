@@ -14,11 +14,25 @@ describe('bleApi', () => {
     expect(out.devices).toHaveLength(1)
   })
 
-  it('returns an empty roster when the backend is unreachable', async () => {
-    // The BLE gate defaults off, so 404 is the NORMAL case, not an error the
-    // operator should see as a crash.
-    axios.get.mockRejectedValue(new Error('404'))
+  it('returns an empty roster with unavailable:true on a genuine 404', async () => {
+    // The BLE gate defaults off, so a 404 (route doesn't exist) is the
+    // NORMAL case, not an error the operator should see as a crash.
+    axios.get.mockRejectedValue({ response: { status: 404 } })
     expect(await fetchBleDevices()).toEqual({ deviceCount: 0, devices: [], unavailable: true })
+  })
+
+  it('returns an empty roster with error:true (not unavailable) on a 500', async () => {
+    // A real backend failure must not be reported as "the feature is
+    // switched off" — that would send the operator to flip a setting that
+    // is already correct.
+    axios.get.mockRejectedValue({ response: { status: 500 } })
+    expect(await fetchBleDevices()).toEqual({ deviceCount: 0, devices: [], error: true })
+  })
+
+  it('returns the error state (not unavailable) on a network drop', async () => {
+    // No response at all — e.g. a stalled backend — is not a 404 either.
+    axios.get.mockRejectedValue(new Error('Network Error'))
+    expect(await fetchBleDevices()).toEqual({ deviceCount: 0, devices: [], error: true })
   })
 
   it('encodes the device id in the snapshot URL', async () => {

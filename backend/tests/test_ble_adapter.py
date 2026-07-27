@@ -3,6 +3,7 @@ Devices page. Adding it to ALL_DEVICE_IDS is what makes the tab render."""
 
 from app.integrations import ALL_DEVICE_IDS, get_adapter
 from app.integrations.cintenna import CintennaAdapter
+from app.five12_ble.errors import NotOwner
 
 
 def test_cintenna_is_a_known_device_id():
@@ -77,7 +78,27 @@ def test_devices_route_cintenna_entry_shape(client):
 # directly, per the task's own suggestion — there is no production code
 # whose only purpose is enabling this.
 
-def test_detect_reports_no_adapter_when_really_unavailable():
+def test_detect_reports_no_adapter_when_really_unavailable(app, monkeypatch):
+    # Gate ON, adapter still unavailable — genuinely missing hardware, as
+    # opposed to the feature simply being switched off (see the disabled-gate
+    # test below, added for Finding 1).
+    monkeypatch.setitem(app.config, 'ENABLE_BLE_TOOLS', True)
+    adapter = get_adapter('cintenna', sim=False)
+    adapter.service._adapter_available = False
+    adapter.service._last_error = None
+    adapter.service._running = False
+
+    with app.app_context():
+        det = adapter.detect()
+    assert det['found'] is False
+    assert det['detail'] == 'no Bluetooth adapter'
+
+
+def test_detect_reports_disabled_not_missing_when_gate_is_off(monkeypatch):
+    """Regression test for Finding 1: with the feature gate off, the scan
+    loop never runs and the adapter is never actually probed, so detect()
+    must not claim the operator's hardware is missing."""
+    monkeypatch.delenv('FIVE12_BLE_TOOLS', raising=False)
     adapter = get_adapter('cintenna', sim=False)
     adapter.service._adapter_available = False
     adapter.service._last_error = None
@@ -85,7 +106,7 @@ def test_detect_reports_no_adapter_when_really_unavailable():
 
     det = adapter.detect()
     assert det['found'] is False
-    assert det['detail'] == 'no Bluetooth adapter'
+    assert det['detail'] == 'BLE tools disabled'
 
 
 def test_detect_reports_not_owner_before_adapter_available_flips_true():
@@ -101,7 +122,7 @@ def test_detect_reports_not_owner_before_adapter_available_flips_true():
 
     det = adapter.detect()
     assert det['found'] is False
-    assert det['detail'] == 'another Five12 process owns the adapter'
+    assert det['detail'] == NotOwner().operator_message
 
 
 def test_detect_reports_lock_mechanism_unavailable_distinctly():

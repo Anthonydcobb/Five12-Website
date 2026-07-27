@@ -9,8 +9,23 @@ Read-only. Configuration writes, TX Link, and RX Unlink are a later, separately
 gated piece of work.
 """
 
+import os
+
+from flask import current_app
+
 from . import DeviceAdapter
+from ..five12_ble.errors import NotOwner
 from ..five12_ble.scanner import get_scan_service
+
+
+def _ble_tools_enabled():
+    """Same gate app/__init__.py reads, but usable with no app context: the
+    adapter is constructed outside request context too (e.g. by get_adapter()
+    at import/cache time), where current_app would raise."""
+    try:
+        return bool(current_app.config.get('ENABLE_BLE_TOOLS'))
+    except RuntimeError:
+        return os.getenv('FIVE12_BLE_TOOLS', '0') == '1'
 
 
 class CintennaAdapter(DeviceAdapter):
@@ -35,7 +50,9 @@ class CintennaAdapter(DeviceAdapter):
             return {
                 'found': False,
                 'address': None,
-                'detail': 'another Five12 process owns the adapter',
+                # Same text as the NotOwner error class, so the two copies of
+                # this message cannot drift apart.
+                'detail': NotOwner().operator_message,
             }
         if st.get('lastError') == 'lock-mechanism-unavailable':
             return {
@@ -44,10 +61,13 @@ class CintennaAdapter(DeviceAdapter):
                 'detail': 'no OS-level lock available on this platform — Cintenna scanning is disabled',
             }
         if not st['adapterAvailable']:
+            # With the feature gate off, the scan loop never runs and the
+            # adapter never gets probed — that is not the same fact as "no
+            # Bluetooth adapter" and must not be reported as one.
             return {
                 'found': False,
                 'address': None,
-                'detail': 'no Bluetooth adapter',
+                'detail': 'no Bluetooth adapter' if _ble_tools_enabled() else 'BLE tools disabled',
             }
         return {
             'found': count > 0,

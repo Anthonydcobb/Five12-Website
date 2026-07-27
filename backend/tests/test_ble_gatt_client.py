@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from app.five12_ble import constants as c
+from app.five12_ble.connection_manager import BleakClientAdapter
 from app.five12_ble.gatt_client import build_sim_snapshot, build_snapshot
 from app.five12_ble.sim import SIM_RX_ID, SIM_TX_ID, sim_gatt_values
 
@@ -117,3 +118,17 @@ def test_sim_snapshot_unknown_device_returns_none():
 def test_fake_client_offers_no_write_method():
     """Structural check: this phase ships no write path."""
     assert not hasattr(FakeClient(sim_gatt_values(SIM_RX_ID)), 'write_gatt_char')
+
+
+def test_production_client_adapter_offers_no_write_method():
+    """The FakeClient check above only tests the test double. This is the
+    class that actually wraps bleak in production — BleakClientAdapter — and
+    it must be shaped the same way: no write_gatt_char, no write-shaped
+    method of any name. "No write path" is the single most important
+    property of this branch, so the real class must be gated, not just the
+    fake one."""
+    write_shaped = [
+        name for name in dir(BleakClientAdapter)
+        if 'write' in name.lower()
+    ]
+    assert write_shaped == []

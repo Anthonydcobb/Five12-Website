@@ -90,6 +90,16 @@ describe('CintennaPanel', () => {
     expect(await screen.findByText(/FIVE12_BLE_TOOLS/)).toBeInTheDocument()
   })
 
+  it('shows an honest error message on a real backend failure, not the switched-off copy', async () => {
+    // Finding 2 regression: a 500 must not tell the operator to flip a
+    // setting that is already correct.
+    bleApi.fetchBleDevices.mockResolvedValue({ deviceCount: 0, devices: [], error: true })
+    render(<CintennaPanel />)
+    expect(await screen.findByText(/could not reach the bluetooth scan service/i)).toBeInTheDocument()
+    expect(screen.queryByText(/FIVE12_BLE_TOOLS/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/switched off/i)).not.toBeInTheDocument()
+  })
+
   it('says so when scanning finds nothing', async () => {
     bleApi.fetchBleDevices.mockResolvedValue({ deviceCount: 0, devices: [] })
     render(<CintennaPanel />)

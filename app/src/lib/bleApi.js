@@ -15,8 +15,16 @@ export async function fetchBleDevices() {
   try {
     const { data } = await axios.get('/api/ble/devices')
     return data
-  } catch {
-    return { deviceCount: 0, devices: [], unavailable: true }
+  } catch (err) {
+    // Only a genuine 404 means "the route doesn't exist because the gate is
+    // off" — that's the normal, expected shape when FIVE12_BLE_TOOLS is
+    // unset. Any other failure (500, network drop, stalled backend) is a
+    // real error and must not be reported to the operator as a setting they
+    // need to flip, since it's already correct.
+    if (err?.response?.status === 404) {
+      return { deviceCount: 0, devices: [], unavailable: true }
+    }
+    return { deviceCount: 0, devices: [], error: true }
   }
 }
 
