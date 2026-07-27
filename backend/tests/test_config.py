@@ -1,14 +1,36 @@
 import importlib
+import os
 
 import pytest
 
 from app import create_app
 
 
+_CONFIG_ENV_KEYS = (
+    'DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_PASS', 'DB_NAME',
+    'FLASK_CONFIG', 'FIVE12_DATA_DIR',
+)
+
+
+@pytest.fixture(autouse=True)
+def restore_config_module_after_test():
+    """Keep class-level config values from leaking into later tests."""
+    original_env = {key: os.environ.get(key) for key in _CONFIG_ENV_KEYS}
+    yield
+
+    for key, value in original_env.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+    import config
+    importlib.reload(config)
+
+
 def _reload_config(monkeypatch, **env):
     """Reload config.py with an explicit, isolated database environment."""
-    for key in ('DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_PASS', 'DB_NAME',
-                'FLASK_CONFIG', 'FIVE12_DATA_DIR'):
+    for key in _CONFIG_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
