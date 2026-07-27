@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { fetchBleDevices, fetchBleSnapshot, signalBars } from '../../lib/bleApi'
 import BleEvidenceBadge from './BleEvidenceBadge'
 
@@ -44,6 +44,13 @@ export default function CintennaPanel() {
   const [snapError, setSnapError] = useState(null)
   const [reading, setReading] = useState(false)
 
+  // The roster buttons stay clickable while a read is in flight, so the
+  // operator can switch radios mid-read. readStatus's closure freezes
+  // `selected` at click time, so we need a ref that always reflects the
+  // *current* selection to check against when the response comes back.
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
+
   useEffect(() => {
     let alive = true
     const poll = async () => {
@@ -56,14 +63,27 @@ export default function CintennaPanel() {
   }, [])
 
   const readStatus = async () => {
+    const requestedOsId = selected.osId
     setReading(true)
     setSnapError(null)
     setSnapshot(null)
     try {
-      setSnapshot(await fetchBleSnapshot(selected.osId))
+      const data = await fetchBleSnapshot(requestedOsId)
+      // Only apply the response if the operator is still looking at the
+      // device it was requested for. If they switched roster selection
+      // while this was in flight, applying it would attribute another
+      // radio's battery/firmware/mode to the currently-selected one.
+      if (selectedRef.current?.osId === requestedOsId) {
+        setSnapshot(data)
+      }
     } catch (err) {
-      setSnapError(err)
+      if (selectedRef.current?.osId === requestedOsId) {
+        setSnapError(err)
+      }
     } finally {
+      // Always clear, even for a discarded response, so the Read status
+      // button never gets stuck showing "reading…" for whichever device
+      // is selected now.
       setReading(false)
     }
   }
@@ -83,6 +103,10 @@ export default function CintennaPanel() {
   }
 
   const fields = snapshot?.fields || {}
+  // Roster is replaced wholesale on every 5s poll; reconcile the selection
+  // against it so a radio that walked out of range doesn't keep rendering
+  // as if it were still there.
+  const selectedNearby = !selected || roster.devices.some((d) => d.osId === selected.osId)
 
   return (
     <div className="space-y-3">
@@ -101,6 +125,7 @@ export default function CintennaPanel() {
           <button
             key={d.osId}
             onClick={() => { setSelected(d); setSnapshot(null); setSnapError(null) }}
+            aria-pressed={selected?.osId === d.osId}
             className={'text-left px-3 py-2 rounded-sm border min-w-[200px] ' +
               (selected?.osId === d.osId
                 ? 'border-brand bg-brand-dim/30'
@@ -130,7 +155,7 @@ export default function CintennaPanel() {
             </span>
             <button
               onClick={readStatus}
-              disabled={reading}
+              disabled={reading || !selectedNearby}
               className="text-[9px] font-mono px-2 py-1 border border-[var(--color-border)] rounded-sm hover:border-brand disabled:opacity-40"
             >
               {reading ? 'reading…' : 'Read status'}
@@ -138,6 +163,12 @@ export default function CintennaPanel() {
           </div>
 
           <Field label="hardware id" value={selected.hardwareId} source="manufacturer-data" />
+
+          {!selectedNearby && (
+            <div className="text-[10px] font-mono text-text-muted mt-2 leading-relaxed">
+              {selected.localName || '(unnamed)'} is no longer nearby.
+            </div>
+          )}
 
           {snapError && (
             <div className="text-[10px] font-mono text-amber-400 mt-2 leading-relaxed">

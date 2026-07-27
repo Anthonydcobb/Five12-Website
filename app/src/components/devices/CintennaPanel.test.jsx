@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import CintennaPanel from './CintennaPanel'
 import * as bleApi from '../../lib/bleApi'
@@ -104,6 +104,76 @@ describe('CintennaPanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: /F12L - 1946/ }))
     for (const label of [/^link$/i, /unlink/i, /set mode/i, /apply/i]) {
       expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
+    }
+  })
+
+  it('discards a stale snapshot response for a radio that is no longer selected', async () => {
+    // Regression for: operator selects A, clicks Read status, switches to B
+    // before A's response lands. A's data must never render under B's name.
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    let resolveA
+    const pendingA = new Promise((resolve) => { resolveA = resolve })
+    bleApi.fetchBleSnapshot.mockImplementation((osId) =>
+      osId === 'rx-1' ? pendingA : Promise.resolve(SNAPSHOT))
+
+    render(<CintennaPanel />)
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 1946/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    expect(bleApi.fetchBleSnapshot).toHaveBeenCalledWith('rx-1')
+
+    // Switch to device B while A's read is still in flight.
+    await userEvent.click(screen.getByRole('button', { name: /F12L - 2071/ }))
+
+    // Now let A's (stale) response resolve.
+    resolveA(SNAPSHOT)
+
+    // The panel must not show A's battery/firmware attributed to B, and
+    // must not get stuck showing "reading…" forever.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /read status/i })).not.toBeDisabled()
+    })
+    expect(screen.queryByText(/65%/)).not.toBeInTheDocument()
+    expect(screen.queryByText('1.0.7.2')).not.toBeInTheDocument()
+    expect(screen.queryByText(/reading…/i)).not.toBeInTheDocument()
+  })
+
+  it('exposes aria-pressed reflecting which roster entry is selected', async () => {
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    render(<CintennaPanel />)
+    const btnA = await screen.findByRole('button', { name: /F12L - 1946/ })
+    const btnB = screen.getByRole('button', { name: /F12L - 2071/ })
+    expect(btnA).toHaveAttribute('aria-pressed', 'false')
+    expect(btnB).toHaveAttribute('aria-pressed', 'false')
+
+    await userEvent.click(btnA)
+    expect(btnA).toHaveAttribute('aria-pressed', 'true')
+    expect(btnB).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('flags a selected device that drops out of the roster without blanking the panel', async () => {
+    const ROSTER_WITHOUT_RX1 = { deviceCount: 1, devices: [DEVICES.devices[1]] }
+    bleApi.fetchBleDevices
+      .mockResolvedValueOnce(DEVICES)
+      .mockResolvedValue(ROSTER_WITHOUT_RX1)
+    bleApi.fetchBleSnapshot.mockResolvedValue(SNAPSHOT)
+
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    try {
+      render(<CintennaPanel />)
+      await user.click(await screen.findByRole('button', { name: /F12L - 1946/ }))
+      await user.click(screen.getByRole('button', { name: /read status/i }))
+      expect(await screen.findByText(/65%/)).toBeInTheDocument()
+
+      // Next 5s poll returns a roster that no longer includes rx-1.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+
+      expect(await screen.findByText(/no longer nearby/i)).toBeInTheDocument()
+      // The last reading stays visible — a blank panel is treated as a defect.
+      expect(screen.getByText(/65%/)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /read status/i })).toBeDisabled()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })
