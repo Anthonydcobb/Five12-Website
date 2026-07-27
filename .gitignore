@@ -1,7 +1,12 @@
 # 🛑 Python Virtual Environment
 venv/
 .venv/
+
+# Local environment files may contain credentials. Examples stay tracked.
 .env
+.env.*
+!.env.example
+!**/.env.example
 
 # 🛑 Compiled Python files
 __pycache__/

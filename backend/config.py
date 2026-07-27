@@ -7,13 +7,14 @@ class DevelopmentConfig:
     DEBUG = True
 
     DB_USER = os.getenv("DB_USER", "root")
-    DB_PASS = os.getenv("DB_PASS", "479Funtime?")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
     DB_HOST = os.getenv("DB_HOST", "localhost")
     DB_NAME = os.getenv("DB_NAME", "five12_website")
 
-    pwd_enc = urllib.parse.quote_plus(DB_PASS)
     SQLALCHEMY_DATABASE_URI = (
-        f"mysql+pymysql://{DB_USER}:{pwd_enc}@{DB_HOST}/{DB_NAME}"
+        f"mysql+pymysql://{DB_USER}:{urllib.parse.quote_plus(DB_PASSWORD)}@{DB_HOST}/{DB_NAME}"
+        if DB_PASSWORD
+        else None
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
