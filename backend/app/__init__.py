@@ -61,6 +61,13 @@ def create_app(test_config=None):
         from .ble_routes import ble as ble_bp
         app.register_blueprint(ble_bp)
 
+        # Not under TESTING: tests drive the registry directly and must not
+        # spawn a radio thread. Only one process wins the adapter lock, so
+        # under gunicorn the other workers no-op here.
+        if not app.config.get('TESTING'):
+            from .five12_ble.scanner import start_ble_service
+            start_ble_service(app)
+
     app.logger.setLevel(logging.INFO)
 
     if not app.config.get('TESTING') and app.config.get('ENABLE_NETWORK_TOOLS'):
