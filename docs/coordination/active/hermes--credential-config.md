@@ -29,6 +29,8 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 - `.gitignore`
 - `backend/config.py`
 - `backend/app/__init__.py`
+- `app/__init__.py` (sanitize the stale legacy Flask configuration without structural cleanup)
+- `__pycache__/app.cpython-310.pyc` (remove the secret-bearing compiled artifact)
 - Credential-configuration regression tests added by this task
 
 ## Must-not-touch paths
