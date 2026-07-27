@@ -145,7 +145,13 @@ own local `useState` and poll on an interval. The plan's references to "the
 frontend store" describe something that does not exist; BLE state stays local to
 `CintennaPanel` with the same polling convention.
 
-**Vite proxy.** `/api/*` → `http://localhost:5000` (`app/vite.config.js`).
+**Vite proxy.** `/api/*` → `http://localhost:5000` (`app/vite.config.mjs`).
+
+The frontend root is `app/` — `app/package.json` (scripts `dev`, `build`,
+`preview`) and `app/vite.config.mjs`. A second `package.json` (no scripts) and
+`vite.config.js` sit at the repository root; the latter's own header comment
+claims to be `app/vite.config.js`. **They are stale duplicates.** All frontend
+work targets `app/`.
 
 **Tests.** None. No Vitest, Jest, or testing-library; no test script in
 `app/package.json`. Vitest + React Testing Library are added by this work,
