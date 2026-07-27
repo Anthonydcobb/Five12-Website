@@ -74,3 +74,21 @@ class NotOwner(BleError):
         'Another Five12 process owns the Bluetooth adapter. Only one can scan at '
         'a time; close the other window or wait for it to release the adapter.'
     )
+
+
+class ScanLoopUnavailable(BleError):
+    code = 'scan-loop-unavailable'
+    operator_message = (
+        'The Bluetooth scan service is not currently running, so this device '
+        'cannot be reached. Reload this page; if the problem persists, check '
+        'that Bluetooth is turned on and that no other Five12 window owns the '
+        'adapter.'
+    )
+
+
+class UnexpectedBleFailure(BleError):
+    code = 'unexpected-ble-failure'
+    operator_message = (
+        'Something went wrong talking to this device. Try again, and if it '
+        'keeps happening, check the server log.'
+    )

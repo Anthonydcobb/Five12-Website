@@ -69,6 +69,11 @@ class BleScanService:
         self._adapter_available = sim
         self._last_error = None
         self._lock_handle = None
+        # The scan thread's own asyncio loop, so routes can submit device
+        # operations to the ONE loop already driving the adapter instead of
+        # opening a second one (see `loop` property below). None whenever no
+        # scan thread is actively running that loop.
+        self._loop = None
 
     # ── advertisement handling (pure w.r.t. bleak, hence directly testable) ──
     def handle_advertisement(self, os_id, name, rssi, service_uuids,
@@ -239,6 +244,19 @@ class BleScanService:
             'lastError': self._last_error,
         }
 
+    @property
+    def loop(self):
+        """The running bleak event loop, or None if no scan thread owns one.
+
+        Routes use this — via asyncio.run_coroutine_threadsafe — to run a BLE
+        operation ON this loop rather than opening a second one that would
+        race the scan loop for the same adapter. `self._loop` is set only
+        while `_run_loop` actually has a live loop object (see below) and is
+        cleared before that loop is closed, so callers never get handed a
+        closed loop to submit work to.
+        """
+        return self._loop
+
     # ── loops ──
     def _sim_loop(self, stop):
         while not stop.is_set():
@@ -298,6 +316,10 @@ class BleScanService:
         try:
             loop.run_until_complete(_scan_forever())
         finally:
+            # Clear the published loop BEFORE closing it: once close() runs,
+            # nothing may be submitted to it, so a route thread must never be
+            # able to observe this loop after that point.
+            self._loop = None
             loop.close()
             self._retire(stop)
 
