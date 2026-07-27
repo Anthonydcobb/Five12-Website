@@ -63,3 +63,34 @@ def test_service_match_is_case_insensitive():
     assert is_timotwo_service('33B5376D-0942-1F91-379B-AC5AF36B9EFA')
     assert is_timotwo_service('33b5376d-0942-1f91-379b-ac5af36b9efa')
     assert not is_timotwo_service('0000180f-0000-1000-8000-00805f9b34fb')
+
+
+def test_never_raises_across_all_payload_lengths():
+    """Verify the never-raise guarantee across every possible payload length
+    and every slice boundary. A malformed packet from any BLE device must not
+    kill the scan loop."""
+    payload_hex = '03F14000004C55F140'
+    full_payload = bytes.fromhex(payload_hex)
+
+    # Test each length from 0 to 12 bytes, covering all slice boundaries
+    # Slices are at: 0/1, 1/5, 5/7, 7/9
+    for length in range(13):
+        truncated = full_payload[:length]
+        out = decode_manufacturer_data(0xFFFF, truncated)
+
+        # Always returns a dict with all expected keys
+        assert isinstance(out, dict)
+        assert set(out.keys()) == {
+            'platform', 'product', 'hardwareId', 'estaManufacturerId',
+            'modelId', 'unknownByte0', 'rawManufacturerData', 'evidence'
+        }
+
+        # Absent bytes yield None for those fields
+        if length < 1:
+            assert out['unknownByte0'] is None
+        if length < 5:
+            assert out['hardwareId'] is None
+        if length < 7:
+            assert out['estaManufacturerId'] is None
+        if length < 9:
+            assert out['modelId'] is None
