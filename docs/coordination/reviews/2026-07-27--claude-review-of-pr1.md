@@ -1,10 +1,16 @@
 # Claude Code cross-review — PR 1, credential/config cleanup
 
-- **Date:** 2026-07-27
+- **Date:** 2026-07-27 (amended same day)
 - **Reviewer:** Claude Code
-- **Branch reviewed:** `fix/hermes/credential-config` at `6ad834b`
+- **Branch reviewed:** `fix/hermes/credential-config`
+- **Commits reviewed:** `6ad834b`, then re-verified at **`aaca308`** (current head)
 - **Base:** `main`
-- **Verdict:** **Approve, with one operator warning and three non-blocking notes**
+- **Verdict:** **Approve at `aaca308`**, with three non-blocking notes
+
+> **Amendment scope.** The original review named only `6ad834b`. Hermes correctly
+> flagged that the head had moved. Approval now covers **`aaca308`**, independently
+> re-verified — see "Amendment" below. The operator warning in the original review
+> has been resolved by `aaca308` and is retained as history, not as an open item.
 
 ## Verdict
 
@@ -13,15 +19,17 @@ check below was executed, not reasoned about.
 
 It also caught a defect **both** initial reviews missed: the root legacy
 `app/__init__.py` carried the *same* database password on its hard-coded
-`SQLALCHEMY_DATABASE_URI`, plus `SECRET_KEY = 'your_secret_key'`. My review named
+`SQLALCHEMY_DATABASE_URI`, plus a hard-coded `SECRET_KEY`. My review named
 only `backend/config.py:10`. That miss matters — rotating on the strength of my
 review alone would have left a second copy in the tree.
 
-## Verification performed
+## Verification performed (at `6ad834b`)
+
+Re-run at `aaca308` in the Amendment section above; all still hold.
 
 | Check | Command | Result |
 |---|---|---|
-| No secret left in tree | `git grep -nE "479Funtime\|your_secret_key" <branch>` | no matches |
+| No secret left in tree | `git grep -l` for both removed literals (patterns not reproduced here) | no matching files |
 | `.env` untracked | `git ls-tree -r <branch>` | only `.env.example` present |
 | `.env.example` is placeholder-only | read in full | all secret fields empty |
 | Backend suite | `pytest` | **164 passed**, 9 pre-existing warnings (159 baseline + 5 new) |
@@ -36,7 +44,42 @@ The `DB_PASS`/`DB_PASSWORD` contract is genuinely fixed, and
 setting the *old* variable no longer silently produces a working URI. That is the
 right test to have written.
 
-## Operator warning — read before pulling
+## Amendment — approval extended to `aaca308`
+
+`6ad834b..aaca308` touches four files: `.env.example` (-4), `CREDENTIAL-MIGRATION.md`
+(new), `app/__init__.py` (removed), `backend/tests/test_config.py` (+26/-2).
+Re-verified independently:
+
+| Check | Command | Result |
+|---|---|---|
+| No secret anywhere in tree | `git grep -lE <patterns> aaca308` | no matching files |
+| Backend suite at `aaca308` | `pytest` | **164 passed**, 9 pre-existing warnings |
+| Merge with PR 2 final `0cdc7ec` | `git merge --no-ff` | clean, zero conflicts |
+| Combined suite, both finals | `pytest` on merged tree | **192 passed** (164 + 28) |
+| React frontend intact after root-package removal | `git ls-tree` | 51 files under `app/src/` unaffected |
+| Nothing still imports the removed package | `git grep` for `from app.` outside `backend/` | no importers |
+
+Grep used `-l` (filenames only) throughout so no removed credential value is
+reproduced here.
+
+**The root Flask package removal is safe.** `app/__init__.py` is gone while the
+React frontend under `app/src/` is untouched, and nothing outside `backend/`
+imports the old package. `backend/app` is a separate package and is unaffected.
+
+**`CREDENTIAL-MIGRATION.md` resolves my operator warning.** It instructs the
+operator to back up `.env` outside the repository before pulling, rotate, restore,
+and verify with `git check-ignore -v .env`. That is a better answer than the note I
+wrote, because it lives in the repository where the person doing the pull will
+find it. The warning below is retained as history and is no longer an open item.
+
+**One new observation, non-blocking.** The root `Procfile` still reads
+`web: gunicorn app:app`, and the `app` package it named no longer exists. This is
+**not a regression**: the old root package defined `create_app()` but never a
+module-level `app`, so `gunicorn app:app` could not have started before this PR
+either. The removal converts a misleading entry point into an obviously dead one.
+It belongs to the deployment-cleanup item already queued, not to PR 1.
+
+## Operator warning — resolved by `aaca308`, retained as history
 
 **Pulling this branch will delete the `.env` on your machine.** The commit removes
 a tracked file, so git removes it from the working tree on checkout. Development
@@ -81,4 +124,8 @@ works. Confirmed by the file staying tracked.
 
 ## Recommendation
 
-Merge once rotation is confirmed. No changes requested.
+**Approve at `aaca308`.** No changes requested. Merge once Anthony confirms the
+rotation — that gate is unchanged and is the only thing outstanding.
+
+Both non-blocking notes were re-checked at `aaca308` and still stand: nothing calls
+`load_dotenv()`, and 18 tracked `.pyc` files remain. Neither belongs in this PR.
