@@ -23,7 +23,9 @@
 - JSON response keys are **camelCase**, matching the existing API convention.
 - Never log or store: linking keys, the `10351003` opaque blob, or full OS device identifiers.
 - Language rules, enforced in code and copy: "nearby" ≠ "connected"; "TimoTwo-compatible" ≠ "Cintenna 2"; RSSI is not distance. There must be no field named `linked` anywhere in this plan's output.
-- Run backend tests from `backend/`: `pytest`. Run frontend tests from `app/`: `npm run test`.
+- **Backend tests run as `python -m pytest` from `backend/`, using the global Python 3.14 — NOT the venv.** `pytest` is not on PATH and is not installed in `venv/`; the venv is Python 3.12.10. Both interpreters have Flask, and the suite is green under the global one (159 passed as of 2026-07-26). Do not "fix" this by installing pytest into the venv — that changes which interpreter the suite has always run under.
+- Frontend tests run as `npm run test` from `app/`.
+- **Three Python interpreters exist on this machine.** `C:\Python314` (3.14.4, flask 3.1.3, pytest 9.0.3) runs the tests. `AppData\Local\Programs\Python\Python312` (3.12.10, flask 3.1.0) runs the app, per `start.ps1:5`. `Five12-TheApp\venv` (3.12.10, flask 3.1.1) appears unused by either. This is pre-existing. `bleak` is installed into the **app runtime only**; the tests never need it because `constants.py`, `advertisement.py`, and `decoders.py` import no bleak.
 
 ## File Structure
 
@@ -120,7 +122,7 @@ def test_capabilities_route_present_when_enabled():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_gate.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_gate.py -v`
 Expected: FAIL — `test_ble_disabled_by_default` fails because `ENABLE_BLE_TOOLS` is `None`, and the "present when enabled" test 404s.
 
 - [ ] **Step 3: Add the config flag**
@@ -200,20 +202,22 @@ In `backend/app/__init__.py`, directly after the existing `ENABLE_NETWORK_TOOLS`
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_gate.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_gate.py -v`
 Expected: 3 passed.
 
 - [ ] **Step 7: Confirm nothing else broke**
 
-Run from `backend/`: `pytest`
+Run from `backend/`: `python -m pytest`
 Expected: all pre-existing tests still pass.
 
 - [ ] **Step 8: Add the dependency**
 
-Install and pin. Run from `backend/`:
+`bleak` goes into the **app runtime** — the interpreter `start.ps1:5` uses to run
+Flask. This is NOT the venv and NOT the interpreter that runs the tests. See
+Global Constraints for why there are three.
 
 ```bash
-pip install bleak
+"C:/Users/antho/AppData/Local/Programs/Python/Python312/python.exe" -m pip install bleak
 ```
 
 Then read the resolved version and append it to `backend/requirements.txt` with that exact number, e.g.:
@@ -330,7 +334,7 @@ def test_opaque_blob_is_not_readable():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_constants.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_constants.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble'`
 
 - [ ] **Step 3: Create the package and constants**
@@ -427,7 +431,7 @@ RX_PROTOCOL_NOT_APPLICABLE = 0xFF
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_constants.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_constants.py -v`
 Expected: 8 passed.
 
 - [ ] **Step 5: Commit**
@@ -523,7 +527,7 @@ def test_service_match_is_case_insensitive():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_advertisement.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_advertisement.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.advertisement'`
 
 - [ ] **Step 3: Write the implementation**
@@ -605,7 +609,7 @@ def decode_manufacturer_data(company_id, payload):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_advertisement.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_advertisement.py -v`
 Expected: 9 passed.
 
 - [ ] **Step 5: Commit**
@@ -744,7 +748,7 @@ def test_all_decoders_tolerate_empty_bytes():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_decoders.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_decoders.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.decoders'`
 
 - [ ] **Step 3: Write the implementation**
@@ -897,7 +901,7 @@ def decode_link_status(raw):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_decoders.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_decoders.py -v`
 Expected: 16 passed.
 
 - [ ] **Step 5: Commit**
@@ -1027,7 +1031,7 @@ def test_concurrent_upserts_do_not_lose_devices():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_registry.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_registry.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.registry'`
 
 - [ ] **Step 3: Write the models**
@@ -1156,7 +1160,7 @@ class Registry:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_registry.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_registry.py -v`
 Expected: 8 passed.
 
 - [ ] **Step 6: Commit**
@@ -1231,7 +1235,7 @@ def test_codes_are_unique():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_errors.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_errors.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.errors'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1319,7 +1323,7 @@ class NotOwner(BleError):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_errors.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_errors.py -v`
 Expected: 5 passed.
 
 - [ ] **Step 5: Commit**
@@ -1418,7 +1422,7 @@ def test_unknown_sim_device_returns_empty():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_sim.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_sim.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.sim'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1506,7 +1510,7 @@ def sim_gatt_values(os_id):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_sim.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_sim.py -v`
 Expected: 7 passed.
 
 - [ ] **Step 5: Commit**
@@ -1623,7 +1627,7 @@ def test_sim_status_reports_adapter_available():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_scanner.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_scanner.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.scanner'`
 
 - [ ] **Step 3: Write the implementation**
@@ -1860,7 +1864,7 @@ def start_ble_service(app):
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_scanner.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_scanner.py -v`
 Expected: 10 passed.
 
 - [ ] **Step 5: Commit**
@@ -2010,7 +2014,7 @@ def test_fake_client_offers_no_write_method():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_gatt_client.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_gatt_client.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.five12_ble.gatt_client'`
 
 - [ ] **Step 3: Write the connection manager**
@@ -2215,7 +2219,7 @@ def build_sim_snapshot(os_id, now=None):
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_gatt_client.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_gatt_client.py -v`
 Expected: 12 passed.
 
 - [ ] **Step 6: Commit**
@@ -2313,7 +2317,7 @@ def test_devices_route_cintenna_entry_shape(client):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_adapter.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_adapter.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.integrations.cintenna'`
 
 - [ ] **Step 3: Write the adapter**
@@ -2424,12 +2428,12 @@ ALL_DEVICE_IDS = ('starlink', 'bolero', 'stardust', 'cintenna')
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_adapter.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_adapter.py -v`
 Expected: 8 passed.
 
 - [ ] **Step 6: Confirm the other adapters still work**
 
-Run from `backend/`: `pytest`
+Run from `backend/`: `python -m pytest`
 Expected: all tests pass, including the pre-existing Starlink/Bolero/Stardust suites.
 
 - [ ] **Step 7: Commit**
@@ -2527,7 +2531,7 @@ def test_no_post_routes_exist_in_this_phase(ble_app):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run from `backend/`: `pytest tests/test_ble_routes.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_routes.py -v`
 Expected: FAIL — `/api/ble/devices` 404s.
 
 - [ ] **Step 3: Replace the routes module**
@@ -2645,12 +2649,12 @@ In `backend/app/__init__.py`, replace the BLE block added in Task 1 with:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run from `backend/`: `pytest tests/test_ble_routes.py -v`
+Run from `backend/`: `python -m pytest tests/test_ble_routes.py -v`
 Expected: 7 passed.
 
 - [ ] **Step 6: Run the whole backend suite**
 
-Run from `backend/`: `pytest`
+Run from `backend/`: `python -m pytest`
 Expected: all pass.
 
 - [ ] **Step 7: Commit**
