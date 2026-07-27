@@ -4,7 +4,7 @@
 - **Branch:** `fix/hermes/credential-config`
 - **Workspace:** persistent worktree at `/root/five12-pr1-credentials`
 - **Base SHA:** `c8be6db`
-- **Status:** active
+- **Status:** review
 - **Last updated:** 2026-07-27
 
 ## Goal
@@ -13,14 +13,16 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 
 ## Acceptance criteria
 
-- [ ] Root `.env` is no longer tracked.
-- [ ] Placeholder-only `.env.example` documents required keys.
-- [ ] No database password default remains in application code.
-- [ ] `DB_PASS` is no longer an accepted or documented variable.
-- [ ] Missing `DB_PASSWORD` fails with a clear startup error in development mode.
-- [ ] Desktop SQLite mode still starts without a database password.
-- [ ] Backend tests pass.
-- [ ] Anthony is warned to back up the current local `.env` and rotate the affected MySQL/mail credentials before merge.
+- [x] Root `.env` is no longer tracked on the feature branch.
+- [x] Placeholder-only `.env.example` documents required keys.
+- [x] No known database password default remains in the candidate tree.
+- [x] `DB_PASS` is rejected by regression test and absent from active backend code.
+- [x] Missing `DB_PASSWORD` fails with a clear startup error in development mode.
+- [x] Desktop SQLite mode still starts without a database password.
+- [x] Focused tests pass: 5.
+- [x] Full backend tests pass: 164, with 9 pre-existing SQLAlchemy warnings.
+- [ ] Claude Code independently reviews commit `6ad834b`.
+- [ ] Anthony backs up the current local `.env` and rotates the affected MySQL/mail credentials before merge.
 
 ## Advisory reserved paths
 
@@ -44,13 +46,13 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 
 Development MySQL configuration uses `DB_HOST`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`. Desktop mode remains SQLite-only and does not require those values.
 
-## Checks planned
+## Checks run
 
-- Focused configuration tests
-- Full `backend/tests` suite
-- Tracked-file check proving `.env` is absent
-- Search proving `DB_PASS` is absent from active backend code
-- Missing-password and desktop-startup checks
+- `/root/five12-website/.venv/bin/python -m pytest -q backend/tests/test_config.py` → **5 passed**.
+- `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` → **164 passed, 9 pre-existing SQLAlchemy warnings**.
+- `git diff --cached --check` → clean before commit.
+- Candidate-tree checks → root `.env` untracked; `.env.example` tracked with empty password/secret fields; legacy `DB_PASS` absent from active backend source; known removed default absent from the candidate tree; local worktree `.env` retained and not displayed.
+- Python syntax compilation passed for the changed Python files.
 
 ## Risks and skipped checks
 
@@ -58,4 +60,4 @@ Removing a previously tracked `.env` causes Git to delete that tracked working-t
 
 ## Handoff / next action
 
-Hermes implements and verifies the bounded repository change, then Claude Code independently reviews it before merge.
+Claude Code independently reviews branch `fix/hermes/credential-config` at commit `6ad834b`, without reading or reproducing any credential value. Anthony then backs up the current `.env` outside the repository and confirms credential rotation before this branch is eligible to merge.
