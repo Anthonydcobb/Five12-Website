@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 CONNECT_TIMEOUT = 12.0
 READ_TIMEOUT = 6.0
+DISCONNECT_TIMEOUT = 6.0
 
 
 class _DeviceLocks:
@@ -100,6 +101,20 @@ async def connect(os_id):
 
         yield BleakClientAdapter(client)
     finally:
-        with contextlib.suppress(Exception):
-            await client.disconnect()
-        lock.release()
+        # The lock must be released no matter how disconnect exits, including
+        # via asyncio.CancelledError (a BaseException, not caught by
+        # `except Exception` / contextlib.suppress(Exception)). A held lock
+        # never expires on its own, so a cancelled disconnect used to poison
+        # the device for the rest of the process. The nested finally runs
+        # release() before any exception — cancellation included — keeps
+        # propagating past this frame.
+        try:
+            with contextlib.suppress(Exception):
+                # A hung disconnect is real, common BLE behaviour; bound it
+                # like every other bleak call here so cleanup can't stall
+                # forever. Failing to disconnect cleanly must not mask
+                # whatever the caller's body was actually doing, so the
+                # timeout (and any other disconnect failure) is swallowed.
+                await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT)
+        finally:
+            lock.release()
