@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
+import CintennaPanel from '../components/devices/CintennaPanel'
 
 const POLL_MS = 3000;
 
@@ -474,6 +475,7 @@ const PANELS = {
   starlink: StarlinkPanel,
   bolero: BoleroPanel,
   stardust: StardustPanel,
+  cintenna: CintennaPanel,
 };
 
 export default function Devices() {
