@@ -21,6 +21,11 @@ class DiscoveredDevice:
     first_seen: float
     last_seen: float
     advert: dict
+    # Advertisements seen from this radio. No consumer yet — it exists so the
+    # same-key upsert race is falsifiable: incrementing it is a compound
+    # read-modify-write, so the concurrency test can prove Registry's lock is
+    # load-bearing rather than merely present. Deliberately absent from
+    # to_dict(); that key set is the HTTP API surface.
     update_count: int = 0
 
     def to_dict(self):
