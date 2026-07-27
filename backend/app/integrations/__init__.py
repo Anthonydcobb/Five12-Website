@@ -127,7 +127,13 @@ def get_adapter(device_id, sim):
     from .starlink import StarlinkAdapter
     from .bolero import BoleroAdapter
     from .stardust import StardustAdapter
-    classes = {'starlink': StarlinkAdapter, 'bolero': BoleroAdapter, 'stardust': StardustAdapter}
+    from .cintenna import CintennaAdapter
+    classes = {
+        'starlink': StarlinkAdapter,
+        'bolero': BoleroAdapter,
+        'stardust': StardustAdapter,
+        'cintenna': CintennaAdapter,
+    }
     cls = classes.get(device_id)
     if cls is None:
         return None
@@ -138,4 +144,4 @@ def get_adapter(device_id, sim):
         return _registry[key]
 
 
-ALL_DEVICE_IDS = ('starlink', 'bolero', 'stardust')
+ALL_DEVICE_IDS = ('starlink', 'bolero', 'stardust', 'cintenna')
