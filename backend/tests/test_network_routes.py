@@ -31,13 +31,19 @@ class FakeCompleted:
         self.stdout, self.stderr, self.returncode = stdout, stderr, returncode
 
 
-def fake_ps(calls):
-    """subprocess.run stand-in that records every invocation into `calls`."""
+def fake_ps(calls, adapters=None):
+    """subprocess.run stand-in that records every invocation into `calls`.
+
+    `adapters` overrides the inventory the fake shell reports, so a test can put
+    a hostile-looking name *inside* the allowlist rather than outside it.
+    """
+    inventory = ADAPTERS if adapters is None else adapters
+
     def _run(argv, **kwargs):
         script = argv[-1]
         calls.append({'script': script, 'env': kwargs.get('env') or {}})
         if 'Get-NetAdapter' in script:
-            return FakeCompleted(stdout=json.dumps(ADAPTERS))
+            return FakeCompleted(stdout=json.dumps(inventory))
         return FakeCompleted(stdout='', stderr='', returncode=0)
     return _run
 
@@ -142,6 +148,72 @@ def test_valid_dhcp_passes_adapter_through_the_environment(client, ps_calls):
 
     env = [c['env'] for c in ps_calls if 'Get-NetAdapter' not in c['script']][0]
     assert env['FIVE12_ADAPTER'] == 'Wi-Fi'
+
+
+# ── Environment transport, isolated from the allowlist ───────────────────────
+#
+# [REVIEW 2026-07-27, Hermes] The tests above reject INJECTION at the allowlist,
+# which means they never exercise the environment transport with a hostile value
+# — they pin layer 2, not layer 1. If the allowlist were ever loosened, nothing
+# would catch a regression in the guard we claim is the strongest.
+#
+# These two tests remove that dependency by putting the injection-shaped name
+# *inside* the mocked live inventory, so the allowlist passes it through and the
+# transport is the only thing standing between the value and the shell. Windows
+# permits apostrophes in adapter aliases, so this is a legitimate rename, not a
+# contrived one.
+
+HOSTILE_ALIAS_INVENTORY = ['Ethernet 2', INJECTION]
+
+
+@pytest.fixture
+def ps_calls_hostile_inventory():
+    calls = []
+    with patch('app.routes.subprocess.run',
+               side_effect=fake_ps(calls, adapters=HOSTILE_ALIAS_INVENTORY)):
+        yield calls
+
+
+def test_allowlisted_hostile_alias_never_reaches_powershell_source(
+        client, ps_calls_hostile_inventory):
+    """An injection-shaped name the machine really has must still be inert."""
+    res = client.post('/api/network/apply',
+                      json={'adapter': INJECTION, 'ip': '192.168.1.50',
+                            'prefix': 24, 'gateway': '192.168.1.1'})
+    assert res.status_code == 200, 'a real adapter must be accepted'
+
+    scripts = ps_scripts(ps_calls_hostile_inventory)
+    assert len(scripts) == 1
+    script = scripts[0]
+
+    # The whole value is absent, and so is every fragment that would execute.
+    assert INJECTION not in script
+    assert 'Start-Process' not in script
+    assert 'calc.exe' not in script
+    assert "';" not in script
+    assert '$env:FIVE12_ADAPTER' in script
+
+    # ...yet it arrives at the shell exactly, byte for byte, as data.
+    env = [c['env'] for c in ps_calls_hostile_inventory
+           if 'Get-NetAdapter' not in c['script']][0]
+    assert env['FIVE12_ADAPTER'] == INJECTION
+    assert env['FIVE12_IP'] == '192.168.1.50'
+    assert env['FIVE12_GATEWAY'] == '192.168.1.1'
+
+
+def test_allowlisted_hostile_alias_is_inert_on_dhcp(
+        client, ps_calls_hostile_inventory):
+    res = client.post('/api/network/dhcp', json={'adapter': INJECTION})
+    assert res.status_code == 200
+
+    script = ps_scripts(ps_calls_hostile_inventory)[0]
+    assert INJECTION not in script
+    assert 'Start-Process' not in script
+    assert '$env:FIVE12_ADAPTER' in script
+
+    env = [c['env'] for c in ps_calls_hostile_inventory
+           if 'Get-NetAdapter' not in c['script']][0]
+    assert env['FIVE12_ADAPTER'] == INJECTION
 
 
 def test_apply_omits_gateway_flag_when_no_gateway_given(client, ps_calls):
