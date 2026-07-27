@@ -133,6 +133,15 @@ class BleScanService:
         except OSError:
             os.close(fd)
             return False
+        except ImportError:
+            # Neither msvcrt nor fcntl exists on this platform. Same posture
+            # as bleak missing: we cannot honestly claim adapter ownership,
+            # so decline it here rather than let the ImportError climb out
+            # of start() uncaught and take app startup down with it.
+            os.close(fd)
+            self._last_error = 'lock-mechanism-unavailable'
+            log.error('BLE: no OS lock mechanism available on this platform; not scanning')
+            return False
         self._lock_handle = fd
         # Diagnostics only — it never decides ownership. Padded to a fixed
         # width so a shorter PID cannot leave a previous owner's digits behind.
@@ -165,9 +174,21 @@ class BleScanService:
     def start(self):
         if self._running:
             return
+        if self._thread is not None and self._thread.is_alive():
+            # stop() left this reference in place because the thread outlived
+            # its join timeout — it is still the legitimate owner of the
+            # adapter. Spawning a second thread here would be the same
+            # two-owners-of-one-radio failure the lock exists to prevent, so
+            # this guard does not lean on the lock at all to catch it.
+            self._last_error = 'previous-scan-thread-still-running'
+            log.warning('BLE: refusing to start; previous scan thread has not exited yet')
+            return
         if not self._acquire_adapter_lock():
-            self._last_error = 'not-owner'
-            log.info('BLE: another process owns the adapter; not scanning')
+            # Don't clobber a more specific reason _acquire_adapter_lock may
+            # have already recorded (e.g. an unsupported platform).
+            if self._last_error != 'lock-mechanism-unavailable':
+                self._last_error = 'not-owner'
+                log.info('BLE: another process owns the adapter; not scanning')
             return
         # A fresh Event per thread. Clearing a shared one would un-stop a
         # previous thread that had not yet noticed it was told to exit.
@@ -184,13 +205,29 @@ class BleScanService:
         thread.start()
 
     def stop(self):
-        thread, self._thread = self._thread, None
+        thread = self._thread
         self._stop.set()
         self._running = False
         # Join before releasing: the old thread must be gone before a later
         # start() can hand the adapter to a new one.
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=STOP_JOIN_TIMEOUT)
+            if thread.is_alive():
+                # Still running past our bounded wait — blocked in bleak's
+                # async teardown, or behind a hung radio driver. It is still
+                # the legitimate owner of the adapter: releasing the lock now
+                # would let an immediate start() acquire a fresh one and spawn
+                # a SECOND live scan thread while this one keeps running —
+                # exactly the "two owners of one radio" failure this lock
+                # exists to prevent. Leave the lock (and this reference, so
+                # start() can see the thread is still alive) in place; either
+                # _retire releases it when the thread eventually exits, or the
+                # process dying does.
+                log.warning(
+                    'BLE: scan thread did not stop within %.1fs; keeping the '
+                    'adapter lock held', STOP_JOIN_TIMEOUT)
+                return
+        self._thread = None
         self._release_adapter_lock()
 
     def status(self):

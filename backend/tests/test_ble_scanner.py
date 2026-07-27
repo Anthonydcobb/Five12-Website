@@ -213,3 +213,67 @@ def test_stop_then_start_does_not_leave_two_scan_threads():
 def test_stop_is_safe_when_nothing_was_ever_started():
     BleScanService().stop()
     BleScanService(sim=True).stop()
+
+
+def test_stop_keeps_the_lock_when_the_join_times_out(monkeypatch):
+    """A join() that times out must not be treated as "the thread is gone".
+    Releasing the lock anyway would let an immediate start() acquire a fresh
+    lock and spawn a second live scan thread while the first is still
+    running — a same-process replay of the two-owners-of-one-radio failure
+    the lock exists to prevent."""
+    monkeypatch.setattr(scanner_mod, 'STOP_JOIN_TIMEOUT', 0.1)
+    release = threading.Event()
+
+    def _wedged_loop(self, stop):
+        # Stands in for a thread stuck in bleak's async teardown, or behind
+        # a hung radio driver: it ignores `stop` far longer than the
+        # (patched) join timeout, but does eventually exit.
+        release.wait(5)
+
+    monkeypatch.setattr(BleScanService, '_run_loop', _wedged_loop)
+
+    svc = BleScanService(sim=False)
+    svc.start()
+    assert svc._lock_handle is not None
+    old_thread = svc._thread
+    try:
+        svc.stop()
+        assert old_thread.is_alive(), 'test setup bug: thread exited before join timed out'
+        assert svc._lock_handle is not None, \
+            'lock released while its scan thread is still alive'
+
+        # Without the fix, the freed lock lets a second thread spawn here.
+        svc.start()
+        assert svc._thread is old_thread, 'start() must not spawn a second thread'
+        assert len(_live_scan_threads()) == 1
+        assert svc._last_error == 'previous-scan-thread-still-running'
+    finally:
+        release.set()
+        old_thread.join(timeout=5)
+        svc._release_adapter_lock()
+    assert _live_scan_threads() == []
+
+
+def test_stop_logs_a_warning_when_the_join_times_out(monkeypatch, caplog):
+    monkeypatch.setattr(scanner_mod, 'STOP_JOIN_TIMEOUT', 0.1)
+    release = threading.Event()
+
+    def _wedged_loop(self, stop):
+        release.wait(5)
+
+    monkeypatch.setattr(BleScanService, '_run_loop', _wedged_loop)
+
+    svc = BleScanService(sim=False)
+    svc.start()
+    thread = svc._thread
+    try:
+        with caplog.at_level('WARNING', logger=scanner_mod.log.name):
+            svc.stop()
+        assert any(rec.levelname == 'WARNING' and 'did not stop' in rec.getMessage()
+                   for rec in caplog.records), \
+            'join timeout must be logged, not silent'
+        assert '0.1' in caplog.text
+    finally:
+        release.set()
+        thread.join(timeout=5)
+        svc._release_adapter_lock()
