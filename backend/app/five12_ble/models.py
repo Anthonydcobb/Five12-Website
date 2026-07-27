@@ -21,6 +21,7 @@ class DiscoveredDevice:
     first_seen: float
     last_seen: float
     advert: dict
+    update_count: int = 0
 
     def to_dict(self):
         return {

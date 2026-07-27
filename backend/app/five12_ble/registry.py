@@ -44,6 +44,7 @@ class Registry:
                 _RSSI_ALPHA * rssi + (1 - _RSSI_ALPHA) * existing.rssi_smoothed
             )
             existing.last_seen = now
+            existing.update_count += 1
             if advert:
                 existing.advert = advert
             return existing

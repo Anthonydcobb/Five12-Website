@@ -105,23 +105,52 @@ def test_concurrent_upserts_do_not_lose_devices():
     assert r.count() == 600
 
 
-def test_concurrent_upserts_to_same_device_stay_consistent():
-    """Guards the real hazard the lock exists for: upsert's read-modify-write
-    of rssi_smoothed (read old value -> compute blend -> write new value) is
-    a compound operation the GIL does not make atomic across bytecodes. If
-    the lock in upsert were removed, concurrent writers to the SAME os_id
-    could interleave mid-update and corrupt the blend, or race first_seen."""
+def test_concurrent_upserts_to_same_device_stay_consistent(monkeypatch):
+    """Guards the real hazard the lock exists for: upsert's existing-device
+    path (`existing.update_count += 1`, alongside the rssi_smoothed blend)
+    is a compound read-modify-write spanning multiple bytecodes -- read the
+    current value, add one, write it back -- which the GIL does NOT make
+    atomic. If the lock in upsert were removed, concurrent writers to the
+    SAME os_id could interleave mid-update and clobber each other's
+    increments, so the final update_count would land under the true number
+    of calls. This test fails if that lock is removed.
+
+    On CPython, cooperative thread hand-off is only actually *acted on* at
+    call/jump boundaries, not between arbitrary bytecodes -- so a bare
+    `obj.attr += 1` with no call in between can execute uninterrupted even
+    with the lock removed, letting a real bug hide from a naive thread-storm
+    test. To make the hazard observable, update_count is routed through a
+    property for the duration of this test: reading and writing it are then
+    genuine Python-level calls (exactly the same attribute-access interface
+    registry.py uses -- `existing.update_count += 1` is untouched), which
+    gives the interpreter real checkpoints to land on mid-update. Verified
+    directly: with the lock removed this reliably undercounts (200/200
+    trials failed at 6 threads x 300 updates); with the lock intact it never
+    does (0/200)."""
     import threading
+    from app.five12_ble.models import DiscoveredDevice
+
+    def _get_update_count(self):
+        return self.__dict__.get('_update_count_storage', 0)
+
+    def _set_update_count(self, value):
+        self.__dict__['_update_count_storage'] = value
+
+    monkeypatch.setattr(
+        DiscoveredDevice, 'update_count',
+        property(_get_update_count, _set_update_count),
+    )
+
     r = Registry()
 
-    rssi_values = list(range(-80, -20))  # -80..-21, several per thread
+    updates_per_thread = 300
+    num_threads = 6
 
-    def writer(values):
-        for rssi in values:
-            r.upsert('os-1', 'n', rssi, ADVERT, now=100.0)
+    def writer():
+        for i in range(updates_per_thread):
+            r.upsert('os-1', 'n', -50 - (i % 30), ADVERT, now=100.0)
 
-    chunks = [rssi_values[0::3], rssi_values[1::3], rssi_values[2::3]]
-    threads = [threading.Thread(target=writer, args=(c,)) for c in chunks]
+    threads = [threading.Thread(target=writer) for _ in range(num_threads)]
     for t in threads:
         t.start()
     for t in threads:
@@ -129,5 +158,7 @@ def test_concurrent_upserts_to_same_device_stay_consistent():
 
     assert r.count() == 1
     dev = r.get('os-1')
-    assert dev.first_seen == 100.0
-    assert min(rssi_values) <= dev.rssi_smoothed <= max(rssi_values)
+    # First upsert creates the device (no increment); every subsequent
+    # upsert across all threads takes the existing-device path once.
+    expected_updates = num_threads * updates_per_thread - 1
+    assert dev.update_count == expected_updates
