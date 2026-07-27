@@ -1,0 +1,152 @@
+# Cintenna BLE — Handoff (read-only phase)
+
+Branch `feat/cintenna-ble`, 29 commits, **not merged, not pushed**, as of 2026-07-27.
+
+The read-only phase is complete and reviewed. It is deliberately parked before
+merge pending hardware verification — see [Hardware gate](#hardware-gate).
+
+Companion documents:
+
+- Design: [`../superpowers/specs/2026-07-26-cintenna-ble-design.md`](../superpowers/specs/2026-07-26-cintenna-ble-design.md)
+- Repo/architecture map: [`ble-integration-map.md`](ble-integration-map.md)
+- Plan (13 tasks, full code): [`../superpowers/plans/2026-07-26-cintenna-ble-readonly.md`](../superpowers/plans/2026-07-26-cintenna-ble-readonly.md)
+
+## What shipped
+
+A **Cintennas** tab on the Devices page. A daemon thread owns a `bleak` event
+loop and a device registry; `CintennaAdapter` reads that registry synchronously
+so the existing tab strip works unchanged; `/api/ble/*` serves the roster and
+connected status reads behind `ENABLE_BLE_TOOLS`.
+
+Verify with:
+
+```
+cd backend && python -m pytest      # 286 passed
+cd app     && npm run test          # 20 passed
+cd app     && npm run build         # succeeds
+```
+
+Note the interpreter split recorded in the integration map: tests run on the
+global Python 3.14, the app runs on `AppData\...\Python312`, and `bleak` is
+installed **only** on the app runtime. `pytest` is not on PATH — use
+`python -m pytest`.
+
+## Release blockers — all verified holding
+
+Confirmed across the whole branch by the final review, and each gated by a test
+that fails if violated:
+
+- No write path anywhere. No `write_gatt_char`, no mutating `/api/ble` route, no
+  `command_service.py`, no UI control that writes to a radio.
+- No linking-key handling, firmware update, RDM, BLE DMX streaming, and no read
+  of the opaque blob characteristic `10351003`.
+- Fully removable: with `FIVE12_BLE_TOOLS` unset no thread starts, the routes do
+  not exist, and Patch/Labels/Network are untouched.
+- Nothing claims a radio is "linked" — an ATT acknowledgement is not evidence of
+  RF association. No field named `linked` exists.
+- Nothing claims a "Cintenna 2" from radio-platform evidence alone.
+- RSSI is never presented as distance.
+
+**If you add the write phase, these are the properties to keep.** The strongest
+guards are `test_ble_constants.py` (no write allowlist), `test_ble_routes.py`
+(no mutating route in `url_map`), `test_ble_gatt_client.py` (production
+`BleakClientAdapter` exposes no write method), and `CintennaPanel.test.jsx`
+(no Link/Unlink/Set-mode/Apply control renders).
+
+## Hardware gate
+
+**Nothing here has met a real radio.** Everything is verified against fakes, sim
+fixtures, and captured byte values. Run this on the actual Cintenna (firmware
+`1.0.7.2`) before planning the write phase:
+
+- [ ] Passive scan finds the device without connecting, CRMX Toolbox closed
+- [ ] Advertised name, RSSI, service UUID, and manufacturer payload all appear
+- [ ] Connect and read battery, firmware, and the RX snapshot
+- [ ] **Open Toolbox, attempt a snapshot, confirm the error names Toolbox.**
+      This is the most valuable check: it is the most common real failure, and
+      the detection is English-substring matching (see deferred minors below)
+- [ ] Close Toolbox, reconnect successfully
+- [ ] Unset `FIVE12_BLE_TOOLS`, confirm Patch/Labels/Network/Devices still work
+
+Run the app with `FIVE12_BLE_TOOLS=1`; add `FIVE12_DEVICE_SIM=1` for two
+simulated radios without hardware.
+
+## Deferred minors — triaged by the final whole-branch review
+
+Recorded here because the working ledger (`.superpowers/sdd/progress.md`) is
+gitignored scratch and will not survive a clean.
+
+**Accepted, ship as-is:**
+
+| Item | Why it is fine |
+|---|---|
+| `capabilities()` hardcodes `bleToolsEnabled: True` | The route only exists when the gate is on — a tautology, not a lie |
+| `evidence` list looks redundant with `platform != None` | Not redundant in the composed system; `scanner.py` adds `service-uuid` independently and the UI renders it as badges |
+| sim shares one `evidence` list between both devices | Latent only; nothing mutates it in place |
+| PID-offset in the lock file has no pytest coverage | The PID is diagnostics-only and never decides ownership; ownership itself has real subprocess tests including force-kill recovery |
+| `get_scan_service` caches the not-owner service forever | A worker that loses the adapter race never retries. Fixing it means a re-acquire poll on the most safety-critical component; gunicorn worker recycling mitigates |
+| `build_sim_snapshot` populates no warnings / per-field error | Shape parity with the real path is actively asserted, and sim fixtures cover all 11 UUIDs |
+| `signalBars` returns 1 for literal `NaN` | `NaN` cannot arrive through JSON; `null` is handled correctly |
+| `fetchBleSnapshot` rejects with a plain object, not an `Error` | Its sole consumer reads `.message`; the shape is tested. **Do not add `instanceof Error` checks against it** |
+
+**Known-fragile, worth revisiting when evidence exists:**
+
+- **Toolbox-conflict detection matches English substrings** (`'in use'`, `'access'`,
+  `'busy'`) in `connection_manager.py`. On a non-English Windows locale a real
+  Toolbox conflict degrades to the generic "device out of range" guidance. It
+  never crashes and never takes a wrong action — it just gives worse advice. A
+  real fix needs HRESULT evidence from non-English hardware that does not exist
+  yet. **The hardware gate's Toolbox step is where this would show up.**
+- **`READABLE_UUIDS` is not load-bearing.** Nothing outside tests imports it;
+  `gatt_client._FIELDS` is the de facto allowlist. The chain holds today only
+  transitively. Before the write phase, add a direct assertion that every UUID
+  in `_FIELDS` is a member of `READABLE_UUIDS`, so the constant actually
+  enforces something.
+- **Sim polling responsibility is split.** `ble_routes.list_devices` calls
+  `poll_sim()`; `CintennaAdapter` does not. Under `?sim=1` the Devices tab card
+  reads "not scanning · 0 nearby" until something first hits
+  `/api/ble/devices?sim=1`. Cosmetic and sim-only.
+- **`asyncio` safety assumes sync workers.** Snapshots submit onto the scan
+  service's loop, which is only safe because the app never runs under a threaded
+  or async worker. True today (`Procfile` uses default sync gunicorn workers).
+  Switching to gevent/eventlet/uvicorn would silently break it — there is a
+  comment in `ble_routes.py` recording this.
+
+**Dead code left in place deliberately** (harmless, likely used by the write
+phase): `errors.NotOwner` and `errors.CharacteristicMissing` are never raised;
+`constants.CONFIG_SERVICE` duplicates `TIMOTWO_SERVICE_UUID`; `Registry.count()`
+is unused; `bleApi.fetchBleCapabilities` is exported and tested but uncalled.
+
+## Frontend dependency security
+
+`fix/frontend-dependency-vulns` (commit `c8be6db`) is a **separate branch off
+`main`**, merged into this one. It has no hardware dependency and can merge
+independently — it does not need to wait for the BLE feature.
+
+`npm audit --omit=dev` reports **2 high**, both the same advisory: React Router
+**RSC-mode** CSRF bypass, `>=7.12.0 <8.3.0`, no forward fix in v7.
+
+**Do not run `npm audit fix --force` to clear them.** npm's suggested
+remediation is a downgrade to `react-router-dom@7.11.0`, which reintroduces
+roughly thirteen CVEs — open redirect via `<Link>`, `deserializeErrors`
+arbitrary constructor injection, the DoS pair, the XSS set. The advisory is
+RSC-only and this app is a plain SPA with no RSC, no server, and no actions, so
+it is structurally unreachable. Re-check when 8.3.0 or a v7 backport lands.
+
+Note the `overrides` entry pinning `dompurify` in `app/package.json`. It is
+load-bearing: jspdf declares dompurify as an *optional* dependency at `^3.3.1`,
+which the vulnerable 3.4.3 satisfies, so a lock-only bump silently reverts on
+any fresh clone or lock regeneration. Do not remove the override.
+
+## Next phase
+
+Plan 2 covers spec tasks 10–18: command policy, guarded configuration writes,
+TX Link, RX Unlink, audit logging, hardware acceptance, release gate. It is
+deliberately **not written yet** — those steps depend on what the hardware gate
+reveals about real `bleak` behaviour on Windows (reboot timing after a mode
+write, Toolbox conflict signatures, whether device identity survives a
+reconnect). Writing them before that would be guessing.
+
+Protocol source of truth for that work is the private KB:
+`10-Lighting/References/LumenRadio/timotwo-ble-discovery-and-gatt.md` and
+`five12-cintenna-ble-implementation-plan.md`.
