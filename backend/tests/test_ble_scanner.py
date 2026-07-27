@@ -2,10 +2,46 @@
 
 handle_advertisement is pure with respect to bleak — it takes plain values, so
 the whole filter/decode/store path is testable with no radio and no event loop.
+
+The adapter lock is exercised with real subprocesses. An advisory lock exists
+to exclude other *processes*; two objects in one interpreter would prove
+nothing about the property that actually matters.
 """
 
+import os
+import subprocess
+import sys
+import threading
+import time
+
 from app.five12_ble import constants as c
+from app.five12_ble import scanner as scanner_mod
 from app.five12_ble.scanner import BleScanService
+
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(scanner_mod.__file__)))
+
+# Prelude every lock child shares: import the module under test from this
+# checkout rather than whatever happens to be installed.
+_CHILD_PRELUDE = (
+    'import sys\n'
+    'sys.path.insert(0, %r)\n'
+    'from app.five12_ble.scanner import BleScanService\n' % BACKEND_DIR
+)
+
+
+def _run_child(body, timeout=60):
+    """Run a snippet in a real second interpreter and return its stdout."""
+    proc = subprocess.run(
+        [sys.executable, '-c', _CHILD_PRELUDE + body],
+        capture_output=True, text=True, timeout=timeout,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
+
+
+def _live_scan_threads():
+    return [t for t in threading.enumerate()
+            if t.name == 'five12-ble-scan' and t.is_alive()]
 
 TIMOTWO_UUIDS = [c.TIMOTWO_SERVICE_UUID]
 MFR = {0xFFFF: bytes.fromhex('03F14000004C55F140')}
@@ -82,3 +118,98 @@ def test_sim_status_reports_adapter_available():
     hardware error during a demo."""
     svc = BleScanService(sim=True)
     assert svc.status()['adapterAvailable'] is True
+
+
+# ── adapter lock ─────────────────────────────────────────────────────────────
+def test_second_process_cannot_take_the_adapter_and_reports_not_owner():
+    """Under gunicorn every worker imports this module. Only one may drive the
+    radio; the rest must stand down instead of fighting for it."""
+    svc = BleScanService()
+    assert svc._acquire_adapter_lock() is True
+    try:
+        out = _run_child(
+            'svc = BleScanService()\n'
+            'svc.start()\n'
+            'print(svc._lock_handle is None, svc.status()["lastError"],'
+            '      svc.status()["running"], svc._thread is None)\n'
+        )
+        assert out == 'True not-owner False True'
+    finally:
+        svc._release_adapter_lock()
+
+
+def test_releasing_the_lock_lets_another_process_acquire():
+    svc = BleScanService()
+    assert svc._acquire_adapter_lock() is True
+    svc._release_adapter_lock()
+
+    out = _run_child(
+        'svc = BleScanService()\n'
+        'got = svc._acquire_adapter_lock()\n'
+        'svc._release_adapter_lock()\n'
+        'print(got)\n'
+    )
+    assert out == 'True'
+
+
+def test_lock_is_released_when_the_holding_process_dies():
+    """No heartbeat, no staleness timeout: the kernel drops the lock when the
+    owner dies, however it dies. A killed worker must not wedge the adapter."""
+    holder = subprocess.Popen(
+        [sys.executable, '-c', _CHILD_PRELUDE +
+         'svc = BleScanService()\n'
+         'assert svc._acquire_adapter_lock()\n'
+         'print("HELD", flush=True)\n'
+         'import time; time.sleep(120)\n'],
+        stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == 'HELD'
+        svc = BleScanService()
+        assert svc._acquire_adapter_lock() is False, 'live holder was ignored'
+    finally:
+        holder.kill()
+        holder.wait(timeout=30)
+
+    # The dead process called no release path whatsoever.
+    deadline = time.time() + 10
+    while True:
+        svc = BleScanService()
+        if svc._acquire_adapter_lock():
+            svc._release_adapter_lock()
+            break
+        assert time.time() < deadline, 'lock survived the death of its owner'
+        time.sleep(0.1)
+
+
+def test_sim_services_bypass_the_lock_entirely():
+    """Simulated devices need no radio, so sim must never contend for it."""
+    a, b = BleScanService(sim=True), BleScanService(sim=True)
+    assert a._acquire_adapter_lock() is True
+    assert b._acquire_adapter_lock() is True
+    assert a._lock_handle is None and b._lock_handle is None
+
+
+def test_stop_then_start_does_not_leave_two_scan_threads():
+    """stop() used to leave the old thread sleeping, and start() then cleared
+    the Event they shared — un-stopping it and losing the reference."""
+    assert _live_scan_threads() == []
+    svc = BleScanService(sim=True)
+    svc.start()
+    first = svc._thread
+    svc.stop()
+    assert not first.is_alive()
+
+    svc.start()
+    try:
+        assert svc._thread is not first
+        assert not first.is_alive()
+        assert len(_live_scan_threads()) == 1
+    finally:
+        svc.stop()
+    assert _live_scan_threads() == []
+
+
+def test_stop_is_safe_when_nothing_was_ever_started():
+    BleScanService().stop()
+    BleScanService(sim=True).stop()

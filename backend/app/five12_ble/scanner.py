@@ -13,7 +13,6 @@ import logging
 import os
 import tempfile
 import threading
-import time
 
 from .advertisement import PLATFORM_TIMOTWO, decode_manufacturer_data, is_timotwo_service
 from .constants import ACCEPTED_COMPANY_IDS
@@ -24,7 +23,40 @@ log = logging.getLogger(__name__)
 
 SCAN_RESTART_DELAY = 5.0
 SIM_POLL_INTERVAL = 2.0
+# Bounded so a wedged scan thread delays a restart rather than hanging it.
+STOP_JOIN_TIMEOUT = 5.0
 _LOCK_PATH = os.path.join(tempfile.gettempdir(), 'five12-ble-adapter.lock')
+# Byte 0 is the lock itself; the PID lives past it. Windows locks are
+# mandatory, so a PID stored *inside* the locked byte would be unreadable by
+# exactly the processes that want to know who owns the adapter.
+_PID_OFFSET = 1
+
+
+def _lock_fd(fd):
+    """Take an exclusive advisory lock on an open descriptor, or raise OSError.
+
+    The kernel drops this lock however the owning process ends — clean exit,
+    crash, or kill — so a lock can never go stale and there is nothing to time
+    out and steal. The platform module is imported here, like bleak, because
+    only one of the two exists on any given machine.
+    """
+    if os.name == 'nt':
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_fd(fd):
+    if os.name == 'nt':
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
 
 
 class BleScanService:
@@ -84,34 +116,51 @@ class BleScanService:
     # ── lifecycle ──
     def _acquire_adapter_lock(self):
         """Exclusive OS-level lock so only one Five12 process scans. Under
-        gunicorn every worker runs this module; only one may own the radio."""
+        gunicorn every worker runs this module; only one may own the radio.
+
+        Ownership is whatever the kernel says about this descriptor — never the
+        file's existence or its mtime. Those only ever described a process that
+        *had* started, not one that is still alive.
+        """
         if self.sim:
             return True
         try:
-            fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        except FileExistsError:
-            # A stale lock from a killed process would block scanning forever.
-            try:
-                if time.time() - os.path.getmtime(_LOCK_PATH) > 300:
-                    os.unlink(_LOCK_PATH)
-                    return self._acquire_adapter_lock()
-            except OSError:
-                pass
-            return False
+            fd = os.open(_LOCK_PATH, os.O_CREAT | os.O_RDWR)
         except OSError:
             return False
+        try:
+            _lock_fd(fd)
+        except OSError:
+            os.close(fd)
+            return False
         self._lock_handle = fd
-        os.write(fd, str(os.getpid()).encode())
+        # Diagnostics only — it never decides ownership. Padded to a fixed
+        # width so a shorter PID cannot leave a previous owner's digits behind.
+        try:
+            os.lseek(fd, _PID_OFFSET, os.SEEK_SET)
+            os.write(fd, b'%-16d' % os.getpid())
+        except OSError:
+            pass
         return True
 
     def _release_adapter_lock(self):
-        if self._lock_handle is not None:
-            try:
-                os.close(self._lock_handle)
-                os.unlink(_LOCK_PATH)
-            except OSError:
-                pass
-            self._lock_handle = None
+        """Closing the descriptor is what releases the lock.
+
+        The file is deliberately left on disk: unlinking a path we can no
+        longer prove we own is how one process deletes another's live lock. An
+        orphaned empty file costs nothing, and an orphaned lock is impossible.
+        """
+        fd, self._lock_handle = self._lock_handle, None
+        if fd is None:
+            return
+        try:
+            _unlock_fd(fd)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
     def start(self):
         if self._running:
@@ -120,18 +169,28 @@ class BleScanService:
             self._last_error = 'not-owner'
             log.info('BLE: another process owns the adapter; not scanning')
             return
-        self._stop.clear()
-        self._thread = threading.Thread(
+        # A fresh Event per thread. Clearing a shared one would un-stop a
+        # previous thread that had not yet noticed it was told to exit.
+        stop = threading.Event()
+        self._stop = stop
+        thread = threading.Thread(
             target=self._sim_loop if self.sim else self._run_loop,
+            args=(stop,),
             name='five12-ble-scan',
             daemon=True,
         )
+        self._thread = thread
         self._running = True
-        self._thread.start()
+        thread.start()
 
     def stop(self):
+        thread, self._thread = self._thread, None
         self._stop.set()
         self._running = False
+        # Join before releasing: the old thread must be gone before a later
+        # start() can hand the adapter to a new one.
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=STOP_JOIN_TIMEOUT)
         self._release_adapter_lock()
 
     def status(self):
@@ -144,13 +203,17 @@ class BleScanService:
         }
 
     # ── loops ──
-    def _sim_loop(self):
-        while not self._stop.is_set():
+    def _sim_loop(self, stop):
+        while not stop.is_set():
             self.poll_sim()
-            self._stop.wait(SIM_POLL_INTERVAL)
+            stop.wait(SIM_POLL_INTERVAL)
 
-    def _run_loop(self):
+    def _run_loop(self, stop):
         """Own a bleak event loop for the life of the process.
+
+        `stop` is this thread's own Event, not self._stop: a stop()/start()
+        pair replaces the latter, and a thread must keep obeying the signal it
+        was started with rather than one a successor cleared.
 
         bleak is imported here, not at module scope, so the pure modules and
         their tests never require the dependency.
@@ -162,7 +225,7 @@ class BleScanService:
         except ImportError:
             self._last_error = 'adapter-unavailable'
             self._adapter_available = False
-            self._running = False
+            self._retire(stop)
             log.error('BLE: bleak is not installed; scanning disabled')
             return
 
@@ -179,12 +242,12 @@ class BleScanService:
                 log.debug('BLE: bad advertisement ignored: %s', exc)
 
         async def _scan_forever():
-            while not self._stop.is_set():
+            while not stop.is_set():
                 try:
                     async with BleakScanner(detection_callback=_on_advert):
                         self._adapter_available = True
                         self._last_error = None
-                        while not self._stop.is_set():
+                        while not stop.is_set():
                             await asyncio.sleep(0.5)
                 except Exception as exc:
                     self._adapter_available = False
@@ -199,8 +262,16 @@ class BleScanService:
             loop.run_until_complete(_scan_forever())
         finally:
             loop.close()
-            self._running = False
-            self._release_adapter_lock()
+            self._retire(stop)
+
+    def _retire(self, stop):
+        """Tear down on the scan thread's way out, but only if this thread is
+        still the current one — a join that timed out could otherwise let a
+        dead thread clear the flags and drop the lock of its successor."""
+        if self._stop is not stop:
+            return
+        self._running = False
+        self._release_adapter_lock()
 
 
 # ── module-level service registry (one per sim flag, like get_adapter) ───────
