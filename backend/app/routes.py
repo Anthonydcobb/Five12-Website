@@ -7,6 +7,7 @@ import re
 import socket
 import struct
 import time
+from urllib.parse import urlparse
 import requests as req
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory
@@ -608,16 +609,108 @@ def delete_label_template(tpl_id):
 
 # ── Network / IP config ───────────────────────────────────────────────────────
 
-def _run_ps(cmd):
+# These three routes shell out to PowerShell and reconfigure a physical NIC. They
+# are the only privileged writes in this blueprint, so they carry their own
+# guards rather than relying on the loopback bind alone:
+#
+#   1. _run_ps() passes operator input as environment variables, never as
+#      PowerShell source, so a value cannot become code (see _run_ps).
+#   2. The adapter name is resolved against the live adapter list, so only a NIC
+#      the machine actually has can be targeted.
+#   3. Addresses go through the ipaddress module.
+#   4. A browser-supplied cross-origin Origin header is rejected (_local_origin).
+#
+# Any one of these closes the injection; they are layered because the endpoint
+# performs disruptive changes and is unauthenticated.
+
+# Hosts a browser may name in Origin for a request we treat as first-party. The
+# desktop shell loads http://127.0.0.1:<port>, and Vite dev serves localhost.
+_LOCAL_ORIGIN_HOSTS = {'127.0.0.1', 'localhost', '::1', '[::1]'}
+
+
+def _run_ps(cmd, params=None):
+    """Run a PowerShell script, passing operator input via the environment.
+
+    `params` values are exported as environment variables and referenced inside
+    the script as $env:NAME. They are never interpolated into the script text,
+    so no quoting or escaping is required and no value can be parsed as code —
+    the shell receives them as data after parsing is complete.
+    """
+    env = os.environ.copy()
+    if params:
+        env.update({k: str(v) for k, v in params.items()})
     r = subprocess.run(
         ['powershell', '-NoProfile', '-NonInteractive', '-Command', cmd],
-        capture_output=True, text=True, timeout=20
+        capture_output=True, text=True, timeout=20, env=env
     )
     return r.stdout.strip(), r.stderr.strip(), r.returncode
 
 
+def _local_origin():
+    """False when a browser presents a cross-origin Origin on a state change.
+
+    No CORS is configured, which blocks an attacker *reading* our responses but
+    not the request arriving — a cross-origin POST with a simple content type is
+    delivered without a preflight, and request.get_json(force=True) parses it
+    regardless of Content-Type. For a NIC reconfigure the side effect is the
+    whole payload, so the response being unreadable is no protection.
+
+    Non-browser callers (the Electron main process, curl, the test client) send
+    no Origin at all; those are allowed through. Only a header that is present
+    and foreign is rejected.
+    """
+    origin = request.headers.get('Origin')
+    if not origin:
+        return True
+    try:
+        host = urlparse(origin).hostname
+    except ValueError:
+        return False
+    return host in _LOCAL_ORIGIN_HOSTS
+
+
+def _adapter_names():
+    """Names of the adapters this machine actually has, for allowlisting."""
+    out, _, code = _run_ps(
+        "@(Get-NetAdapter | Where-Object { $_.Status -ne 'Not Present' } |"
+        " ForEach-Object { $_.Name }) | ConvertTo-Json -Compress"
+    )
+    if code != 0 or not out:
+        return []
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return []
+    if isinstance(data, str):
+        return [data]
+    return [str(n) for n in data] if isinstance(data, list) else []
+
+
+def _valid_ipv4(value):
+    try:
+        ipaddress.IPv4Address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _network_tools_enabled():
+    """Honour the FIVE12_NETWORK_TOOLS kill switch on this blueprint too.
+
+    app/__init__.py gates network_routes.py (subnets, devices, sACN) behind
+    ENABLE_NETWORK_TOOLS and its comment states the /api/network/* routes "simply
+    don't exist" when it is off. That was not true of these three: they live on
+    the always-registered routes blueprint, so the switch left the only endpoints
+    that execute PowerShell reachable — including on a hosted deploy, where the
+    switch is precisely what an operator would set. They check it themselves now.
+    """
+    return bool(current_app.config.get('ENABLE_NETWORK_TOOLS'))
+
+
 @bp.route('/api/network/interfaces', methods=['GET'])
 def network_interfaces():
+    if not _network_tools_enabled():
+        return jsonify({'error': 'Network tools are disabled'}), 404
     ps = r"""
 $result = Get-NetAdapter | Where-Object { $_.Status -ne 'Not Present' } | ForEach-Object {
     $n = $_.Name
@@ -651,24 +744,52 @@ $result = Get-NetAdapter | Where-Object { $_.Status -ne 'Not Present' } | ForEac
 
 @bp.route('/api/network/apply', methods=['POST'])
 def network_apply():
-    body = request.get_json(force=True)
-    adapter = body.get('adapter', '').strip()
-    ip      = body.get('ip', '').strip()
-    prefix  = int(body.get('prefix', 24))
-    gateway = body.get('gateway', '').strip()
+    if not _network_tools_enabled():
+        return jsonify({'error': 'Network tools are disabled'}), 404
+    if not _local_origin():
+        return jsonify({'error': 'Cross-origin request rejected'}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    adapter = str(body.get('adapter', '')).strip()
+    ip      = str(body.get('ip', '')).strip()
+    gateway = str(body.get('gateway', '')).strip()
 
     if not adapter or not ip:
         return jsonify({'error': 'adapter and ip are required'}), 400
 
-    gw_line = f"-DefaultGateway '{gateway}'" if gateway else ''
+    try:
+        prefix = int(body.get('prefix', 24))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'prefix must be a number'}), 400
+    if not 1 <= prefix <= 32:
+        return jsonify({'error': 'prefix must be between 1 and 32'}), 400
+
+    if not _valid_ipv4(ip):
+        return jsonify({'error': 'ip is not a valid IPv4 address'}), 400
+    if gateway and not _valid_ipv4(gateway):
+        return jsonify({'error': 'gateway is not a valid IPv4 address'}), 400
+
+    # Allowlist by construction: only a NIC this machine reports can be named.
+    known = _adapter_names()
+    if not known:
+        return jsonify({'error': 'Could not enumerate network adapters'}), 500
+    if adapter not in known:
+        return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
+
+    # $env: references, not interpolation — see _run_ps.
+    gw_line = "-DefaultGateway $env:FIVE12_GATEWAY" if gateway else ''
     ps = f"""
 $ErrorActionPreference = 'Stop'
-Set-NetIPInterface -InterfaceAlias '{adapter}' -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue
-Get-NetIPAddress   -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Get-NetRoute       -InterfaceAlias '{adapter}' -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-New-NetIPAddress   -InterfaceAlias '{adapter}' -IPAddress '{ip}' -PrefixLength {prefix} {gw_line}
+Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue
+Get-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+Get-NetRoute       -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+New-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -IPAddress $env:FIVE12_IP -PrefixLength {prefix} {gw_line}
 """
-    out, err, code = _run_ps(ps)
+    out, err, code = _run_ps(ps, {
+        'FIVE12_ADAPTER': adapter,
+        'FIVE12_IP': ip,
+        'FIVE12_GATEWAY': gateway,
+    })
     if code != 0:
         admin = 'access' in err.lower() or 'administrator' in err.lower() or 'privileged' in err.lower()
         return jsonify({'error': err or 'Apply failed', 'adminRequired': admin}), 403 if admin else 500
@@ -677,21 +798,32 @@ New-NetIPAddress   -InterfaceAlias '{adapter}' -IPAddress '{ip}' -PrefixLength {
 
 @bp.route('/api/network/dhcp', methods=['POST'])
 def network_dhcp():
-    body = request.get_json(force=True)
-    adapter = body.get('adapter', '').strip()
+    if not _network_tools_enabled():
+        return jsonify({'error': 'Network tools are disabled'}), 404
+    if not _local_origin():
+        return jsonify({'error': 'Cross-origin request rejected'}), 403
+
+    body = request.get_json(force=True, silent=True) or {}
+    adapter = str(body.get('adapter', '')).strip()
     if not adapter:
         return jsonify({'error': 'adapter is required'}), 400
 
-    ps = f"""
+    known = _adapter_names()
+    if not known:
+        return jsonify({'error': 'Could not enumerate network adapters'}), 500
+    if adapter not in known:
+        return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
+
+    ps = """
 $ErrorActionPreference = 'Stop'
-Set-NetIPInterface -InterfaceAlias '{adapter}' -AddressFamily IPv4 -Dhcp Enabled
-Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.PrefixOrigin -ne 'Dhcp' }} |
+Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled
+Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -ne 'Dhcp' } |
     Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Get-NetRoute -InterfaceAlias '{adapter}' -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
     Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 """
-    out, err, code = _run_ps(ps)
+    out, err, code = _run_ps(ps, {'FIVE12_ADAPTER': adapter})
     if code != 0:
         admin = 'access' in err.lower() or 'administrator' in err.lower() or 'privileged' in err.lower()
         return jsonify({'error': err or 'DHCP switch failed', 'adminRequired': admin}), 403 if admin else 500
