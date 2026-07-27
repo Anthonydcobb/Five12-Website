@@ -5,6 +5,7 @@ from the roster once stale but retained in the map, so a device that walks out
 of range and back keeps its first_seen rather than looking brand new.
 """
 
+import copy
 import threading
 import time
 
@@ -55,10 +56,18 @@ class Registry:
         """Fresh devices, strongest signal first."""
         now = time.time() if now is None else now
         with self._lock:
+            # Copy each device while still holding the lock: the scan thread
+            # keeps mutating rssi_smoothed and friends on the live objects,
+            # so handing out references would let a caller's sort (or its
+            # later to_dict()) observe a device changing mid-read. `advert`
+            # is replaced wholesale by upsert, never mutated in place, so a
+            # shallow copy is enough to make this a true snapshot.
             fresh = [
-                d for d in self._devices.values()
+                copy.copy(d) for d in self._devices.values()
                 if now - d.last_seen <= self.stale_after
             ]
+        # Sorting the copies can happen outside the lock without reintroducing
+        # the hazard above, since nothing else can touch these copies.
         return sorted(fresh, key=lambda d: d.rssi_smoothed, reverse=True)
 
     def count(self):

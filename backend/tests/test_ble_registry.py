@@ -2,6 +2,8 @@
 written by the scan thread and read by Flask request threads, so it must be
 thread-safe, and it must never grow without bound in a room full of BLE gear."""
 
+import pytest
+
 from app.five12_ble.registry import Registry
 
 
@@ -35,6 +37,10 @@ def test_rssi_is_smoothed_but_latest_is_kept():
     dev = r.get('os-1')
     assert dev.rssi == -60
     assert -60 < dev.rssi_smoothed < -40
+    # Pin the exact blend so a changed alpha or swapped raw/existing weights
+    # can't slip through the loose range check above:
+    # 0.4 * -60 + 0.6 * -40 = -48.0
+    assert dev.rssi_smoothed == pytest.approx(-48.0)
 
 
 def test_first_sample_smoothed_equals_raw():
@@ -97,3 +103,31 @@ def test_concurrent_upserts_do_not_lose_devices():
     for t in threads:
         t.join()
     assert r.count() == 600
+
+
+def test_concurrent_upserts_to_same_device_stay_consistent():
+    """Guards the real hazard the lock exists for: upsert's read-modify-write
+    of rssi_smoothed (read old value -> compute blend -> write new value) is
+    a compound operation the GIL does not make atomic across bytecodes. If
+    the lock in upsert were removed, concurrent writers to the SAME os_id
+    could interleave mid-update and corrupt the blend, or race first_seen."""
+    import threading
+    r = Registry()
+
+    rssi_values = list(range(-80, -20))  # -80..-21, several per thread
+
+    def writer(values):
+        for rssi in values:
+            r.upsert('os-1', 'n', rssi, ADVERT, now=100.0)
+
+    chunks = [rssi_values[0::3], rssi_values[1::3], rssi_values[2::3]]
+    threads = [threading.Thread(target=writer, args=(c,)) for c in chunks]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert r.count() == 1
+    dev = r.get('os-1')
+    assert dev.first_seen == 100.0
+    assert min(rssi_values) <= dev.rssi_smoothed <= max(rssi_values)
