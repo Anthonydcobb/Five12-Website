@@ -35,3 +35,6 @@ verlib==0.1
 # starlink-grpc-tools
 # grpcio
 websocket-client==1.9.0
+
+# Bluetooth LE — CRMX/TimoTwo discovery (only imported when FIVE12_BLE_TOOLS=1)
+bleak==3.0.2

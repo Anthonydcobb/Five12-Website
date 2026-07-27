@@ -54,6 +54,13 @@ def create_app(test_config=None):
         from .network_routes import net as network_bp
         app.register_blueprint(network_bp)
 
+    # Bluetooth (CRMX/TimoTwo discovery) registers only when explicitly enabled.
+    # Default is OFF — see config.ENABLE_BLE_TOOLS. With the gate off no scan
+    # thread starts and /api/ble/* does not exist.
+    if app.config.get('ENABLE_BLE_TOOLS'):
+        from .ble_routes import ble as ble_bp
+        app.register_blueprint(ble_bp)
+
     app.logger.setLevel(logging.INFO)
 
     if not app.config.get('TESTING') and app.config.get('ENABLE_NETWORK_TOOLS'):

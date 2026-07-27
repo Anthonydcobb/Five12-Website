@@ -24,6 +24,12 @@ class DevelopmentConfig:
     # hosted deploy that cannot shell out to arp/ping/netsh.
     ENABLE_NETWORK_TOOLS = os.getenv("FIVE12_NETWORK_TOOLS", "1") == "1"
 
+    # Gates the Bluetooth stack in app/__init__.py — the bleak scan thread and
+    # the /api/ble/* blueprint. OFF by default, deliberately unlike
+    # ENABLE_NETWORK_TOOLS: probing the operator's own LAN is expected, but
+    # starting a radio scan without being asked is not. Set FIVE12_BLE_TOOLS=1.
+    ENABLE_BLE_TOOLS = os.getenv("FIVE12_BLE_TOOLS", "0") == "1"
+
 
 class DesktopConfig:
     DEBUG = False
@@ -41,3 +47,6 @@ class DesktopConfig:
 
     # The desktop app IS the network monitor — always on.
     ENABLE_NETWORK_TOOLS = True
+
+    # BLE stays opt-in even on desktop — the operator turns it on per show.
+    ENABLE_BLE_TOOLS = os.getenv("FIVE12_BLE_TOOLS", "0") == "1"
