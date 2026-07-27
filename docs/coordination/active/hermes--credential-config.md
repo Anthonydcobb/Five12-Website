@@ -21,7 +21,7 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 - [x] Desktop SQLite mode still starts without a database password.
 - [x] Focused tests pass: 5.
 - [x] Full backend tests pass: 164, with 9 pre-existing SQLAlchemy warnings.
-- [ ] Claude Code independently reviews commit `6ad834b`.
+- [ ] Claude Code independently reviews final commit `aaca308`.
 - [ ] Anthony backs up the current local `.env` and rotates the affected MySQL/mail credentials before merge.
 
 ## Advisory reserved paths
@@ -31,8 +31,9 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 - `.gitignore`
 - `backend/config.py`
 - `backend/app/__init__.py`
-- `app/__init__.py` (sanitize the stale legacy Flask configuration without structural cleanup)
+- `app/__init__.py` (remove the dead duplicate Flask package and its credential path)
 - `__pycache__/app.cpython-310.pyc` (remove the secret-bearing compiled artifact)
+- `CREDENTIAL-MIGRATION.md`
 - Credential-configuration regression tests added by this task
 
 ## Must-not-touch paths
@@ -53,6 +54,7 @@ Development MySQL configuration uses `DB_HOST`, `DB_USER`, `DB_PASSWORD`, and `D
 - `git diff --cached --check` → clean before commit.
 - Candidate-tree checks → root `.env` untracked; `.env.example` tracked with empty password/secret fields; legacy `DB_PASS` absent from active backend source; known removed default absent from the candidate tree; local worktree `.env` retained and not displayed.
 - Python syntax compilation passed for the changed Python files.
+- An isolated Hermes subagent reviewed commit `6ad834b`; its test-isolation, stale-app, and migration-documentation warnings were addressed in follow-up commit `aaca308`.
 
 ## Risks and skipped checks
 
@@ -60,4 +62,4 @@ Removing a previously tracked `.env` causes Git to delete that tracked working-t
 
 ## Handoff / next action
 
-Claude Code independently reviews branch `fix/hermes/credential-config` at commit `6ad834b`, without reading or reproducing any credential value. Anthony then backs up the current `.env` outside the repository and confirms credential rotation before this branch is eligible to merge.
+Claude Code independently reviews branch `fix/hermes/credential-config` at final commit `aaca308`, without reading or reproducing any credential value. Anthony then backs up the current `.env` outside the repository and confirms credential rotation before this branch is eligible to merge.
