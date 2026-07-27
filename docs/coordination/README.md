@@ -6,8 +6,8 @@ It complements detailed implementation plans in `docs/superpowers/`; it does not
 ## Non-negotiable operating rules
 
 1. **`main` is integration-only.** Agents work on branches and do not commit directly to `main`.
-2. **Use isolated worktrees for concurrent work.** The stable checkout is for review/integration; each feature gets its own worktree.
-3. **Claim scope before editing.** Create one file in `docs/coordination/active/` and list the exact reserved paths, shared contracts, and files that must not be touched.
+2. **Isolate concurrent work in the way the runtime supports.** Hermes and other persistent local agents use separate worktrees. Claude Code cloud sessions use their assigned fresh clone/branch and must commit and push before the ephemeral session ends.
+3. **Claim scope before editing.** Create one file in `docs/coordination/active/` and list the exact reserved paths, shared contracts, and files that must not be touched. Reservations are advisory coordination records, not distributed locks; fetch immediately before starting and re-check before integration.
 4. **One owner per collision-prone path.** Do not concurrently edit migrations, lockfiles, agent instructions, API contracts, `backend/app/models.py`, `backend/app/routes.py`, or other shared central files.
 5. **Separate implementation from review.** When both agents contribute to one feature, one implements and the other independently reviews and verifies. Do not silently replace the other agent's work.
 6. **Integrate serially.** Merge the foundational or lower-risk branch first; rebase the second branch onto the new `main`, resolve conflicts in its worktree, and rerun all checks.
@@ -20,7 +20,7 @@ It complements detailed implementation plans in `docs/superpowers/`; it does not
 13. **Protect show data.** Destructive and bulk actions need confirmation, clear error reporting, transaction safety, and a backup/rollback path where practical.
 14. **Verify before handoff.** Report the real commands run and their results. Never report an unrun check as passing.
 
-## Branch and worktree convention
+## Branch and workspace convention
 
 Branches use `<type>/<agent>/<slug>`:
 
@@ -30,23 +30,24 @@ fix/hermes/import-validation
 docs/hermes/agent-coordination
 ```
 
-Suggested sibling worktrees:
+Persistent local agents should use sibling worktrees:
 
 ```text
 Five12-TheApp/                  # stable integration checkout
-Five12-worktrees/claude-<slug>/
 Five12-worktrees/hermes-<slug>/
 ```
+
+Claude Code cloud sessions instead use the fresh clone and assigned branch provided to that session. Those paths are ephemeral and do not belong in durable coordination state. Uncommitted cloud-session work may be lost when the session ends.
 
 Do not merge one feature branch into another. If a feature depends on another branch, merge the prerequisite to `main` first.
 
 ## Starting work
 
-1. Fetch and start from current `origin/main`.
-2. Create a dedicated branch and worktree.
+1. Fetch and start from current `origin/main` in the runtime's isolated workspace.
+2. Create or use the dedicated assigned branch. Persistent local agents also create a dedicated worktree; ephemeral Claude cloud sessions do not need one.
 3. Copy `templates/active-work.md` into `active/<agent>--<slug>.md`.
-4. Record owner, base SHA, scope, reserved paths, contracts, acceptance criteria, and required checks.
-5. If another active file reserves a needed path, stop and coordinate before editing.
+4. Record owner, base SHA, scope, advisory reserved paths, contracts, acceptance criteria, and required checks.
+5. If another active file reserves a needed path, stop and coordinate before editing. Fetch and re-check reservations before integration because active files are not distributed locks.
 
 ## During work
 

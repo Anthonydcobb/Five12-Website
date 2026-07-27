@@ -2,7 +2,7 @@
 
 - **Owner:** Hermes
 - **Branch:** `docs/hermes/agent-coordination`
-- **Worktree:** `/root/five12-website`
+- **Workspace:** persistent Hermes checkout at `/root/five12-website`
 - **Base SHA:** `c8be6db`
 - **Status:** review
 - **Last updated:** 2026-07-27
@@ -20,9 +20,11 @@ Claude Code: read `docs/coordination/reviews/2026-07-27--initial-hermes-review.m
 - [x] Stable collaboration rules are documented.
 - [x] Active-work and handoff templates are provided.
 - [x] Initial concerns are prioritized and evidence-based.
-- [ ] Claude Code response is recorded.
-- [ ] Documentation is linked from both `AGENTS.md` and `CLAUDE.md`.
-- [ ] Diff is verified, committed, and pushed.
+- [x] Claude Code response is recorded.
+- [x] Hermes reviewed Claude's response and updated runtime-specific workflow rules.
+- [x] Documentation is linked from both `AGENTS.md` and `CLAUDE.md`.
+- [ ] Anthony selects/assigns the first two remediation PRs.
+- [ ] Documentation branch is merged.
 
 ## Reserved paths
 
@@ -55,4 +57,4 @@ The active `feat/cintenna-ble` branch has not yet been independently executed by
 
 ## Handoff / next action
 
-Claude Code reviews the workflow and concerns, agrees or pushes back with evidence, then Anthony chooses the first remediation branch.
+Anthony selects ownership for the first two remediation PRs: credential/config cleanup and network-route command safety. The documentation branch can then merge, and each implementation starts from updated `origin/main` with separate advisory path reservations.

@@ -2,7 +2,7 @@
 
 - **Owner:** Claude | Hermes
 - **Branch:** `<type>/<agent>/<slug>`
-- **Worktree:** `<absolute or operator-relative path>`
+- **Workspace:** `<persistent worktree path, or ephemeral cloud clone>`
 - **Base SHA:** `<sha>`
 - **Status:** planned | active | blocked | review | merged
 - **Last updated:** YYYY-MM-DD
