@@ -26,17 +26,28 @@ class CintennaAdapter(DeviceAdapter):
         st = self.service.status()
         count = st['deviceCount']
 
-        if not st['adapterAvailable']:
-            return {
-                'found': False,
-                'address': None,
-                'detail': 'no Bluetooth adapter',
-            }
+        # Ownership/lock-mechanism failures are set by start() BEFORE the scan
+        # loop ever runs, so they must be checked ahead of adapterAvailable —
+        # which only flips True from inside a running loop. Otherwise a
+        # losing gunicorn worker reports "no adapter" for its whole lifetime
+        # when another Five12 process simply holds the radio.
         if st.get('lastError') == 'not-owner':
             return {
                 'found': False,
                 'address': None,
                 'detail': 'another Five12 process owns the adapter',
+            }
+        if st.get('lastError') == 'lock-mechanism-unavailable':
+            return {
+                'found': False,
+                'address': None,
+                'detail': 'no OS-level lock available on this platform — Cintenna scanning is disabled',
+            }
+        if not st['adapterAvailable']:
+            return {
+                'found': False,
+                'address': None,
+                'detail': 'no Bluetooth adapter',
             }
         return {
             'found': count > 0,
@@ -63,4 +74,11 @@ class CintennaAdapter(DeviceAdapter):
                 'level': 'warn',
                 'message': 'No Bluetooth adapter available — Cintennas cannot be discovered',
             }]
+        # Passive-roster sample only: no per-device fields, no GATT data (this
+        # layer never connects), just what the scan service itself knows.
+        self.history.record({
+            'deviceCount': status['deviceCount'],
+            'scanning': status['scanning'],
+            'available': status['available'],
+        })
         return status
