@@ -3,10 +3,10 @@
 - **Owner:** Claude
 - **Branch:** `claude/pr2-network-route-safety`
 - **Workspace:** ephemeral Claude Code cloud clone (nothing durable outside the pushed branch)
-- **Base SHA:** `c8be6db` (`main`)
-- **Head SHA:** `82ba5d4` (final; `0cdc7ec` + a comment-only correction)
-- **Status:** review — Hermes cross-review returned; requested test added
-- **Last updated:** 2026-07-27 (updated after cross-review)
+- **Base SHA:** `aaca308` (`main`, post-PR-1 merge; was `c8be6db`)
+- **Head SHA:** `6a60fbb` (`82ba5d4` merged with current `main`)
+- **Status:** approved by Hermes at `82ba5d4`; rebased onto merged `main`; awaiting Windows bench test only
+- **Last updated:** 2026-07-28
 
 ## Goal
 
@@ -24,6 +24,8 @@ agreed in `2026-07-27--hermes-reply-to-claude.md`.
 - [x] Full backend suite green.
 - [x] Independent cross-review by Hermes — approved, one test addition requested.
 - [x] Requested allowlisted-hostile-alias transport test added (`0cdc7ec`).
+- [x] Hermes final software approval at `82ba5d4`, independently reproduced.
+- [x] Rebased onto `main` at `aaca308` after PR 1 merged; suite re-run on the real merged tree.
 - [ ] Windows bench test on a spare adapter (Anthony; no agent can perform this).
 
 ## Reserved paths
@@ -98,7 +100,10 @@ writes safe", but it was not in the agreed PR 2 description.
 | The two new transport tests against **unpatched** `routes.py` | **2 failed** — both discriminate | software verification |
 | Whole test file against **unpatched** `routes.py` | **21 failed, 7 passed** (was 19/7 at `a86cff1`) | software verification |
 | Trial merge with PR 1 final `aaca308` | clean, zero conflicts | software verification |
-| Combined suite, both finals merged | **192 passed** (164 + 28) | software verification |
+| Combined suite, both finals merged (trial) | **192 passed** (164 + 28) | software verification |
+| `pytest` on `6a60fbb`, PR 2 **actually merged** with `main` | **192 passed**, 9 warnings | software verification |
+| `pytest tests/test_network_routes.py` on `6a60fbb` | **28 passed** | software verification |
+| `git diff --stat origin/main...6a60fbb` | 2 files, scope unchanged | software verification |
 | Real NIC reconfigure on Windows | **not run** | — |
 
 The 159-passed baseline independently reproduces the figure in the initial Hermes
@@ -183,3 +188,34 @@ Note on naming: this branch predates my reading the `<type>/<agent>/<slug>`
 convention and should have been `fix/claude/network-route-safety`. Left as-is
 because it is already pushed and fetched; happy to rename if the convention should
 hold strictly.
+## PR 1 merged — base updated (2026-07-28)
+
+`main` moved `c8be6db` → `aaca308`. Per Hermes's completion notice, the rotation
+gate is closed: the exposed MySQL credential was rotated, Five12 now runs as a
+dedicated `five12_app@localhost` account scoped to the `five12_website` schema with
+no admin role or grant option, and the replacement `.env` is untracked and verified.
+**Credential rotation is no longer a blocker on anything.**
+
+This branch has been merged with `main` at `6a60fbb` rather than rebased, so the
+reviewed SHAs `a86cff1`, `0cdc7ec`, and `82ba5d4` remain intact ancestors and
+Hermes's approval still names a commit that exists in this history. The full suite
+was re-run on the genuinely merged tree — **192 passed** — which supersedes the
+earlier trial-merge figure that was produced in a throwaway worktree.
+
+`git diff --stat origin/main...6a60fbb` is still exactly two files, so bringing
+`main` in did not widen scope.
+
+### Carried forward, not folded in
+
+Hermes's completion notice lists these as separate items; my PR 1 review raised the
+middle two. None belong to PR 2:
+
+- Coordinated git-history rewrite — **now scoped to include the documentation
+  commits and branches**, not only the application commits, because my superseded
+  PR 1 review commit and Hermes's cherry-pick of it both contain a credential
+  literal I should not have written. Hermes's recommendation stands: squash-merge
+  or rebuild the coordination branch rather than merging its full history.
+- Remaining tracked `.pyc` files (18).
+- Dead `Procfile` / deployment-entry cleanup.
+- Production environment loading for non-Flask-CLI launch paths (nothing calls
+  `load_dotenv()`, so gunicorn never reads `.env`).

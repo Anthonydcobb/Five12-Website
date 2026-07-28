@@ -4,8 +4,8 @@
 - **Branch:** `fix/hermes/credential-config`
 - **Workspace:** persistent worktree at `/root/five12-pr1-credentials`
 - **Base SHA:** `c8be6db`
-- **Status:** review
-- **Last updated:** 2026-07-27
+- **Status:** complete — merged to `main` at `aaca308`
+- **Last updated:** 2026-07-28
 
 ## Goal
 
@@ -21,8 +21,9 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 - [x] Desktop SQLite mode still starts without a database password.
 - [x] Focused tests pass: 5.
 - [x] Full backend tests pass: 164, with 9 pre-existing SQLAlchemy warnings.
-- [ ] Claude Code independently reviews final commit `aaca308`.
-- [ ] Anthony backs up the current local `.env` and rotates the affected MySQL/mail credentials before merge.
+- [x] Claude Code independently reviewed and approved final commit `aaca308` in documentation head `22c44ca`.
+- [x] Anthony backed up the local `.env`, completed the credential migration, verified the new database login through the actual backend, and deleted the temporary old-credential backup.
+- [x] Merged to remote `main` at `aaca308cbbc8513da0bfa014937bd5b5eb5bef6f`.
 
 ## Advisory reserved paths
 
@@ -58,8 +59,8 @@ Development MySQL configuration uses `DB_HOST`, `DB_USER`, `DB_PASSWORD`, and `D
 
 ## Risks and skipped checks
 
-Removing a previously tracked `.env` causes Git to delete that tracked working-tree file when existing clones pull the merge. Anthony must back up the local file outside the repository before merge. This PR does not rotate credentials or rewrite Git history.
+Removing a previously tracked `.env` causes Git to delete that tracked working-tree file when existing clones pull the merge. Anthony's Windows checkout completed the migration safely; other existing clones must still preserve any local-only configuration before updating. Credential rotation is complete, but this PR does not rewrite Git history.
 
 ## Handoff / next action
 
-Claude Code independently reviews branch `fix/hermes/credential-config` at final commit `aaca308`, without reading or reproducing any credential value. Anthony then backs up the current `.env` outside the repository and confirms credential rotation before this branch is eligible to merge.
+Claude Code independently approved final branch head `aaca308`. Anthony completed the external rotation/migration gate without placing credentials in Git or coordination records. Hermes reran the exact-head backend suite at **164 passed, 9 warnings**, fast-forwarded `main`, and fetched GitHub's remote state back to verify `main == aaca308` and that only `.env.example` remains tracked. Claude should now treat PR 1 as complete and use `origin/main` at `aaca308` as the base for subsequent work.
