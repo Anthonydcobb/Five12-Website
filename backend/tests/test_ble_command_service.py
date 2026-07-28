@@ -203,32 +203,6 @@ def test_stale_snapshot_also_fires_when_expected_mode_is_updated_to_match(patche
     assert patched['client'].writes == []
 
 
-def test_mode_commands_are_refused_pending_reboot_verification(patched):
-    """COMMANDS marks set_mode_rx/set_mode_tx 'reboot-tolerant', but nothing
-    implements a post-reboot readback yet, and their required_mode never
-    blocks them. Left unchecked, a mode command would execute today, reboot
-    the radio, and report a bare ack with no verification. It must be
-    refused before any byte reaches the radio."""
-    with pytest.raises(NotImplementedError):
-        _prepare_and_execute(patched, _tx_values(), 'set_mode_tx', 'tx')
-    assert patched['client'].writes == []
-
-
-def test_refused_mode_write_is_audited_with_error_code(patched, caplog):
-    """The NotImplementedError refusal for unverifiable mode writes is the
-    most critical refusal — it would reboot a radio and black out its
-    fixture. Must leave an audit trail identifying the refusal."""
-    with caplog.at_level('INFO'):
-        with pytest.raises(NotImplementedError):
-            _prepare_and_execute(patched, _tx_values(), 'set_mode_tx', 'tx')
-    # Verify no write occurred
-    assert patched['client'].writes == []
-    # Verify the audit line was emitted with the refusal code
-    entry = '\n'.join(r.getMessage() for r in caplog.records if 'BLE WRITE' in r.getMessage())
-    assert 'error=refused-unverifiable' in entry
-    assert 'cmd=set_mode_tx' in entry
-
-
 def test_device_with_no_hardware_id_is_refused_a_token(patched):
     """A truncated or absent manufacturer payload decodes hardwareId to
     None. Minting a token with hardware_id=None would make the identity

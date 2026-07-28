@@ -12,6 +12,7 @@ Pure enough to import without bleak: nothing here opens a radio. The one
 function that connects imports connection_manager lazily.
 """
 
+import asyncio
 import contextlib
 import logging
 import secrets
@@ -108,6 +109,13 @@ WRITABLE_UUIDS = frozenset(spec.uuid for spec in COMMANDS.values())
 # ── Confirmation tokens ──────────────────────────────────────────────────────
 
 TOKEN_TTL_S = 60.0
+
+# How long to keep trying to find the radio again after a mode write reboots
+# it. PROVISIONAL — the design records this as a number to measure on real
+# hardware during acceptance, not to guess. 30s is a deliberately generous
+# starting point; narrow it once the true figure is observed.
+REBOOT_REDISCOVERY_TIMEOUT_S = 30.0
+REBOOT_POLL_INTERVAL_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -265,9 +273,43 @@ async def prepare_command(os_id, command_name, registry):
     }
 
 
-async def execute_command(os_id, command_name, expected_mode, token_value, registry):
+async def _verify_after_reboot(os_id, expected_mode, timeout_s=None, sleep=None):
+    """Poll for the radio to come back, then re-read MODE.
+
+    Returns (verification, decoded_mode). The three outcomes are all normal:
+    the radio came back in the new mode, came back in the old one, or did not
+    come back inside the window. None of them is an exception.
+
+    `sleep` is injectable so tests do not spend real seconds waiting.
+    """
+    timeout_s = REBOOT_REDISCOVERY_TIMEOUT_S if timeout_s is None else timeout_s
+    sleep = asyncio.sleep if sleep is None else sleep
+
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        await sleep(REBOOT_POLL_INTERVAL_S)
+        try:
+            async with _connect_for_write(os_id) as client:
+                mode = await _read_mode(client)
+        except BleError:
+            # Expected while the module is down. Keep trying until the
+            # deadline; a reboot legitimately refuses connections for a while.
+            continue
+        if mode == expected_mode:
+            return 'verified', mode
+        # It answered, but with the old mode. The write was acknowledged and
+        # did not take effect — say exactly that.
+        return 'accepted-unverified', mode
+    return 'device-did-not-return', None
+
+
+async def execute_command(os_id, command_name, expected_mode, token_value,
+                          registry, sleep=None):
     """Step two. Every check runs here regardless of what the UI did — a
-    disabled button is a courtesy, not a security boundary."""
+    disabled button is a courtesy, not a security boundary.
+
+    `sleep` is injectable purely so reboot-verification tests run instantly.
+    """
     started = time.monotonic()
 
     spec = _spec_or_reject(command_name)
@@ -299,49 +341,38 @@ async def execute_command(os_id, command_name, expected_mode, token_value, regis
                 raise StaleSnapshot(detail=f'{token.mode} -> {mode}')
             if mode not in spec.required_mode:
                 raise WrongMode(detail=f'{command_name} requires {spec.required_mode}')
-            if spec.verification != 'ack-only':
-                # The table (COMMANDS) already marks set_mode_rx/set_mode_tx
-                # 'reboot-tolerant', and their required_mode never blocks
-                # them, so without this gate they would execute today,
-                # reboot the radio, and report a bare ack with no
-                # verification that the reboot actually landed in the
-                # intended mode. Refuse outright rather than execute
-                # unverified; a plain, loud exception is deliberate here —
-                # this whole branch is removed once reboot-tolerant
-                # verification is implemented.
-                _audit(command_name, device, known_mode, spec,
-                       error='refused-unverifiable')
-                raise NotImplementedError(
-                    f'{command_name}: reboot-tolerant verification is not '
-                    'implemented yet, so this command is refused rather '
-                    'than executed unverified.'
-                )
 
             await client.write_gatt_char(spec.uuid, spec.payload)
-
-            # Only ack-only commands (link, unlink) reach here today — mode
-            # commands are refused above before any byte is written.
-            result_mode = mode
-            verification = 'ack-only'
+        # The connection above is closed before verification begins: a mode
+        # write reboots the module, and holding a dead connection open would
+        # only delay rediscovery rather than help it.
     except BleError as error:
         # Every rejection on the highest-consequence path in the app leaves
-        # a trace, not only the writes that land. NotImplementedError above
-        # is deliberately not a BleError and is not caught here: it is a
-        # loud refusal of an unimplemented capability, not a policy
-        # rejection, and it is removed along with the branch that raises it.
+        # a trace, not only the writes that land.
         _audit(command_name, device, known_mode, spec, error=error.code)
         raise
+
+    if spec.verification == 'ack-only':
+        verification = 'ack-only'
+        result_mode = mode
+        # 'gatt-read', not 'post-write-readback': this value was read BEFORE
+        # the write above, inside the freshness check. Nothing re-reads MODE
+        # after the write, so labelling it a post-write readback would claim
+        # a confirmation that was never taken.
+        source = 'gatt-read'
+    else:
+        target = 'rx' if command_name == 'set_mode_rx' else 'tx'
+        verification, result_mode = await _verify_after_reboot(
+            os_id, target, sleep=sleep)
+        # A genuine re-read happened after the write, so this one has
+        # actually earned the 'post-write-readback' label.
+        source = 'post-write-readback'
 
     result = {
         'command': command_name,
         'attAcknowledged': True,
         'verification': verification,
-        # 'gatt-read', not 'post-write-readback': this value was read BEFORE
-        # the write above, inside the freshness check. Nothing re-reads MODE
-        # after the write, so labelling it a post-write readback would claim
-        # a confirmation that was never taken. A genuine post-write readback
-        # arrives with the reboot-verification work.
-        'mode': {'decoded': result_mode, 'source': 'gatt-read'},
+        'mode': {'decoded': result_mode, 'source': source},
         'durationMs': int((time.monotonic() - started) * 1000),
     }
     _audit(command_name, device, token.mode, spec, ack=True,
