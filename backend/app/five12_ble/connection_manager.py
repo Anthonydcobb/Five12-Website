@@ -13,10 +13,12 @@ import threading
 
 from .errors import (
     AdapterUnavailable,
+    CharacteristicMissing,
     DeviceBusy,
     DeviceNotFound,
     OperationTimeout,
     ToolboxHoldingConnection,
+    UnknownCommand,
 )
 
 log = logging.getLogger(__name__)
@@ -24,6 +26,7 @@ log = logging.getLogger(__name__)
 CONNECT_TIMEOUT = 12.0
 READ_TIMEOUT = 6.0
 DISCONNECT_TIMEOUT = 6.0
+WRITE_TIMEOUT = 6.0
 
 
 class _DeviceLocks:
@@ -67,9 +70,37 @@ class BleakClientAdapter:
         )
 
 
+class BleakWriteClientAdapter(BleakClientAdapter):
+    """The read adapter plus exactly one write method.
+
+    Deliberately a separate class. test_ble_gatt_client.py asserts that
+    BleakClientAdapter exposes no write-shaped method of any name, and the
+    read path must keep that guarantee — so writes get their own type that
+    only the command service ever constructs.
+    """
+
+    async def write_gatt_char(self, uuid, payload):
+        # Second, independent check on the allowlist. The command service has
+        # already mapped a command name to this UUID; this refuses anything
+        # that reached here by another route. Imported lazily so the module
+        # graph stays acyclic.
+        from .command_service import WRITABLE_UUIDS
+
+        if uuid.lower() not in WRITABLE_UUIDS:
+            raise UnknownCommand(detail=uuid)
+        if not self.has_characteristic(uuid):
+            raise CharacteristicMissing(detail=uuid)
+        # response=True demands an ATT acknowledgement. Without it we would
+        # have no evidence the radio accepted anything.
+        await asyncio.wait_for(
+            self._client.write_gatt_char(uuid, payload, response=True),
+            timeout=WRITE_TIMEOUT,
+        )
+
+
 @contextlib.asynccontextmanager
-async def connect(os_id):
-    """Connect to one device, yielding a read-only client adapter.
+async def _connect_with(os_id, adapter_cls):
+    """Connect to one device, yielding `adapter_cls` wrapped around the client.
 
     Always disconnects, including on error. Raises a typed BleError the panel
     can render rather than a raw bleak exception.
@@ -99,7 +130,7 @@ async def connect(os_id):
                 raise ToolboxHoldingConnection(detail=os_id)
             raise DeviceNotFound(detail=str(exc))
 
-        yield BleakClientAdapter(client)
+        yield adapter_cls(client)
     finally:
         # The lock must be released no matter how disconnect exits, including
         # via asyncio.CancelledError (a BaseException, not caught by
@@ -118,3 +149,17 @@ async def connect(os_id):
                 await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT)
         finally:
             lock.release()
+
+
+@contextlib.asynccontextmanager
+async def connect(os_id):
+    """Read-only connection. Cannot write: the adapter has no write method."""
+    async with _connect_with(os_id, BleakClientAdapter) as adapter:
+        yield adapter
+
+
+@contextlib.asynccontextmanager
+async def connect_for_write(os_id):
+    """Write-capable connection. Only the command service should call this."""
+    async with _connect_with(os_id, BleakWriteClientAdapter) as adapter:
+        yield adapter
