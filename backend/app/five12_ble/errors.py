@@ -92,3 +92,57 @@ class UnexpectedBleFailure(BleError):
         'Something went wrong talking to this device. Try again, and if it '
         'keeps happening, check the server log.'
     )
+
+
+# ── Write-phase rejections ───────────────────────────────────────────────────
+# Each of these is a refusal to write, not a failure to talk to the radio.
+
+
+class UnknownCommand(BleError):
+    code = 'unknown-command'
+    operator_message = (
+        'Five12 does not recognise that command. Reload this page; if it keeps '
+        'happening the app and the server are running different versions.'
+    )
+
+
+class UnknownMode(BleError):
+    code = 'unknown-mode'
+    operator_message = (
+        'This radio did not report a mode Five12 understands, so it will not be '
+        'changed. It may be running firmware Five12 has not been verified '
+        'against.'
+    )
+
+
+class WrongMode(BleError):
+    code = 'wrong-mode'
+    operator_message = (
+        'That action is not available in this radio\'s current mode. Link is a '
+        'transmitter action; Unlink is a receiver action.'
+    )
+
+
+class StaleSnapshot(BleError):
+    code = 'stale-snapshot'
+    operator_message = (
+        'This radio changed since you opened this dialog, so nothing was '
+        'written. Read its status again and retry.'
+    )
+
+
+class ConfirmationInvalid(BleError):
+    code = 'confirmation-invalid'
+    operator_message = (
+        'That confirmation has expired or was already used. Start the action '
+        'again — confirmations are single-use and last 60 seconds.'
+    )
+
+
+class IdentityMismatch(BleError):
+    code = 'identity-mismatch'
+    operator_message = (
+        'The radio at this address is not the one you confirmed against, so '
+        'nothing was written. Bluetooth addresses can change; pick the radio '
+        'from the list again.'
+    )
