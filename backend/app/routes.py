@@ -655,9 +655,19 @@ def _local_origin():
     regardless of Content-Type. For a NIC reconfigure the side effect is the
     whole payload, so the response being unreadable is no protection.
 
-    Non-browser callers (the Electron main process, curl, the test client) send
-    no Origin at all; those are allowed through. Only a header that is present
-    and foreign is rejected.
+    The desktop UI reaches this route from the Electron *renderer* via Axios, so
+    Chromium sends the renderer's loopback origin and it is matched below. The
+    absent-Origin exception is for native callers — curl, scripts, the test
+    client — which send no Origin at all. Only a header that is present and
+    foreign is rejected.
+
+    Note this is a *hostname* allowlist, not an exact-origin one: every loopback
+    origin is trusted regardless of port or scheme. That is deliberate under the
+    loopback desktop threat model — a public page keeps its public hostname in
+    Origin, so the web CSRF path stays closed — but it does mean another service
+    already running on loopback is treated as first-party. Exact scheme/port
+    matching, or real authentication, is the stronger design when this endpoint
+    stops being loopback-only.
     """
     origin = request.headers.get('Origin')
     if not origin:
