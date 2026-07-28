@@ -44,7 +44,7 @@ Every task's requirements implicitly include this section.
 ## Task 1: Write gate
 
 **Files:**
-- Modify: `backend/config.py:31` and `backend/config.py:52`
+- Modify: `backend/config.py` — add the flag to BOTH `DevelopmentConfig` and `DesktopConfig`, mirroring each class's existing `ENABLE_BLE_TOOLS` line
 - Modify: `backend/app/__init__.py:60-69`
 - Modify: `backend/app/ble_routes.py:50-58`
 - Test: `backend/tests/test_ble_write_gate.py` (create)
@@ -90,8 +90,8 @@ def write_app():
 def test_write_gate_defaults_off():
     """FIVE12_BLE_WRITE is unset in the test environment, so a config built
     without an explicit override must come back False."""
-    from config import Config
-    assert Config.ENABLE_BLE_WRITE is False
+    from config import DevelopmentConfig
+    assert DevelopmentConfig.ENABLE_BLE_WRITE is False
 
 
 def test_capabilities_reports_write_disabled(read_only_app):
@@ -112,7 +112,7 @@ Expected: FAIL — `AttributeError: type object 'Config' has no attribute 'ENABL
 
 - [ ] **Step 3: Add the config flag**
 
-In `backend/config.py`, directly below the existing `ENABLE_BLE_TOOLS` line in `Config` (line 31):
+In `backend/config.py`, directly below the existing `ENABLE_BLE_TOOLS` line in `DevelopmentConfig` (the dev config class — note it is `DevelopmentConfig`, not `Config`):
 
 ```python
     # Gates configuration WRITES, separately from ENABLE_BLE_TOOLS. Discovery
@@ -257,9 +257,13 @@ def test_link_warning_names_the_actual_hazard():
     assert 'range' in COMMANDS['link'].warning.lower()
 
 
-def test_no_command_claims_a_link_was_made():
-    for spec in COMMANDS.values():
-        assert 'linked' not in spec.warning.lower()
+# NOTE: there is deliberately no test asserting the warning prose does not
+# claim a completed outcome. Two attempts at that via substring denylists
+# both false-positived on legitimate English ('unlinked receiver', 'until it
+# is paired again') — the distinction is semantic, not lexical. The rule it
+# was reaching for ("never claim RF association") is enforced where it is
+# structurally checkable instead: the command result carries no field named
+# `linked`. See test_ble_command_service.py.
 
 
 def test_command_table_is_immutable():
@@ -370,7 +374,7 @@ WRITABLE_UUIDS = frozenset(spec.uuid for spec in COMMANDS.values())
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd backend && python -m pytest tests/test_ble_command_policy.py -v`
-Expected: 10 passed.
+Expected: 11 passed.
 
 - [ ] **Step 5: Invert the read-only constants guard**
 
@@ -538,7 +542,7 @@ class IdentityMismatch(BleError):
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd backend && python -m pytest tests/test_ble_write_errors.py -v`
-Expected: 9 passed.
+Expected: 8 passed (6 parametrized cases + 2 standalone).
 
 - [ ] **Step 5: Commit**
 
@@ -782,7 +786,7 @@ Expected: 6 passed.
 
 - [ ] **Step 5: Verify the read-path guards still hold**
 
-Run: `cd backend && python -m pytest tests/test_ble_gatt_client.py tests/test_ble_connection.py -v`
+Run: `cd backend && python -m pytest tests/test_ble_gatt_client.py tests/test_ble_connection_manager.py -v`
 Expected: all pass, including `test_production_client_adapter_offers_no_write_method` — the base class was not modified.
 
 - [ ] **Step 6: Commit**
@@ -1521,27 +1525,46 @@ class FakeWriteClient:
         self.values[uuid] = bytes(payload)
 
 
-async def _no_sleep(_seconds):
-    return None
-
-
 @pytest.fixture
 def rebooting(monkeypatch):
-    """Drives a scripted sequence of reconnection attempts. Each entry is
-    either an exception to raise or the MODE bytes the radio returns."""
-    script = {'attempts': [], 'client': None}
+    """Scripted post-reboot reconnection attempts, on a virtual clock.
+
+    Two things this has to get right, both of which the obvious version gets
+    wrong:
+
+    1. execute_command's OWN connect — the one that reads MODE for the
+       freshness gate and then writes — must NOT draw from the script. Only
+       connects that happen after a write represent the radio coming back
+       from its reboot. `client.writes` is how we tell them apart. Without
+       this, the first scripted entry lands before the freshness read and the
+       command dies with StaleSnapshot instead of ever reaching the write.
+    2. _verify_after_reboot polls against a real deadline, so a no-op sleep
+       would spin for the full 30s of wall clock and then succeed by running
+       the script dry. The injected sleep advances a virtual clock that
+       time.monotonic reads, making every outcome deterministic and instant.
+
+    Each entry in `attempts` is either an exception to raise on that
+    reconnection attempt, or the MODE bytes the radio returns.
+    """
+    script = {'attempts': [], 'client': None, 'now': 0.0}
 
     @contextlib.asynccontextmanager
     async def fake_connect(os_id):
-        if script['attempts']:
+        client = script['client']
+        if client.writes and script['attempts']:
             step = script['attempts'].pop(0)
             if isinstance(step, Exception):
                 raise step
-            script['client'].values[c.MODE] = step
-        yield script['client']
+            client.values[c.MODE] = step
+        yield client
 
+    async def fake_sleep(seconds):
+        script['now'] += seconds
+
+    monkeypatch.setattr(cs.time, 'monotonic', lambda: script['now'])
     monkeypatch.setattr(cs, '_connect_for_write', fake_connect)
     monkeypatch.setattr(cs, 'tokens', cs.TokenStore())
+    script['sleep'] = fake_sleep
     return script
 
 
@@ -1553,7 +1576,7 @@ def _run_mode_change(script, start_mode, command, attempts):
     script['attempts'] = attempts
     return asyncio.run(cs.execute_command(
         'dev-1', command, 'rx' if start_mode == b'\x00' else 'tx',
-        prep['token'], registry, sleep=_no_sleep))
+        prep['token'], registry, sleep=script['sleep']))
 
 
 def test_mode_change_verified_when_the_radio_returns_in_the_new_mode(rebooting):
@@ -1609,7 +1632,7 @@ def test_link_still_takes_the_ack_only_path(rebooting):
     prep = asyncio.run(cs.prepare_command('dev-1', 'link', registry))
     rebooting['attempts'] = []
     result = asyncio.run(cs.execute_command(
-        'dev-1', 'link', 'tx', prep['token'], registry, sleep=_no_sleep))
+        'dev-1', 'link', 'tx', prep['token'], registry, sleep=rebooting['sleep']))
     assert result['verification'] == 'ack-only'
 ```
 
@@ -1926,10 +1949,31 @@ def write_client():
     return _app(True).test_client()
 
 
-def test_command_routes_do_not_exist_with_the_write_gate_off(read_only_client):
+def test_no_mutating_route_is_registered_with_the_write_gate_off():
+    """The real assertion: with the gate off, no handler exists at all. This
+    is the mirror of test_exactly_two_mutating_routes_exist_with_the_gate_on,
+    so the pair reads as a matched set and neither can drift alone."""
+    app = _app(False)
+    for rule in app.url_map.iter_rules():
+        if str(rule).startswith('/api/ble'):
+            assert rule.methods & {'POST', 'PUT', 'PATCH', 'DELETE'} == set(), str(rule)
+
+
+def test_posting_to_a_command_route_cannot_reach_a_handler_with_the_gate_off(read_only_client):
+    """Secondary end-to-end check — fails for a different reason than the
+    structural test above.
+
+    NOTE the accepted set is {404, 405}, not a bare 404. `backend/app/routes.py`
+    registers an SPA catch-all `/<path:path>` for GET/HEAD/OPTIONS only, so a
+    POST to ANY unregistered path in this app returns 405 rather than 404 —
+    app-wide behaviour, nothing to do with Bluetooth. Do not "fix" this back
+    to a bare 404.
+    """
     for path in ('/api/ble/devices/sim-cintenna-tx/commands',
                  '/api/ble/devices/sim-cintenna-tx/commands/prepare'):
-        assert read_only_client.post(path, json={'command': 'link'}).status_code == 404
+        status = read_only_client.post(path, json={'command': 'link'}).status_code
+        assert status in (404, 405)
+        assert status not in (200, 403)
 
 
 def test_exactly_two_mutating_routes_exist_with_the_gate_on():
