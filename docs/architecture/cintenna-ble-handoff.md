@@ -166,3 +166,85 @@ the reboot. They are recorded as open questions, not guessed.
 Protocol source of truth for that work is the private KB:
 `10-Lighting/References/LumenRadio/timotwo-ble-discovery-and-gatt.md` and
 `five12-cintenna-ble-implementation-plan.md`.
+
+---
+
+# Write phase — mode toggle, TX Link, RX Unlink
+
+**Code complete and reviewed as of 2026-07-28. Not merged, not pushed.**
+Blocked only on the hardware acceptance run —
+[`cintenna-ble-write-acceptance.md`](cintenna-ble-write-acceptance.md).
+
+Design: [`../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md`](../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md)
+Plan: [`../superpowers/plans/2026-07-27-cintenna-ble-write-phase.md`](../superpowers/plans/2026-07-27-cintenna-ble-write-phase.md)
+
+## What shipped
+
+Four commands, and only four: `set_mode_rx`, `set_mode_tx`, `link`, `unlink`.
+They live in one frozen table in `five12_ble/command_service.py`, which is the
+entire write surface. A second gate, `FIVE12_BLE_WRITE`, must be set on top of
+`FIVE12_BLE_TOOLS`; with it unset the app is the read-only build, with no
+mutating route in the URL map and no write control in the UI.
+
+Verify with:
+
+```
+cd backend && python -m pytest      # 368 passed (+5, see baseline note)
+cd app     && npm run test          # 51 passed
+cd app     && npm run build         # succeeds
+```
+
+**Baseline note.** Five tests in `test_ble_scanner.py` fail whenever a Five12
+backend is running on the same machine: it holds the OS-level adapter lock those
+tests need. That is environmental, not a regression. Stop the backend for a
+clean run.
+
+## Release blockers — the read-only ones, narrowed
+
+"No write path anywhere" became **"no write path outside the four-command
+allowlist."** The four guard tests were inverted in the same commits that broke
+them, never in a separate cleanup, so no revision of this branch exists in which
+writes are possible and the guards are absent.
+
+- The client names a command; the server maps it to a UUID and a payload byte.
+  A client cannot name either. `WRITABLE_UUIDS` is derived from the table, so a
+  new command cannot silently widen the allowlist.
+- Every check is server-side and runs before any byte moves: allowlist,
+  single-use server-issued confirmation, device identity, snapshot freshness,
+  mode gate.
+- Still nothing named `linked`. An ATT acknowledgement is `attAcknowledged`.
+- "Accepted, unverified" is a first-class operator-visible outcome for mode
+  writes — never smoothed into success, never raised as an error.
+
+## Deferred minors — triaged by the final whole-branch review, ship as-is
+
+| Item | Why it is fine |
+|---|---|
+| `required_mode: tuple` not `tuple[str, ...]` | Annotation polish on a frozen table |
+| `link`/`unlink` payloads are bare `0x05`/`0x00`, no `LinkAction` enum | Tests pin the exact bytes, so drift cannot go unnoticed |
+| No machine check that warning copy stays prospective | Two substring denylists were tried and both false-positived on legitimate English; the invariant is enforced structurally on the result payload instead |
+| Nothing asserts `connect_for_write` yields the write adapter | Single expression, no branch |
+| `command_service.py` holds command policy *and* token lifecycle | 455 lines; splitting now adds churn to the file most worth keeping stable |
+| TOCTOU between the registry pre-check and coroutine execution yields 409 not 404 | Both are typed refusals; neither writes |
+| `_catch_sim_errors` handlers are no-ops on the real path | Renamed and documented |
+| No focus trap on the confirmation dialog | Changing selection fires the reset effect, which closes the dialog |
+| `CintennaPanel.jsx` at ~410 lines, 10 state values | Extract a write-control hook when the next control lands |
+
+**One deliberately left open:** the audit `except BleError` guard closes before
+the verification phase, so an exception inside `_verify_after_reboot` leaves a
+landed write with no audit line. Narrow, and the write itself is already
+recorded on the success path.
+
+## What the hardware run must settle
+
+Two numbers in the code are provisional and were deliberately not guessed:
+
+- `REBOOT_REDISCOVERY_TIMEOUT_S = 30.0` — measure the real reboot-and-
+  re-advertise time and raise the constant if it is exceeded.
+- Whether device identity survives a mode-change reboot. If it does not, the
+  panel must ask the operator to re-select the radio rather than acting on a
+  stale selection.
+
+**Link is the hazardous step.** It puts a transmitter into pairing mode and any
+unpaired receiver in range attaches to it — not only the intended one. That run
+needs RF isolation or knowingly accepted risk. Not during a show.
