@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import BleActionDialog from './BleActionDialog'
 
@@ -40,11 +40,26 @@ describe('BleActionDialog', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 
-  it('does not confirm on Enter', async () => {
-    // The whole reason this is not window.confirm: muscle memory must not be
-    // able to fire an action that can black out a fixture.
+  it('blocks Enter by preventing its default action', () => {
+    // This is the assertion that actually pins the preventDefault guard.
+    // jsdom does not implement a browser's native "Enter activates the focused button"
+    // behavior, so a purely behavioural test cannot prove the guard is present.
+    // fireEvent.keyDown returns false when a handler called preventDefault().
+    setup()
+    const notCancelled = fireEvent.keyDown(document, { key: 'Enter' })
+    expect(notCancelled).toBe(false)
+  })
+
+  it('does not confirm on Enter when focus is on the confirm button', async () => {
+    // This covers the real operator path: tab to the enabled control, hit Enter.
+    // Deliberately paired with the direct preventDefault test above because jsdom
+    // will not activate the button on Enter by itself.
     const { onConfirm } = setup()
+    const confirm = screen.getByRole('button', { name: /^link$/i })
     await userEvent.click(screen.getByRole('checkbox'))
+    expect(confirm).toBeEnabled()
+    confirm.focus()
+    expect(confirm).toHaveFocus()
     await userEvent.keyboard('{Enter}')
     expect(onConfirm).not.toHaveBeenCalled()
   })
@@ -53,6 +68,12 @@ describe('BleActionDialog', () => {
     const { onCancel } = setup()
     await userEvent.keyboard('{Escape}')
     expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cancel on Escape while the command is in flight', async () => {
+    const { onCancel } = setup({ busy: true })
+    await userEvent.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
   })
 
   it('cancels from the cancel button', async () => {
