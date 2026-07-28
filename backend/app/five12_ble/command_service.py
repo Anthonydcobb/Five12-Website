@@ -239,14 +239,15 @@ def _hardware_id(device):
     return device.advert.get('hardwareId')
 
 
-async def prepare_command(os_id, command_name, registry):
+async def prepare_command(os_id, command_name, registry, sim=False):
     """Step one of two. Reads the radio's actual mode and mints a confirmation
     bound to it, so the operator confirms against server-side fact rather than
     whatever their browser last happened to render."""
     spec = _spec_or_reject(command_name)
     device = _device_or_reject(registry, os_id)
 
-    async with _connect_for_write(os_id) as client:
+    connect = _connect_sim if sim else _connect_for_write
+    async with connect(os_id) as client:
         mode = await _read_mode(client)
 
     if mode is None:
@@ -273,7 +274,8 @@ async def prepare_command(os_id, command_name, registry):
     }
 
 
-async def _verify_after_reboot(os_id, expected_mode, timeout_s=None, sleep=None):
+async def _verify_after_reboot(os_id, expected_mode, timeout_s=None, sleep=None,
+                               sim=False):
     """Poll for the radio to come back, then re-read MODE.
 
     Returns (verification, decoded_mode). The three outcomes are all normal:
@@ -284,12 +286,13 @@ async def _verify_after_reboot(os_id, expected_mode, timeout_s=None, sleep=None)
     """
     timeout_s = REBOOT_REDISCOVERY_TIMEOUT_S if timeout_s is None else timeout_s
     sleep = asyncio.sleep if sleep is None else sleep
+    connect = _connect_sim if sim else _connect_for_write
 
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         await sleep(REBOOT_POLL_INTERVAL_S)
         try:
-            async with _connect_for_write(os_id) as client:
+            async with connect(os_id) as client:
                 mode = await _read_mode(client)
         except BleError:
             # Expected while the module is down. Keep trying until the
@@ -304,7 +307,7 @@ async def _verify_after_reboot(os_id, expected_mode, timeout_s=None, sleep=None)
 
 
 async def execute_command(os_id, command_name, expected_mode, token_value,
-                          registry, sleep=None):
+                          registry, sim=False, sleep=None):
     """Step two. Every check runs here regardless of what the UI did — a
     disabled button is a courtesy, not a security boundary.
 
@@ -330,7 +333,8 @@ async def execute_command(os_id, command_name, expected_mode, token_value,
         if _hardware_id(device) != token.hardware_id:
             raise IdentityMismatch(detail=os_id)
 
-        async with _connect_for_write(os_id) as client:
+        connect = _connect_sim if sim else _connect_for_write
+        async with connect(os_id) as client:
             mode = await _read_mode(client)
             if mode is None:
                 raise UnknownMode(detail=os_id)
@@ -363,7 +367,7 @@ async def execute_command(os_id, command_name, expected_mode, token_value,
     else:
         target = 'rx' if command_name == 'set_mode_rx' else 'tx'
         verification, result_mode = await _verify_after_reboot(
-            os_id, target, sleep=sleep)
+            os_id, target, sleep=sleep, sim=sim)
         # A genuine re-read happened after the write, so this one has
         # actually earned the 'post-write-readback' label.
         source = 'post-write-readback'
@@ -407,3 +411,41 @@ def _audit(command_name, device, mode, spec, ack=False, verification=None,
 
 def _symbolic_uuid(uuid):
     return {c.MODE: 'MODE', c.LINK_ACTION: 'LINK_ACTION'}.get(uuid, 'UNKNOWN')
+
+
+# ── Sim ──────────────────────────────────────────────────────────────────────
+
+
+class _SimClient:
+    """Serves reads from, and applies writes to, the simulated GATT state.
+
+    Shape parity with the real client is the point: the same execute_command
+    code path runs, so the sim exercises every gate rather than bypassing them.
+    """
+
+    def __init__(self, os_id):
+        from .sim import sim_gatt_values
+
+        self.os_id = os_id
+        self.values = sim_gatt_values(os_id)
+
+    def has_characteristic(self, uuid):
+        return uuid in self.values
+
+    async def read_gatt_char(self, uuid):
+        return self.values[uuid]
+
+    async def write_gatt_char(self, uuid, payload):
+        from .sim import sim_gatt_values, sim_write
+
+        if uuid.lower() not in WRITABLE_UUIDS:
+            raise UnknownCommand(detail=uuid)
+        if not self.has_characteristic(uuid):
+            raise CharacteristicMissing(detail=uuid)
+        sim_write(self.os_id, uuid, payload)
+        self.values = sim_gatt_values(self.os_id)
+
+
+@contextlib.asynccontextmanager
+async def _connect_sim(os_id):
+    yield _SimClient(os_id)

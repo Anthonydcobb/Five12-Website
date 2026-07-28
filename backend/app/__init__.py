@@ -68,6 +68,13 @@ def create_app(test_config=None):
             from .five12_ble.scanner import start_ble_service
             start_ble_service(app)
 
+        # Writes are a second, separate opt-in. With ENABLE_BLE_WRITE off the
+        # command routes do not exist at all, so the app is exactly the
+        # read-only build.
+        if app.config.get('ENABLE_BLE_WRITE'):
+            from .ble_command_routes import ble_write as ble_write_bp
+            app.register_blueprint(ble_write_bp)
+
     app.logger.setLevel(logging.INFO)
 
     if not app.config.get('TESTING') and app.config.get('ENABLE_NETWORK_TOOLS'):

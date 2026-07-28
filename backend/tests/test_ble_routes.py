@@ -161,8 +161,11 @@ def test_status_reports_scan_state(ble_client):
     assert body['sim'] is True
 
 
-def test_no_post_routes_exist_in_this_phase(ble_app):
-    """RELEASE GATE. The read-only phase must expose no mutating endpoint."""
+def test_read_only_app_still_exposes_no_mutating_route(ble_app):
+    """RELEASE GATE, carried forward. `ble_app` is built without
+    ENABLE_BLE_WRITE, so it is the read-only build — and that build must
+    still have no way to change a radio. The write build's routes are
+    asserted separately in test_ble_command_routes.py."""
     for rule in ble_app.url_map.iter_rules():
         if str(rule).startswith('/api/ble'):
             assert rule.methods & {'POST', 'PUT', 'PATCH', 'DELETE'} == set(), str(rule)
