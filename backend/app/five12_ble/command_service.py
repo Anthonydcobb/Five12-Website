@@ -430,7 +430,10 @@ class _SimClient:
         self.values = sim_gatt_values(os_id)
 
     def has_characteristic(self, uuid):
-        return uuid in self.values
+        # Normalized the same way write_gatt_char's allowlist check is, so
+        # the two checks agree on a mixed-case UUID instead of silently
+        # disagreeing with each other.
+        return uuid.lower() in self.values
 
     async def read_gatt_char(self, uuid):
         return self.values[uuid]

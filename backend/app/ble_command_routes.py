@@ -52,7 +52,24 @@ def _run(coro_factory, os_id, sim):
         # would 404 until the roster happened to be fetched. (Recorded in the
         # handoff as the split sim-polling responsibility.)
         service.poll_sim()
-        return jsonify(asyncio.run(coro_factory(service.registry)))
+        try:
+            return jsonify(asyncio.run(coro_factory(service.registry)))
+        except BleError:
+            # Command-service rejections (WrongMode, ConfirmationInvalid,
+            # DeviceNotFound, ...) are translated by _catch_sim_errors, which
+            # wraps this whole call; let them propagate there unchanged
+            # rather than relabelling them as unexpected failures here.
+            raise
+        except Exception as exc:
+            # Same contract as the real path below: asyncio.run() on this
+            # branch can still raise something untranslated -- notably the
+            # RuntimeError it raises when the request thread already has a
+            # running event loop, the non-sync-worker caveat documented in
+            # ble_routes.py. Never let that reach the client as a raw
+            # 500/traceback; log it server-side and return the typed shape.
+            log.error('BLE: unexpected error running sim command for %s: %s',
+                      os_id, exc, exc_info=True)
+            return jsonify(UnexpectedBleFailure(detail=os_id).to_dict()), 409
 
     if service.registry.get(os_id) is None:
         return jsonify(DeviceNotFound(detail=os_id).to_dict()), 404
@@ -77,9 +94,20 @@ def _run(coro_factory, os_id, sim):
         return jsonify(UnexpectedBleFailure(detail=os_id).to_dict()), 409
 
 
-def _sim_or_404(handler):
-    """Sim device lookups happen inside the command service, which raises
-    DeviceNotFound; translate that one case to 404 to match the read routes."""
+def _catch_sim_errors(handler):
+    """Translate command-service rejections into HTTP responses -- but only
+    for the SIM path.
+
+    On the real (non-sim) path, `_run` already returns a typed tuple for
+    every BleError case itself (the registry pre-check's 404,
+    ScanLoopUnavailable, the FutureTimeoutError translation, the generic
+    Exception translation) before this wrapper is ever reached, so the
+    `except DeviceNotFound` / `except BleError` below can never fire there --
+    `_run` RETURNS rather than raises. The sim branch is different: it calls
+    `coro_factory` directly and lets any BleError it raises (WrongMode,
+    ConfirmationInvalid, DeviceNotFound, ...) propagate out of `_run`
+    unhandled, so this is the only place those become HTTP responses.
+    """
     try:
         return handler()
     except DeviceNotFound as exc:
@@ -94,7 +122,7 @@ def prepare(os_id):
     it. Nothing is written here."""
     sim = sim_enabled(request.args)
     command = (request.get_json(silent=True) or {}).get('command', '')
-    return _sim_or_404(lambda: _run(
+    return _catch_sim_errors(lambda: _run(
         lambda registry: prepare_command(os_id, command, registry, sim=sim),
         os_id, sim))
 
@@ -107,7 +135,7 @@ def execute(os_id):
     command = body.get('command', '')
     expected_mode = body.get('expectedMode')
     token = body.get('confirmationToken', '')
-    return _sim_or_404(lambda: _run(
+    return _catch_sim_errors(lambda: _run(
         lambda registry: execute_command(
             os_id, command, expected_mode, token, registry, sim=sim),
         os_id, sim))
