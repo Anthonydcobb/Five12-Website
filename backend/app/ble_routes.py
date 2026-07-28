@@ -12,7 +12,7 @@ import logging
 import sys
 from concurrent.futures import TimeoutError as FutureTimeoutError
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from .five12_ble.errors import (
     BleError,
@@ -52,6 +52,10 @@ def capabilities():
     st = _service().status()
     return jsonify({
         'bleToolsEnabled': True,   # this route only exists when the gate is on
+        # Unlike the line above this is NOT a tautology: the read routes exist
+        # whenever tools are on, but writes may still be switched off. The
+        # panel uses this to decide whether to render any control at all.
+        'bleWriteEnabled': bool(current_app.config.get('ENABLE_BLE_WRITE')),
         'adapterAvailable': st['adapterAvailable'],
         'platformSupported': _platform_supported(),
         'sim': st['sim'],

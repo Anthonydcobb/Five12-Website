@@ -30,6 +30,12 @@ class DevelopmentConfig:
     # starting a radio scan without being asked is not. Set FIVE12_BLE_TOOLS=1.
     ENABLE_BLE_TOOLS = os.getenv("FIVE12_BLE_TOOLS", "0") == "1"
 
+    # Gates configuration WRITES, separately from ENABLE_BLE_TOOLS. Discovery
+    # and status reads are one risk; changing a radio mid-show is another, so
+    # they get separate switches. Read-only stays the default even with
+    # Bluetooth fully enabled. Set FIVE12_BLE_WRITE=1.
+    ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
+
 
 class DesktopConfig:
     DEBUG = False
@@ -50,3 +56,6 @@ class DesktopConfig:
 
     # BLE stays opt-in even on desktop — the operator turns it on per show.
     ENABLE_BLE_TOOLS = os.getenv("FIVE12_BLE_TOOLS", "0") == "1"
+
+    # Writes stay opt-in on desktop too — same reasoning as the dev config.
+    ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
