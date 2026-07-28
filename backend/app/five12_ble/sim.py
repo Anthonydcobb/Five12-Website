@@ -25,7 +25,7 @@ _NAMES = {
     SIM_TX_ID: 'F12L - 2071',
 }
 
-_GATT = {
+_FIXTURES = {
     SIM_RX_ID: {
         c.DEVICE_NAME: b'F12L - 1946\x00\x00\x00\x00\x00',
         c.MODE: b'\x00',                               # RX
@@ -53,6 +53,24 @@ _GATT = {
         c.LINK_ACTION: b'\x03',                        # TX baseline
     },
 }
+
+# Live sim state, seeded from the captured fixtures. Writes mutate this copy
+# so the panel behaves like the real thing — a sim that swallowed writes would
+# let the UI look correct while doing nothing.
+_GATT = {os_id: dict(values) for os_id, values in _FIXTURES.items()}
+
+
+def sim_reset():
+    """Restore the captured fixtures. Tests use this; nothing in the app does."""
+    global _GATT
+    _GATT = {os_id: dict(values) for os_id, values in _FIXTURES.items()}
+
+
+def sim_write(os_id, uuid, payload):
+    """Apply a write to the simulated device. Unknown devices are a no-op —
+    the caller has already rejected them by the time we get here."""
+    if os_id in _GATT:
+        _GATT[os_id][uuid] = bytes(payload)
 
 
 def _wobble(base, os_id, now=None):
