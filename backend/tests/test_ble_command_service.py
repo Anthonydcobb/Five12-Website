@@ -214,6 +214,21 @@ def test_mode_commands_are_refused_pending_reboot_verification(patched):
     assert patched['client'].writes == []
 
 
+def test_refused_mode_write_is_audited_with_error_code(patched, caplog):
+    """The NotImplementedError refusal for unverifiable mode writes is the
+    most critical refusal — it would reboot a radio and black out its
+    fixture. Must leave an audit trail identifying the refusal."""
+    with caplog.at_level('INFO'):
+        with pytest.raises(NotImplementedError):
+            _prepare_and_execute(patched, _tx_values(), 'set_mode_tx', 'tx')
+    # Verify no write occurred
+    assert patched['client'].writes == []
+    # Verify the audit line was emitted with the refusal code
+    entry = '\n'.join(r.getMessage() for r in caplog.records if 'BLE WRITE' in r.getMessage())
+    assert 'error=refused-unverifiable' in entry
+    assert 'cmd=set_mode_tx' in entry
+
+
 def test_device_with_no_hardware_id_is_refused_a_token(patched):
     """A truncated or absent manufacturer payload decodes hardwareId to
     None. Minting a token with hardware_id=None would make the identity
@@ -321,3 +336,27 @@ def test_device_not_in_roster_is_rejected(patched):
     patched['client'] = FakeWriteClient(_tx_values())
     with pytest.raises(e.DeviceNotFound):
         asyncio.run(cs.prepare_command('ghost', 'link', FakeRegistry(None)))
+
+
+def test_missing_mode_characteristic_is_rejected_on_prepare(patched):
+    """_read_mode checks has_characteristic before reading and raises
+    CharacteristicMissing if the radio does not expose the MODE
+    characteristic. This typed exception surfaces before any write."""
+    # FakeWriteClient with only LINK_ACTION, no MODE
+    patched['client'] = FakeWriteClient({c.LINK_ACTION: b'\x01'})
+    registry = FakeRegistry(FakeDevice())
+    with pytest.raises(e.CharacteristicMissing):
+        asyncio.run(cs.prepare_command('dev-1', 'link', registry))
+    assert patched['client'].writes == []
+
+
+def test_missing_mode_characteristic_is_rejected_on_execute(patched):
+    """CharacteristicMissing during execute_command also blocks the write."""
+    patched['client'] = FakeWriteClient(_tx_values())
+    registry = FakeRegistry(FakeDevice())
+    prep = asyncio.run(cs.prepare_command('dev-1', 'link', registry))
+    # Simulate the MODE characteristic disappearing between prepare and execute
+    patched['client'] = FakeWriteClient({c.LINK_ACTION: b'\x03'})
+    with pytest.raises(e.CharacteristicMissing):
+        asyncio.run(cs.execute_command('dev-1', 'link', 'tx', prep['token'], registry))
+    assert patched['client'].writes == []

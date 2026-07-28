@@ -309,6 +309,8 @@ async def execute_command(os_id, command_name, expected_mode, token_value, regis
                 # unverified; a plain, loud exception is deliberate here —
                 # this whole branch is removed once reboot-tolerant
                 # verification is implemented.
+                _audit(command_name, device, known_mode, spec,
+                       error='refused-unverifiable')
                 raise NotImplementedError(
                     f'{command_name}: reboot-tolerant verification is not '
                     'implemented yet, so this command is refused rather '
