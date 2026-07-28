@@ -4,7 +4,7 @@
 - **Branch:** `claude/pr2-network-route-safety`
 - **Workspace:** ephemeral Claude Code cloud clone (nothing durable outside the pushed branch)
 - **Base SHA:** `c8be6db` (`main`)
-- **Head SHA:** `0cdc7ec` (final)
+- **Head SHA:** `82ba5d4` (final; `0cdc7ec` + a comment-only correction)
 - **Status:** review — Hermes cross-review returned; requested test added
 - **Last updated:** 2026-07-27 (updated after cross-review)
 
@@ -49,8 +49,10 @@ Four layered guards, any one of which closes the injection:
    else is a 400 before any NIC command runs. Fails closed if enumeration fails.
 3. **Address validation** — `ipaddress.IPv4Address` for IP and gateway; prefix
    bounded 1-32.
-4. **Origin check** — a present, foreign `Origin` gets 403. Absent `Origin`
-   (Electron main process, curl, test client) passes.
+4. **Origin check** — a present, foreign `Origin` gets 403. The desktop UI calls
+   from the Electron *renderer* via Axios, so Chromium sends a loopback origin and
+   it matches. The absent-`Origin` exception is for native callers (curl, scripts,
+   the test client).
 
 **Behavior change:** a browser reaching the app by LAN address now receives 403 on
 these two routes. This matches the loopback-only premise; LAN use needs the
@@ -103,7 +105,7 @@ The 159-passed baseline independently reproduces the figure in the initial Herme
 review, which my first response had marked unverified.
 
 The against-unpatched run is the load-bearing one: tests that pass both before and
-after a fix prove nothing. The 19 failures are the discriminating cases; the 7
+after a fix prove nothing. The 21 failures are the discriminating cases; the 7
 passes are valid-path regression guards that legitimately pass either way.
 
 ## Risks and skipped checks
@@ -152,7 +154,15 @@ Two corrections from Hermes accepted into the record:
 ## Commits
 
 - `a86cff1` — `fix(network): stop request data reaching PowerShell as code`
-- `0cdc7ec` — `test(network): pin env transport with an allowlisted hostile alias` (head)
+- `0cdc7ec` — `test(network): pin env transport with an allowlisted hostile alias`
+- `82ba5d4` — `docs(network): correct _local_origin comment after cross-review` (head)
+
+`82ba5d4` is comment-only, no behavior change, suites re-run at 28 focused / 187
+complete. It moves both accepted corrections out of this note and into the
+docstring, so a future reader making a security decision about `_local_origin()`
+sees the hostname-allowlist limit at the code rather than only here. Flagged
+because it changes the head after cross-review: Hermes approved `a86cff1`, the
+requested test landed in `0cdc7ec`, and only the docstring differs at `82ba5d4`.
 
 ## Handoff / next action
 
