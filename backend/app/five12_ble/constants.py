@@ -40,8 +40,9 @@ BATTERY_LEVEL = '00002a19-0000-1000-8000-00805f9b34fb'   # standard 0x2A19
 # Read-only mirrors of config values, confirmed to track their counterparts.
 MODE_MIRROR = '45a41001-2ccd-80a5-b844-095c73b6c7e3'
 COLOR_MIRROR = '45a41002-2ccd-80a5-b844-095c73b6c7e3'
-# Reads 01 in RX / 03 in TX. Writing it performs Link/Unlink — NOT in this
-# phase. Present as a readable status field only.
+# Reads 01 in RX / 03 in TX as an ordinary status value. Writes to it perform
+# Link/Unlink and are confined entirely to the command table in
+# command_service.py — this constant itself grants no write capability.
 LINK_ACTION = '45a41003-2ccd-80a5-b844-095c73b6c7e3'
 
 READABLE_UUIDS = frozenset({

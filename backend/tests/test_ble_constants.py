@@ -60,16 +60,31 @@ def test_readable_allowlist_contains_only_verified_uuids():
     assert c.READABLE_UUIDS == frozenset(verified)
 
 
-def test_no_write_allowlist_exists_in_this_phase():
-    """RELEASE GATE. The read-only phase must ship no write capability at all.
-    If a later phase adds writes, it adds them deliberately and this test is
-    updated in the same commit that introduces the command policy."""
-    assert not hasattr(c, 'WRITE_ALLOWLIST')
-    assert not hasattr(c, 'LINK_COMMAND')
-    assert not hasattr(c, 'UNLINK_COMMAND')
+def test_write_allowlist_is_confined_to_the_command_table():
+    """RELEASE GATE, inverted from the read-only phase. That phase asserted no
+    write allowlist existed at all. This phase allows exactly two writable
+    characteristics, both already members of the captured read set, and both
+    reachable only through a named command in the policy table."""
+    from app.five12_ble.command_service import WRITABLE_UUIDS
+    assert WRITABLE_UUIDS == frozenset({c.MODE, c.LINK_ACTION})
+    assert WRITABLE_UUIDS <= c.READABLE_UUIDS
+
+
+def test_opaque_blob_is_never_writable():
+    from app.five12_ble.command_service import WRITABLE_UUIDS
+    assert '10351003-3555-4907-0431-2b27430c2642' not in WRITABLE_UUIDS
 
 
 def test_opaque_blob_is_not_readable():
     """10351003 is a large opaque blob that changes between connections. It is
     not an identifier, not a version, and must never be read or stored."""
     assert '10351003-3555-4907-0431-2b27430c2642' not in c.READABLE_UUIDS
+
+
+def test_every_read_field_is_in_the_readable_allowlist():
+    """Makes READABLE_UUIDS actually enforce something. Without this the
+    snapshot builder's _FIELDS could drift to a UUID nobody vetted and every
+    other test would still pass."""
+    from app.five12_ble.gatt_client import _FIELDS
+    for name, uuid, _decoder, _source in _FIELDS:
+        assert uuid in c.READABLE_UUIDS, f'{name} reads an unvetted UUID'
