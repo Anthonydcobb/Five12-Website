@@ -36,7 +36,10 @@ function Bars({ rssi }) {
 // Saying "done" would be a lie and saying "failed" would be one too.
 const OUTCOME = {
   'ack-only': {
-    tone: 'text-online',
+    // Deliberately not text-online: an acknowledgement is a weaker claim
+    // than a verified mode change and should not read the same as one.
+    // text-gel is the app's existing non-alarming accent (see global.css).
+    tone: 'text-gel',
     text: (r) => `Write accepted by the radio. This is not confirmation that ` +
                  `a ${r.command === 'link' ? 'link' : 'change'} was made.`,
   },
@@ -104,6 +107,19 @@ export default function CintennaPanel() {
   const selectedRef = useRef(selected)
   selectedRef.current = selected
 
+  // A completed write's outcome (or error, or in-flight confirmation) belongs
+  // to the device it happened on. Keying this off `selected.osId` — rather
+  // than resetting inline wherever the selection can change — means any
+  // future code path that changes the selection inherits the guarantee for
+  // free, the same way readStatus already guards against attributing a
+  // stale snapshot to the wrong radio.
+  useEffect(() => {
+    setOutcome(null)
+    setWriteError(null)
+    setPending(null)
+    setWorking(false)
+  }, [selected?.osId])
+
   useEffect(() => {
     let alive = true
     const poll = async () => {
@@ -142,23 +158,33 @@ export default function CintennaPanel() {
   }
 
   // Step one: ask the server for the radio's real mode and a confirmation
-  // bound to it. Nothing is written until the operator confirms.
+  // bound to it. Nothing is written until the operator confirms. Capture the
+  // device *now*, on `pending`, rather than reading `selected` again at
+  // confirm time: the modal overlay blocks mouse access to the roster while
+  // it's open, but it has no focus trap, so a keyboard user can tab past it
+  // and change the selection. The confirmation must stay bound to the device
+  // it was prepared for regardless of what's selected when it resolves.
   const startCommand = async (command) => {
+    const device = selected
     setWriteError(null)
     setOutcome(null)
     try {
-      const prep = await prepareBleCommand(selected.osId, command)
-      setPending({ command, prep })
+      const prep = await prepareBleCommand(device.osId, command)
+      setPending({
+        command,
+        prep,
+        device: { osId: device.osId, localName: device.localName, hardwareId: device.hardwareId },
+      })
     } catch (err) {
       setWriteError(err)
     }
   }
 
   const confirmCommand = async () => {
-    const { command, prep } = pending
+    const { command, prep, device } = pending
     setWorking(true)
     try {
-      const result = await executeBleCommand(selected.osId, {
+      const result = await executeBleCommand(device.osId, {
         command,
         expectedMode: prep.currentMode,
         confirmationToken: prep.token,
@@ -391,8 +417,8 @@ export default function CintennaPanel() {
 
       {pending && (
         <BleActionDialog
-          deviceAlias={pending.prep.deviceAlias || selected.localName}
-          hardwareId={selected.hardwareId}
+          deviceAlias={pending.prep.deviceAlias || pending.device.localName}
+          hardwareId={pending.device.hardwareId}
           warning={pending.prep.warning}
           actionLabel={ACTION_LABEL[pending.command]}
           busy={working}

@@ -291,6 +291,109 @@ describe('CintennaPanel', () => {
     expect(btnB).toHaveAttribute('aria-pressed', 'false')
   })
 
+  it('clears a completed write outcome when the operator switches to a different radio', async () => {
+    // Finding 1 regression: a write's outcome must not survive a switch of
+    // the selected radio. Without the fix, outcome/writeError are only
+    // cleared inside startCommand, so B's "accepted" message keeps rendering
+    // underneath A's real, freshly-read fields.
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'warning copy',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'link', attAcknowledged: true, verification: 'ack-only',
+      mode: { decoded: 'tx' }, durationMs: 400,
+    })
+    bleApi.fetchBleSnapshot.mockImplementation((osId) =>
+      Promise.resolve(osId === 'tx-1' ? TX_SNAPSHOT : SNAPSHOT))
+
+    render(<CintennaPanel />)
+
+    // Complete a Link command on radio B (tx-1).
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    await screen.findAllByText('TX')
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/^link$/i))
+    expect(await screen.findByText(/not confirmation/i)).toBeInTheDocument()
+
+    // Switch to radio A (rx-1) and read its real status.
+    await userEvent.click(screen.getByRole('button', { name: /F12L - 1946/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    await screen.findAllByText('RX')
+
+    // B's stale outcome must not render under A's Control section.
+    expect(screen.queryByText(/not confirmation/i)).not.toBeInTheDocument()
+  })
+
+  it('renders no write control, even with the gate on, for a radio that has dropped out of the roster', async () => {
+    // Finding 3a: the Control section requires the radio still be nearby,
+    // even when writes are enabled.
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    const ROSTER_WITHOUT_TX1 = { deviceCount: 1, devices: [DEVICES.devices[0]] }
+    bleApi.fetchBleDevices
+      .mockResolvedValueOnce(DEVICES)
+      .mockResolvedValue(ROSTER_WITHOUT_TX1)
+    bleApi.fetchBleSnapshot.mockResolvedValue(TX_SNAPSHOT)
+
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    try {
+      render(<CintennaPanel />)
+      await user.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+      await user.click(screen.getByRole('button', { name: /read status/i }))
+      await screen.findAllByText('TX')
+      expect(screen.getByRole('button', { name: /^link$/i })).toBeInTheDocument()
+
+      // Next 5s poll returns a roster that no longer includes tx-1.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+
+      expect(await screen.findByText(/no longer nearby/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^link$/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /switch to/i })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders its own copy for a verified outcome', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'warning copy',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'link', attAcknowledged: true, verification: 'verified',
+      mode: { decoded: 'tx' }, durationMs: 400,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/^link$/i))
+    expect(await screen.findByText(/verified — the radio came back in the new mode/i))
+      .toBeInTheDocument()
+  })
+
+  it('renders its own copy when the device does not return', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', token: 'tok-2', ttlS: 60,
+      deviceAlias: 'F12L - 2071', currentMode: 'tx', warning: 'It will restart.',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', attAcknowledged: true,
+      verification: 'device-did-not-return', mode: { decoded: 'tx' }, durationMs: 31000,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /switch to rx/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/switch to rx/i))
+    expect(await screen.findByText(/did not come back in time/i)).toBeInTheDocument()
+  })
+
   it('flags a selected device that drops out of the roster without blanking the panel', async () => {
     const ROSTER_WITHOUT_RX1 = { deviceCount: 1, devices: [DEVICES.devices[1]] }
     bleApi.fetchBleDevices
