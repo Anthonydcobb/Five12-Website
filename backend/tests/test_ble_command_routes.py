@@ -305,3 +305,60 @@ def test_non_sim_unknown_device_404s(write_client):
         json={'command': 'link'})
     assert resp.status_code == 404
     assert resp.get_json()['code'] == 'device-not-found'
+
+
+def test_non_sim_operation_timeout_cancels_future_and_returns_typed_error(
+        write_client, monkeypatch):
+    """REGRESSION — FIX 3 (future-timeout case). When the submitted work does
+    not finish inside the bound, _run must do two critical things: cancel the
+    future (so a wedged Bluetooth operation does not tie up the radio adapter
+    indefinitely after we have given up on it) and return a typed
+    {code, message} error rather than a raw 500. The future.cancel() call is
+    the part most worth pinning -- a timeout that returns tidy error while
+    leaving the operation running would still wedge the adapter. Before this
+    test, no branch exercised the `except FutureTimeoutError` clause in _run's
+    real path, so someone could remove it without detection.
+    """
+    from concurrent.futures import TimeoutError as FutureTimeoutError
+    from app import ble_command_routes
+
+    service = get_scan_service(False)
+    service.registry.upsert('timeout-dev', 'F12L - test', -55, {})
+    loop, thread = _spin_background_loop()
+
+    # Record whether cancel was called on the fake future.
+    cancel_called = []
+
+    class FakeFuture:
+        def result(self, timeout=None):
+            raise FutureTimeoutError('simulated timeout')
+
+        def cancel(self):
+            cancel_called.append(True)
+
+    def fake_run_coroutine_threadsafe(coro, loop_arg):
+        return FakeFuture()
+
+    monkeypatch.setattr(
+        ble_command_routes.asyncio,
+        'run_coroutine_threadsafe',
+        fake_run_coroutine_threadsafe)
+
+    service._loop = loop
+    try:
+        resp = write_client.post(
+            '/api/ble/devices/timeout-dev/commands/prepare',
+            json={'command': 'link'})
+
+        assert resp.status_code == 409
+        body = resp.get_json()
+        assert body['code'] == 'operation-timeout'
+        assert 'message' in body
+        raw = resp.get_data(as_text=True)
+        assert 'TimeoutError' not in raw
+        assert 'Traceback' not in raw
+        assert cancel_called == [True], 'future.cancel() was not called'
+    finally:
+        service._loop = None
+        service.registry.clear()
+        _stop_background_loop(loop, thread)
