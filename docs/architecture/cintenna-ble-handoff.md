@@ -55,13 +55,14 @@ guards are `test_ble_constants.py` (no write allowlist), `test_ble_routes.py`
 
 ## Hardware gate
 
-**Nothing here has met a real radio.** Everything is verified against fakes, sim
-fixtures, and captured byte values. Run this on the actual Cintenna (firmware
-`1.0.7.2`) before planning the write phase:
+**Partially met as of 2026-07-27.** A real Cintenna was discovered by the passive
+scan and returned a connected status read. The remaining steps — the Toolbox
+conflict check in particular — are still unrun. Everything else remains verified
+only against fakes, sim fixtures, and captured byte values.
 
-- [ ] Passive scan finds the device without connecting, CRMX Toolbox closed
-- [ ] Advertised name, RSSI, service UUID, and manufacturer payload all appear
-- [ ] Connect and read battery, firmware, and the RX snapshot
+- [x] Passive scan finds the device without connecting, CRMX Toolbox closed
+- [x] Advertised name, RSSI, service UUID, and manufacturer payload all appear
+- [x] Connect and read battery, firmware, and the RX snapshot
 - [ ] **Open Toolbox, attempt a snapshot, confirm the error names Toolbox.**
       This is the most valuable check: it is the most common real failure, and
       the detection is English-substring matching (see deferred minors below)
@@ -140,12 +141,17 @@ any fresh clone or lock regeneration. Do not remove the override.
 
 ## Next phase
 
-Plan 2 covers spec tasks 10–18: command policy, guarded configuration writes,
-TX Link, RX Unlink, audit logging, hardware acceptance, release gate. It is
-deliberately **not written yet** — those steps depend on what the hardware gate
-reveals about real `bleak` behaviour on Windows (reboot timing after a mode
-write, Toolbox conflict signatures, whether device identity survives a
-reconnect). Writing them before that would be guessing.
+Designed, 2026-07-27, once the scan-and-read half of the hardware gate passed:
+[`../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md`](../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md).
+
+It deliberately narrows the original tasks 10–18 to **four commands** —
+`set_mode_rx`, `set_mode_tx`, `link`, `unlink` — behind a second gate,
+`FIVE12_BLE_WRITE`. The other four config writes stay deferred; the policy table
+is data, so each is one row plus its own acceptance run when wanted.
+
+Two numbers are still deliberately unset in that design because they need the
+radio: reboot timing after a mode write, and whether device identity survives
+the reboot. They are recorded as open questions, not guessed.
 
 Protocol source of truth for that work is the private KB:
 `10-Lighting/References/LumenRadio/timotwo-ble-discovery-and-gatt.md` and
