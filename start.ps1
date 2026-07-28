@@ -23,7 +23,14 @@ if ($Mode -eq "app") {
 } else {
     Write-Host "Starting Five12 in dev mode..." -ForegroundColor Yellow
     $env:PATH = "$pythonScripts;" + $env:PATH
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$env:PATH = '$pythonScripts;' + `$env:PATH; cd '$root\backend'; & '$pythonExe' -m flask run --port 5000"
+    # --no-reload is load-bearing, not a preference. Werkzeug's auto-reloader
+    # runs the app in TWO processes; both start the Bluetooth service and race
+    # for the adapter's single-owner lock. Whichever one loses serves your
+    # requests reporting "another Five12 process owns the Bluetooth adapter"
+    # and scans nothing, so the Cintennas tab stays empty while the radio is
+    # sitting right there. Observed 2026-07-28. Cost: you restart the backend
+    # by hand after editing Python.
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$env:PATH = '$pythonScripts;' + `$env:PATH; cd '$root\backend'; & '$pythonExe' -m flask run --port 5000 --no-reload"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\app'; npm run dev"
     Write-Host "Backend:  http://localhost:5000" -ForegroundColor Cyan
     Write-Host "Frontend: http://localhost:5173" -ForegroundColor Cyan
