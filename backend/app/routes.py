@@ -704,6 +704,22 @@ def _valid_ipv4(value):
         return False
 
 
+def _ps_failure(out, err, code, fallback):
+    """Build an operator-usable message from a failed PowerShell run.
+
+    [BENCH 2026-07-28] The DHCP route returned a bare "DHCP switch failed" on a
+    real rig: PowerShell exited non-zero having written nothing to stderr, and
+    the route forwarded only stderr, so everything diagnostic was discarded. An
+    operator at a console got a failure with nothing to act on, and neither did
+    the person debugging it. Fall through stderr -> stdout -> exit code so there
+    is always something concrete to report.
+    """
+    detail = (err or '').strip() or (out or '').strip()
+    if detail:
+        return detail
+    return f'{fallback} (PowerShell exited {code} with no output)'
+
+
 def _network_tools_enabled():
     """Honour the FIVE12_NETWORK_TOOLS kill switch on this blueprint too.
 
@@ -801,8 +817,11 @@ New-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -IPAddress $env:FIVE12_IP
         'FIVE12_GATEWAY': gateway,
     })
     if code != 0:
-        admin = 'access' in err.lower() or 'administrator' in err.lower() or 'privileged' in err.lower()
-        return jsonify({'error': err or 'Apply failed', 'adminRequired': admin}), 403 if admin else 500
+        detail = _ps_failure(out, err, code, 'Apply failed')
+        admin = any(w in detail.lower()
+                    for w in ('access is denied', 'administrator', 'privileged'))
+        current_app.logger.error('network_apply failed (exit %s): %s', code, detail)
+        return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
     return jsonify({'success': True})
 
 
@@ -835,8 +854,11 @@ Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' 
 """
     out, err, code = _run_ps(ps, {'FIVE12_ADAPTER': adapter})
     if code != 0:
-        admin = 'access' in err.lower() or 'administrator' in err.lower() or 'privileged' in err.lower()
-        return jsonify({'error': err or 'DHCP switch failed', 'adminRequired': admin}), 403 if admin else 500
+        detail = _ps_failure(out, err, code, 'DHCP switch failed')
+        admin = any(w in detail.lower()
+                    for w in ('access is denied', 'administrator', 'privileged'))
+        current_app.logger.error('network_dhcp failed (exit %s): %s', code, detail)
+        return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
     return jsonify({'success': True})
 
 

@@ -306,3 +306,77 @@ def test_apply_fails_closed_when_adapters_cannot_be_listed(client):
         res = client.post('/api/network/apply',
                           json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
     assert res.status_code == 500
+
+
+# ── Failure reporting ────────────────────────────────────────────────────────
+#
+# [BENCH 2026-07-28] On the Windows rig, /api/network/dhcp returned exactly
+# {"error": "DHCP switch failed", "adminRequired": false} — PowerShell exited
+# non-zero having written nothing to stderr, and the route forwarded only
+# stderr. The operator got a failure with nothing to act on and the same was
+# true for whoever had to debug it. These pin that a failure always carries
+# something concrete.
+
+def fake_ps_failing(calls, stdout='', stderr='', returncode=1):
+    def _run(argv, **kwargs):
+        script = argv[-1]
+        calls.append({'script': script, 'env': kwargs.get('env') or {}})
+        if 'Get-NetAdapter' in script:
+            return FakeCompleted(stdout=json.dumps(ADAPTERS))
+        return FakeCompleted(stdout=stdout, stderr=stderr, returncode=returncode)
+    return _run
+
+
+def post_dhcp_with(client, **kwargs):
+    calls = []
+    with patch('app.routes.subprocess.run',
+               side_effect=fake_ps_failing(calls, **kwargs)):
+        return client.post('/api/network/dhcp', json={'adapter': 'Wi-Fi'})
+
+
+def test_silent_powershell_failure_still_reports_the_exit_code(client):
+    """The exact rig case: non-zero exit, nothing on stderr or stdout."""
+    res = post_dhcp_with(client, returncode=1)
+    assert res.status_code == 500
+    error = res.get_json()['error']
+    assert 'exited 1' in error, f'no exit code in operator message: {error!r}'
+    assert error != 'DHCP switch failed', 'bare fallback carries no information'
+
+
+def test_powershell_stdout_is_used_when_stderr_is_empty(client):
+    res = post_dhcp_with(client, stdout='The interface is not enabled.',
+                         returncode=1)
+    assert res.status_code == 500
+    assert 'The interface is not enabled.' in res.get_json()['error']
+
+
+def test_stderr_still_wins_when_present(client):
+    res = post_dhcp_with(client, stdout='noise', stderr='real cause',
+                         returncode=1)
+    assert 'real cause' in res.get_json()['error']
+
+
+def test_access_denied_is_reported_as_admin_required(client):
+    """The rig's apply failure before elevation — must stay a 403."""
+    res = post_dhcp_with(
+        client, stderr='Set-NetIPInterface : Access is denied.', returncode=1)
+    assert res.status_code == 403
+    assert res.get_json()['adminRequired'] is True
+
+
+def test_unrelated_failure_is_not_mislabelled_as_admin(client):
+    """'access' alone used to trigger the admin label and mislead diagnosis."""
+    res = post_dhcp_with(
+        client, stderr='Cannot access the network path.', returncode=1)
+    assert res.status_code == 500
+    assert res.get_json()['adminRequired'] is False
+
+
+def test_apply_failure_also_carries_detail(client):
+    calls = []
+    with patch('app.routes.subprocess.run',
+               side_effect=fake_ps_failing(calls, returncode=2)):
+        res = client.post('/api/network/apply',
+                          json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
+    assert res.status_code == 500
+    assert 'exited 2' in res.get_json()['error']
