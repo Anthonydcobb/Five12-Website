@@ -93,6 +93,9 @@ def _prepare_and_execute(state, values, command, expected_mode,
 def test_link_writes_exactly_05_to_link_action(patched):
     _, result = _prepare_and_execute(patched, _tx_values(), 'link', 'tx')
     patched['client'].assert_write(c.LINK_ACTION, bytes([0x05]))
+    # Not just that the right write happened, but that it was the ONLY
+    # write — a stray write to MODE during a link could not go unnoticed.
+    assert len(patched['client'].writes) == 1
     assert result['attAcknowledged'] is True
     assert result['verification'] == 'ack-only'
 
@@ -100,14 +103,29 @@ def test_link_writes_exactly_05_to_link_action(patched):
 def test_unlink_writes_exactly_00_to_link_action(patched):
     _, result = _prepare_and_execute(patched, _rx_values(), 'unlink', 'rx')
     patched['client'].assert_write(c.LINK_ACTION, bytes([0x00]))
+    assert len(patched['client'].writes) == 1
     assert result['verification'] == 'ack-only'
 
 
+def _walk(obj):
+    """Yield every (key, value) pair anywhere in a nested dict/list/tuple,
+    however deep, so a check can look past the top level."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k, v
+            yield from _walk(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _walk(v)
+
+
 def test_result_never_claims_a_link_was_made(patched):
-    """RELEASE GATE. An ATT acknowledgement is not RF association."""
+    """RELEASE GATE. An ATT acknowledgement is not RF association. Walked
+    recursively so a 'linked' key nested inside e.g. result['mode'] could
+    not slip past a top-level-only check."""
     _, result = _prepare_and_execute(patched, _tx_values(), 'link', 'tx')
-    assert 'linked' not in result
-    for value in result.values():
+    for key, value in _walk(result):
+        assert key != 'linked'
         assert str(value).lower() != 'linked'
 
 
@@ -165,6 +183,50 @@ def test_stale_expected_mode_is_rejected(patched):
     with pytest.raises(e.StaleSnapshot):
         asyncio.run(cs.execute_command('dev-1', 'link', 'tx', prep['token'], registry))
     assert patched['client'].writes == []
+
+
+def test_stale_snapshot_also_fires_when_expected_mode_is_updated_to_match(patched):
+    """The weaker half of the freshness check (mode != expected_mode) is not
+    enough on its own: a client that updates expected_mode to match a radio
+    that drifted after the operator read the warning must still be stopped.
+    That is what 'or mode != token.mode' is for — prepare while TX, drift to
+    RX, then call execute with expected_mode='rx' (matching the drifted
+    radio, not the token). Deleting that clause makes this test fail with
+    WrongMode instead of StaleSnapshot (or pass wrongly), which is the point:
+    it proves the clause is load-bearing rather than redundant."""
+    patched['client'] = FakeWriteClient(_tx_values())
+    registry = FakeRegistry(FakeDevice())
+    prep = asyncio.run(cs.prepare_command('dev-1', 'link', registry))
+    patched['client'].values[c.MODE] = b'\x00'   # drifted to RX behind our back
+    with pytest.raises(e.StaleSnapshot):
+        asyncio.run(cs.execute_command('dev-1', 'link', 'rx', prep['token'], registry))
+    assert patched['client'].writes == []
+
+
+def test_mode_commands_are_refused_pending_reboot_verification(patched):
+    """COMMANDS marks set_mode_rx/set_mode_tx 'reboot-tolerant', but nothing
+    implements a post-reboot readback yet, and their required_mode never
+    blocks them. Left unchecked, a mode command would execute today, reboot
+    the radio, and report a bare ack with no verification. It must be
+    refused before any byte reaches the radio."""
+    with pytest.raises(NotImplementedError):
+        _prepare_and_execute(patched, _tx_values(), 'set_mode_tx', 'tx')
+    assert patched['client'].writes == []
+
+
+def test_device_with_no_hardware_id_is_refused_a_token(patched):
+    """A truncated or absent manufacturer payload decodes hardwareId to
+    None. Minting a token with hardware_id=None would make the identity
+    check compare None != None (False) and pass for ANY radio at this
+    address — exactly when it is needed most. prepare_command must decline
+    rather than issue an unenforceable token."""
+    patched['client'] = FakeWriteClient(_tx_values())
+    device = FakeDevice()
+    device.advert = {}
+    registry = FakeRegistry(device)
+    with pytest.raises(e.IdentityMismatch):
+        asyncio.run(cs.prepare_command(device.os_id, 'link', registry))
+    assert cs.tokens._tokens == {}
 
 
 def test_missing_confirmation_is_rejected(patched):
@@ -226,6 +288,20 @@ def test_audit_log_records_symbolic_names_and_no_key_material(patched, caplog):
     assert 'cmd=link' in entry
     assert c.LINK_ACTION not in entry            # symbolic name, not the UUID
     assert '10351003' not in entry               # never the opaque blob
+
+
+def test_rejected_command_is_audited_with_the_error_code(patched, caplog):
+    """Every rejection — not only the writes that land — is the highest-
+    consequence path in the app. It must leave a trace naming the error."""
+    patched['client'] = FakeWriteClient(_rx_values())
+    registry = FakeRegistry(FakeDevice())
+    prep = asyncio.run(cs.prepare_command('dev-1', 'link', registry))
+    with caplog.at_level('INFO'):
+        with pytest.raises(e.WrongMode):
+            asyncio.run(cs.execute_command('dev-1', 'link', 'rx', prep['token'], registry))
+    entry = '\n'.join(r.getMessage() for r in caplog.records if 'BLE WRITE' in r.getMessage())
+    assert 'error=wrong-mode' in entry
+    assert 'cmd=link' in entry
 
 
 def test_identity_mismatch_is_rejected(patched):

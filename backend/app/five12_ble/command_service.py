@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from . import constants as c
 from . import decoders as d
 from .errors import (
+    BleError,
+    CharacteristicMissing,
     ConfirmationInvalid,
     DeviceNotFound,
     IdentityMismatch,
@@ -195,7 +197,14 @@ async def _connect_for_write(os_id):
 
 async def _read_mode(client):
     """Current mode as 'rx' | 'tx' | None. None means the radio reported a
-    value this firmware contract does not define — never a reason to guess."""
+    value this firmware contract does not define — never a reason to guess.
+
+    Checks has_characteristic first so a radio missing MODE raises a typed
+    CharacteristicMissing instead of a raw bleak exception leaking through
+    this otherwise fully-typed error surface.
+    """
+    if not client.has_characteristic(c.MODE):
+        raise CharacteristicMissing(detail=c.MODE)
     raw = await client.read_gatt_char(c.MODE)
     return d.decode_mode(raw)['decoded']
 
@@ -235,7 +244,17 @@ async def prepare_command(os_id, command_name, registry):
     if mode is None:
         raise UnknownMode(detail=os_id)
 
-    token = tokens.issue(os_id, _hardware_id(device), command_name, mode)
+    hardware_id = _hardware_id(device)
+    if not hardware_id:
+        # A truncated or absent manufacturer payload decodes to None. Minting
+        # a token with hardware_id=None would let execute_command's identity
+        # check compare None != None (False) and pass for ANY radio at this
+        # address — exactly when the check is needed most. We cannot bind a
+        # confirmation to a specific radio without an id, so we decline
+        # rather than issue one that cannot be enforced.
+        raise IdentityMismatch(detail='device advertises no hardware id')
+
+    token = tokens.issue(os_id, hardware_id, command_name, mode)
     return {
         'command': command_name,
         'token': token.value,
@@ -253,45 +272,91 @@ async def execute_command(os_id, command_name, expected_mode, token_value, regis
 
     spec = _spec_or_reject(command_name)
     device = _device_or_reject(registry, os_id)
-    token = tokens.consume(token_value or '', os_id, command_name)
 
-    if _hardware_id(device) != token.hardware_id:
-        raise IdentityMismatch(detail=os_id)
+    # Best-known mode for the audit trail on a rejection path. Starts as None
+    # (genuinely unknown — nothing fabricated) and is tightened as the gates
+    # below learn more. UnknownCommand/DeviceNotFound above are not audited:
+    # there is no device (and, for UnknownCommand, not even a resolved
+    # command) to log against, and a fabricated placeholder would be worse
+    # than no entry.
+    known_mode = None
 
-    async with _connect_for_write(os_id) as client:
-        mode = await _read_mode(client)
-        if mode is None:
-            raise UnknownMode(detail=os_id)
-        # Freshness: the radio's mode NOW must match both what the client
-        # believed and what it was when the operator was warned.
-        if mode != expected_mode or mode != token.mode:
-            raise StaleSnapshot(detail=f'{token.mode} -> {mode}')
-        if mode not in spec.required_mode:
-            raise WrongMode(detail=f'{command_name} requires {spec.required_mode}')
+    try:
+        token = tokens.consume(token_value or '', os_id, command_name)
+        known_mode = token.mode
 
-        await client.write_gatt_char(spec.uuid, spec.payload)
+        if _hardware_id(device) != token.hardware_id:
+            raise IdentityMismatch(detail=os_id)
 
-        # Only ack-only commands (link, unlink) are complete at this point.
-        # Mode writes reboot the module and cannot be verified on the
-        # connection that made them; the next task adds that state machine,
-        # so until then every command reports the acknowledgement alone.
-        result_mode = mode
-        verification = 'ack-only'
+        async with _connect_for_write(os_id) as client:
+            mode = await _read_mode(client)
+            if mode is None:
+                raise UnknownMode(detail=os_id)
+            known_mode = mode
+            # Freshness: the radio's mode NOW must match both what the client
+            # believed and what it was when the operator was warned.
+            if mode != expected_mode or mode != token.mode:
+                raise StaleSnapshot(detail=f'{token.mode} -> {mode}')
+            if mode not in spec.required_mode:
+                raise WrongMode(detail=f'{command_name} requires {spec.required_mode}')
+            if spec.verification != 'ack-only':
+                # The table (COMMANDS) already marks set_mode_rx/set_mode_tx
+                # 'reboot-tolerant', and their required_mode never blocks
+                # them, so without this gate they would execute today,
+                # reboot the radio, and report a bare ack with no
+                # verification that the reboot actually landed in the
+                # intended mode. Refuse outright rather than execute
+                # unverified; a plain, loud exception is deliberate here —
+                # this whole branch is removed once reboot-tolerant
+                # verification is implemented.
+                raise NotImplementedError(
+                    f'{command_name}: reboot-tolerant verification is not '
+                    'implemented yet, so this command is refused rather '
+                    'than executed unverified.'
+                )
+
+            await client.write_gatt_char(spec.uuid, spec.payload)
+
+            # Only ack-only commands (link, unlink) reach here today — mode
+            # commands are refused above before any byte is written.
+            result_mode = mode
+            verification = 'ack-only'
+    except BleError as error:
+        # Every rejection on the highest-consequence path in the app leaves
+        # a trace, not only the writes that land. NotImplementedError above
+        # is deliberately not a BleError and is not caught here: it is a
+        # loud refusal of an unimplemented capability, not a policy
+        # rejection, and it is removed along with the branch that raises it.
+        _audit(command_name, device, known_mode, spec, error=error.code)
+        raise
 
     result = {
         'command': command_name,
         'attAcknowledged': True,
         'verification': verification,
-        'mode': {'decoded': result_mode, 'source': 'post-write-readback'},
+        # 'gatt-read', not 'post-write-readback': this value was read BEFORE
+        # the write above, inside the freshness check. Nothing re-reads MODE
+        # after the write, so labelling it a post-write readback would claim
+        # a confirmation that was never taken. A genuine post-write readback
+        # arrives with the reboot-verification work.
+        'mode': {'decoded': result_mode, 'source': 'gatt-read'},
         'durationMs': int((time.monotonic() - started) * 1000),
     }
-    _audit(command_name, device, token.mode, spec, result)
+    _audit(command_name, device, token.mode, spec, ack=True,
+           verification=verification, duration_ms=result['durationMs'])
     return result
 
 
-def _audit(command_name, device, mode, spec, result, error=None):
+def _audit(command_name, device, mode, spec, ack=False, verification=None,
+           duration_ms=None, error=None):
     """Symbolic names only. Never linking keys, never the opaque blob, never
-    the raw OS identifier."""
+    the raw OS identifier.
+
+    Called from exactly two places: the success path (ack/verification/
+    duration_ms set, error=None) and the rejection path (error set, the rest
+    at their defaults) — so the parameters mirror the real call sites
+    instead of guarding against a shape that never occurs.
+    """
     log.info(
         'BLE WRITE cmd=%s device=%s mode=%s uuid=%s payload=0x%02X '
         'ack=%s verification=%s durationMs=%s error=%s',
@@ -300,9 +365,9 @@ def _audit(command_name, device, mode, spec, result, error=None):
         mode,
         _symbolic_uuid(spec.uuid),
         spec.payload[0],
-        result.get('attAcknowledged') if result else False,
-        result.get('verification') if result else None,
-        result.get('durationMs') if result else None,
+        ack,
+        verification,
+        duration_ms,
         error,
     )
 
