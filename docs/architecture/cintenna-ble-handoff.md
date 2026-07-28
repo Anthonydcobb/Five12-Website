@@ -144,6 +144,16 @@ any fresh clone or lock regeneration. Do not remove the override.
 Designed, 2026-07-27, once the scan-and-read half of the hardware gate passed:
 [`../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md`](../superpowers/specs/2026-07-27-cintenna-ble-write-phase-design.md).
 
+Implementation plan:
+[`../superpowers/plans/2026-07-27-cintenna-ble-write-phase.md`](../superpowers/plans/2026-07-27-cintenna-ble-write-phase.md).
+Hardware acceptance for it:
+[`cintenna-ble-write-acceptance.md`](cintenna-ble-write-acceptance.md).
+
+The write phase keeps every release blocker from the read-only phase except
+"no write path", which becomes "no write path outside the four-command
+allowlist". The four guard tests were inverted rather than deleted — see the
+plan's Tasks 2, 4, 9 and 12.
+
 It deliberately narrows the original tasks 10–18 to **four commands** —
 `set_mode_rx`, `set_mode_tx`, `link`, `unlink` — behind a second gate,
 `FIVE12_BLE_WRITE`. The other four config writes stay deferred; the policy table
