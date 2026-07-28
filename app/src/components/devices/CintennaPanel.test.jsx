@@ -35,6 +35,7 @@ const SNAPSHOT = {
 beforeEach(() => {
   vi.resetAllMocks()
   bleApi.signalBars.mockReturnValue(3)
+  bleApi.fetchBleCapabilities.mockResolvedValue({ bleToolsEnabled: true, bleWriteEnabled: false })
 })
 
 describe('CintennaPanel', () => {
@@ -106,15 +107,145 @@ describe('CintennaPanel', () => {
     expect(await screen.findByText(/no CRMX devices nearby/i)).toBeInTheDocument()
   })
 
-  it('renders no control that could write to a radio', async () => {
-    // RELEASE GATE for this phase.
+  const WRITE_ON = { bleToolsEnabled: true, bleWriteEnabled: true }
+
+  const TX_SNAPSHOT = {
+    osId: 'tx-1',
+    fields: { mode: { decoded: 'tx', raw: '01', source: 'gatt-read', readAt: 1 } },
+    warnings: [],
+  }
+
+  // Note: once the Control section renders, 'TX' appears BOTH as the mode
+  // field and as the active segment of the mode toggle, so findByText would
+  // throw on multiple matches. findAllByText is correct in both states.
+  async function openTx() {
     bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
-    bleApi.fetchBleSnapshot.mockResolvedValue(SNAPSHOT)
+    bleApi.fetchBleSnapshot.mockResolvedValue(TX_SNAPSHOT)
     render(<CintennaPanel />)
-    await userEvent.click(await screen.findByRole('button', { name: /F12L - 1946/ }))
-    for (const label of [/^link$/i, /unlink/i, /set mode/i, /apply/i]) {
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    await screen.findAllByText('TX')
+  }
+
+  // With the dialog open, the panel's trigger and the dialog's confirm share a
+  // label. The confirm button is the last one in the DOM.
+  function confirmButton(label) {
+    return screen.getAllByRole('button', { name: label }).pop()
+  }
+
+  it('renders no write control when the write gate is off', async () => {
+    // RELEASE GATE, inverted: the read-only build must stay read-only.
+    bleApi.fetchBleCapabilities.mockResolvedValue({
+      bleToolsEnabled: true, bleWriteEnabled: false,
+    })
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    bleApi.fetchBleSnapshot.mockResolvedValue(TX_SNAPSHOT)
+    render(<CintennaPanel />)
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    // Single-match findByText on purpose here, unlike openTx(): with the gate
+    // off the mode toggle must not render, so a second 'TX' would mean the
+    // control leaked into the read-only build. Do not "fix" this to findAll.
+    await screen.findByText('TX')
+    for (const label of [/^link$/i, /^unlink$/i, /switch to/i]) {
       expect(screen.queryByRole('button', { name: label })).not.toBeInTheDocument()
     }
+  })
+
+  it('renders no write control before a status read, when the mode is unknown', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    render(<CintennaPanel />)
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+    expect(screen.queryByRole('button', { name: /^link$/i })).not.toBeInTheDocument()
+  })
+
+  it('offers Link but never Unlink on a transmitter', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    await openTx()
+    expect(screen.getByRole('button', { name: /^link$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^unlink$/i })).not.toBeInTheDocument()
+  })
+
+  it('offers Unlink but never Link on a receiver', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.fetchBleDevices.mockResolvedValue(DEVICES)
+    bleApi.fetchBleSnapshot.mockResolvedValue(SNAPSHOT)   // mode rx
+    render(<CintennaPanel />)
+    await userEvent.click(await screen.findByRole('button', { name: /F12L - 1946/ }))
+    await userEvent.click(screen.getByRole('button', { name: /read status/i }))
+    await screen.findAllByText('RX')
+    expect(screen.getByRole('button', { name: /^unlink$/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^link$/i })).not.toBeInTheDocument()
+  })
+
+  it('confirms before writing, and sends the prepared token', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'Any unlinked receiver in range will pair to it.',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'link', attAcknowledged: true, verification: 'ack-only',
+      mode: { decoded: 'tx' }, durationMs: 400,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(bleApi.executeBleCommand).not.toHaveBeenCalled()
+
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/^link$/i))
+
+    await waitFor(() => expect(bleApi.executeBleCommand).toHaveBeenCalledWith('tx-1', {
+      command: 'link', expectedMode: 'tx', confirmationToken: 'tok-1',
+    }))
+  })
+
+  it('never claims a link was made', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'warning copy',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'link', attAcknowledged: true, verification: 'ack-only',
+      mode: { decoded: 'tx' }, durationMs: 400,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/^link$/i))
+
+    expect(await screen.findByText(/not confirmation/i)).toBeInTheDocument()
+    expect(screen.queryByText(/^linked/i)).not.toBeInTheDocument()
+  })
+
+  it('reports an accepted-but-unverified mode change as neither success nor failure', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', token: 'tok-2', ttlS: 60,
+      deviceAlias: 'F12L - 2071', currentMode: 'tx', warning: 'It will restart.',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', attAcknowledged: true,
+      verification: 'accepted-unverified', mode: { decoded: 'tx' }, durationMs: 31000,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /switch to rx/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/switch to rx/i))
+    expect(await screen.findByText(/accepted, but not verified/i)).toBeInTheDocument()
+  })
+
+  it('shows the operator copy when the server refuses the write', async () => {
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockRejectedValue({
+      code: 'wrong-mode', message: 'Link is a transmitter action; Unlink is a receiver action.',
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    expect(await screen.findByText(/transmitter action/i)).toBeInTheDocument()
   })
 
   it('discards a stale snapshot response for a radio that is no longer selected', async () => {

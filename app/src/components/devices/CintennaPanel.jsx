@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchBleDevices, fetchBleSnapshot, signalBars } from '../../lib/bleApi'
+import {
+  executeBleCommand,
+  fetchBleCapabilities,
+  fetchBleDevices,
+  fetchBleSnapshot,
+  prepareBleCommand,
+  signalBars,
+} from '../../lib/bleApi'
+import BleActionDialog from './BleActionDialog'
 import BleEvidenceBadge from './BleEvidenceBadge'
 
 // Language rules from the verified protocol reference, enforced in copy:
@@ -23,6 +31,38 @@ function Bars({ rssi }) {
   )
 }
 
+// Outcome copy. "Accepted, unverified" is a first-class result, not an error:
+// the radio acknowledged the write and did not come back in the new mode.
+// Saying "done" would be a lie and saying "failed" would be one too.
+const OUTCOME = {
+  'ack-only': {
+    tone: 'text-online',
+    text: (r) => `Write accepted by the radio. This is not confirmation that ` +
+                 `a ${r.command === 'link' ? 'link' : 'change'} was made.`,
+  },
+  verified: {
+    tone: 'text-online',
+    text: () => 'Verified — the radio came back in the new mode.',
+  },
+  'accepted-unverified': {
+    tone: 'text-warn',
+    text: () => 'Accepted, but not verified. The radio answered in its previous ' +
+                'mode. Read status to check.',
+  },
+  'device-did-not-return': {
+    tone: 'text-brand-hi',
+    text: () => 'The radio did not come back in time. It may still be ' +
+                'restarting — wait for it to reappear, then read status.',
+  },
+}
+
+const ACTION_LABEL = {
+  link: 'Link',
+  unlink: 'Unlink',
+  set_mode_rx: 'Switch to RX',
+  set_mode_tx: 'Switch to TX',
+}
+
 function Field({ label, value, source, suffix = '' }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-[2px]">
@@ -43,6 +83,19 @@ export default function CintennaPanel() {
   const [snapshot, setSnapshot] = useState(null)
   const [snapError, setSnapError] = useState(null)
   const [reading, setReading] = useState(false)
+  const [writeEnabled, setWriteEnabled] = useState(false)
+  const [pending, setPending] = useState(null)     // {command, prep}
+  const [working, setWorking] = useState(false)
+  const [outcome, setOutcome] = useState(null)
+  const [writeError, setWriteError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchBleCapabilities().then((caps) => {
+      if (alive) setWriteEnabled(Boolean(caps?.bleWriteEnabled))
+    })
+    return () => { alive = false }
+  }, [])
 
   // The roster buttons stay clickable while a read is in flight, so the
   // operator can switch radios mid-read. readStatus's closure freezes
@@ -85,6 +138,55 @@ export default function CintennaPanel() {
       // button never gets stuck showing "reading…" for whichever device
       // is selected now.
       setReading(false)
+    }
+  }
+
+  // Step one: ask the server for the radio's real mode and a confirmation
+  // bound to it. Nothing is written until the operator confirms.
+  const startCommand = async (command) => {
+    setWriteError(null)
+    setOutcome(null)
+    try {
+      const prep = await prepareBleCommand(selected.osId, command)
+      setPending({ command, prep })
+    } catch (err) {
+      setWriteError(err)
+    }
+  }
+
+  const confirmCommand = async () => {
+    const { command, prep } = pending
+    setWorking(true)
+    try {
+      const result = await executeBleCommand(selected.osId, {
+        command,
+        expectedMode: prep.currentMode,
+        confirmationToken: prep.token,
+      })
+      setOutcome(result)
+      setPending(null)
+      // Do NOT clear the snapshot: the Control section is only rendered when
+      // one exists, so blanking it here would take the outcome message down
+      // with it and the operator would never see what happened.
+      //
+      // Instead fold the post-write mode reading in, keeping its evidence
+      // source honest. A mode we could not verify is left alone rather than
+      // overwritten with a value we do not have.
+      if (result.mode?.decoded) {
+        setSnapshot((prev) => (prev ? {
+          ...prev,
+          fields: {
+            ...prev.fields,
+            mode: { ...prev.fields.mode, decoded: result.mode.decoded,
+                    source: 'post-write-readback' },
+          },
+        } : prev))
+      }
+    } catch (err) {
+      setWriteError(err)
+      setPending(null)
+    } finally {
+      setWorking(false)
     }
   }
 
@@ -218,11 +320,90 @@ export default function CintennaPanel() {
               )}
             </div>
           )}
+
+          {/* Writes are a separate opt-in, and we must know the radio's real
+              mode before offering anything. Absent, not disabled: a control
+              that cannot be used is noise. */}
+          {writeEnabled && snapshot && selectedNearby && fields.mode?.decoded && (
+            <div className="mt-3 border-t border-[var(--color-surface-2)] pt-2 space-y-2">
+              <div className="text-[8px] font-mono text-text-muted uppercase tracking-widest">
+                control
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[9px] font-mono text-text-muted">mode</span>
+                {['rx', 'tx'].map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={fields.mode.decoded === m}
+                    aria-pressed={fields.mode.decoded === m}
+                    onClick={() => startCommand(m === 'rx' ? 'set_mode_rx' : 'set_mode_tx')}
+                    className={'text-[9px] font-mono px-2 py-1 rounded-sm border ' +
+                      (fields.mode.decoded === m
+                        ? 'border-brand bg-brand-dim/30 text-text'
+                        : 'border-[var(--color-border)] hover:border-brand')}
+                  >
+                    {fields.mode.decoded === m ? m.toUpperCase() : `Switch to ${m.toUpperCase()}`}
+                  </button>
+                ))}
+              </div>
+
+              {/* Never both. Link is a transmitter action; Unlink is a
+                  receiver action. The server re-checks this regardless. */}
+              <div>
+                {fields.mode.decoded === 'tx' && (
+                  <button
+                    type="button"
+                    onClick={() => startCommand('link')}
+                    className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
+                  >
+                    Link
+                  </button>
+                )}
+                {fields.mode.decoded === 'rx' && (
+                  <button
+                    type="button"
+                    onClick={() => startCommand('unlink')}
+                    className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
+                  >
+                    Unlink
+                  </button>
+                )}
+              </div>
+
+              {outcome && (
+                <div className={'text-[10px] font-mono leading-relaxed ' +
+                  (OUTCOME[outcome.verification]?.tone || 'text-text-muted')}>
+                  {OUTCOME[outcome.verification]?.text(outcome) || 'Done.'}
+                </div>
+              )}
+
+              {writeError && (
+                <div className="text-[10px] font-mono text-amber-400 leading-relaxed">
+                  {writeError.message}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
+      {pending && (
+        <BleActionDialog
+          deviceAlias={pending.prep.deviceAlias || selected.localName}
+          hardwareId={selected.hardwareId}
+          warning={pending.prep.warning}
+          actionLabel={ACTION_LABEL[pending.command]}
+          busy={working}
+          onConfirm={confirmCommand}
+          onCancel={() => setPending(null)}
+        />
+      )}
+
       <div className="text-[8px] text-text-muted font-mono border-t border-[var(--color-surface-2)] pt-2">
-        read-only · passive BLE advertisement + connected GATT reads · no configuration writes
+        passive BLE advertisement + connected GATT reads · writes are allowlisted,
+        mode-gated and confirmed · an acknowledgement is not proof of RF association
       </div>
     </div>
   )
