@@ -7,7 +7,12 @@ export async function fetchBleCapabilities() {
     const { data } = await axios.get('/api/ble/capabilities')
     return data
   } catch {
-    return { bleToolsEnabled: false, adapterAvailable: false, platformSupported: true }
+    return {
+      bleToolsEnabled: false,
+      bleWriteEnabled: false,
+      adapterAvailable: false,
+      platformSupported: true,
+    }
   }
 }
 
@@ -48,4 +53,42 @@ export function signalBars(rssi) {
   if (rssi >= -65) return 3
   if (rssi >= -80) return 2
   return 1
+}
+
+// The backend sends typed errors with operator-ready copy. Pass them through
+// rather than replacing them with a generic message — same contract as
+// fetchBleSnapshot. Note these reject with a plain object, not an Error;
+// consumers read `.message`, so do NOT add instanceof Error checks against it.
+function rethrowTyped(err, fallback) {
+  const payload = err?.response?.data
+  throw payload?.code ? payload : { code: 'unknown', message: fallback }
+}
+
+// Step one of a write. Reads the radio's real mode server-side and returns a
+// single-use confirmation bound to it, plus the warning copy the dialog must
+// render verbatim. Nothing is written by this call.
+export async function prepareBleCommand(osId, command) {
+  try {
+    const { data } = await axios.post(
+      `/api/ble/devices/${encodeURIComponent(osId)}/commands/prepare`,
+      { command },
+    )
+    return data
+  } catch (err) {
+    rethrowTyped(err, 'Could not prepare that action.')
+  }
+}
+
+// Step two. The body carries a command NAME only — never a characteristic
+// UUID and never a payload byte. The server owns that mapping.
+export async function executeBleCommand(osId, { command, expectedMode, confirmationToken }) {
+  try {
+    const { data } = await axios.post(
+      `/api/ble/devices/${encodeURIComponent(osId)}/commands`,
+      { command, expectedMode, confirmationToken },
+    )
+    return data
+  } catch (err) {
+    rethrowTyped(err, 'Could not complete that action.')
+  }
 }

@@ -1,6 +1,13 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import axios from 'axios'
-import { fetchBleDevices, fetchBleSnapshot, fetchBleCapabilities, signalBars } from './bleApi'
+import {
+  executeBleCommand,
+  fetchBleDevices,
+  fetchBleSnapshot,
+  fetchBleCapabilities,
+  prepareBleCommand,
+  signalBars,
+} from './bleApi'
 
 vi.mock('axios')
 
@@ -52,8 +59,8 @@ describe('bleApi', () => {
 
   it('reports capabilities as disabled when the route is absent', async () => {
     axios.get.mockRejectedValue(new Error('404'))
-    expect(await fetchBleCapabilities()).toEqual({
-      bleToolsEnabled: false, adapterAvailable: false, platformSupported: true,
+    expect(await fetchBleCapabilities()).toMatchObject({
+      bleToolsEnabled: false, adapterAvailable: false, platformSupported: true, bleWriteEnabled: false,
     })
   })
 
@@ -63,5 +70,61 @@ describe('bleApi', () => {
     expect(signalBars(-75)).toBe(2)
     expect(signalBars(-95)).toBe(1)
     expect(signalBars(null)).toBe(0)
+  })
+})
+
+describe('prepareBleCommand', () => {
+  it('posts only the command name', async () => {
+    axios.post.mockResolvedValue({ data: { token: 't', currentMode: 'tx' } })
+    await prepareBleCommand('tx-1', 'link')
+    expect(axios.post).toHaveBeenCalledWith(
+      '/api/ble/devices/tx-1/commands/prepare',
+      { command: 'link' },
+    )
+  })
+
+  it('encodes an os id containing a colon', async () => {
+    axios.post.mockResolvedValue({ data: {} })
+    await prepareBleCommand('AA:BB:CC', 'link')
+    expect(axios.post.mock.calls[0][0]).toBe(
+      '/api/ble/devices/AA%3ABB%3ACC/commands/prepare')
+  })
+
+  it('rethrows the backend typed error so the operator sees its copy', async () => {
+    axios.post.mockRejectedValue({
+      response: { data: { code: 'wrong-mode', message: 'Link is a transmitter action.' } },
+    })
+    await expect(prepareBleCommand('rx-1', 'link')).rejects.toMatchObject({
+      code: 'wrong-mode',
+    })
+  })
+
+  it('falls back to a generic typed error when the backend sends nothing usable', async () => {
+    axios.post.mockRejectedValue(new Error('network down'))
+    await expect(prepareBleCommand('tx-1', 'link')).rejects.toMatchObject({
+      code: 'unknown',
+    })
+  })
+})
+
+describe('executeBleCommand', () => {
+  it('sends the command, expected mode and confirmation', async () => {
+    axios.post.mockResolvedValue({ data: { attAcknowledged: true } })
+    await executeBleCommand('tx-1', {
+      command: 'link', expectedMode: 'tx', confirmationToken: 'tok',
+    })
+    expect(axios.post).toHaveBeenCalledWith('/api/ble/devices/tx-1/commands', {
+      command: 'link', expectedMode: 'tx', confirmationToken: 'tok',
+    })
+  })
+
+  it('never sends a uuid or a payload', async () => {
+    axios.post.mockResolvedValue({ data: {} })
+    await executeBleCommand('tx-1', {
+      command: 'link', expectedMode: 'tx', confirmationToken: 'tok',
+    })
+    const body = axios.post.mock.calls[0][1]
+    expect(Object.keys(body).sort()).toEqual(
+      ['command', 'confirmationToken', 'expectedMode'])
   })
 })
