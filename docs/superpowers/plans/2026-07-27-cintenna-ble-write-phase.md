@@ -2548,13 +2548,33 @@ describe('BleActionDialog', () => {
     expect(onConfirm).toHaveBeenCalledTimes(1)
   })
 
-  it('does not confirm on Enter', async () => {
-    // The whole reason this is not window.confirm: muscle memory must not be
-    // able to fire an action that can black out a fixture.
+  it('cancels the Enter keydown, so no default activation can occur', () => {
+    // THIS is the assertion that pins the guard. jsdom does not implement a
+    // browser's native "Enter activates the focused button", so a purely
+    // behavioural test cannot prove the guard exists — it would pass just as
+    // happily with the preventDefault deleted. fireEvent returns false when a
+    // handler called preventDefault, so this fails the moment the guard goes.
+    setup()
+    expect(fireEvent.keyDown(document, { key: 'Enter' })).toBe(false)
+  })
+
+  it('does not confirm on Enter with the confirm button focused', async () => {
+    // The real operator path: tab to the enabled control, hit Enter out of
+    // muscle memory. Deliberately paired with the test above — on its own
+    // this one passes in jsdom whether or not the guard exists.
     const { onConfirm } = setup()
     await userEvent.click(screen.getByRole('checkbox'))
+    const confirm = screen.getByRole('button', { name: /^link$/i })
+    confirm.focus()
+    expect(confirm).toHaveFocus()
     await userEvent.keyboard('{Enter}')
     expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  it('ignores Escape while the command is in flight', async () => {
+    const { onCancel } = setup({ busy: true })
+    await userEvent.keyboard('{Escape}')
+    expect(onCancel).not.toHaveBeenCalled()
   })
 
   it('cancels on Escape', async () => {
