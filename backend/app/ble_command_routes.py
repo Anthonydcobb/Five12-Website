@@ -78,8 +78,8 @@ def _run(coro_factory, os_id, sim):
     if loop is None:
         return jsonify(ScanLoopUnavailable(detail=os_id).to_dict()), 409
 
-    future = asyncio.run_coroutine_threadsafe(coro_factory(service.registry), loop)
     try:
+        future = asyncio.run_coroutine_threadsafe(coro_factory(service.registry), loop)
         return jsonify(future.result(timeout=COMMAND_FUTURE_TIMEOUT))
     except FutureTimeoutError:
         future.cancel()

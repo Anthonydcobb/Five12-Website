@@ -136,6 +136,10 @@ export default function CintennaPanel() {
     setReading(true)
     setSnapError(null)
     setSnapshot(null)
+    // A freshly-read snapshot is a new, independent look at the radio; a
+    // previous write's outcome message must not keep sitting beside it as if
+    // it were still relevant to what this read just found.
+    setOutcome(null)
     try {
       const data = await fetchBleSnapshot(requestedOsId)
       // Only apply the response if the operator is still looking at the
@@ -197,14 +201,17 @@ export default function CintennaPanel() {
       //
       // Instead fold the post-write mode reading in, keeping its evidence
       // source honest. A mode we could not verify is left alone rather than
-      // overwritten with a value we do not have.
+      // overwritten with a value we do not have. The source is the server's
+      // own label for how it got this value (see command_service.py's
+      // execute_command) — never substituted with a client-side guess, since
+      // an ack-only command's mode was read BEFORE the write, not after it.
       if (result.mode?.decoded) {
         setSnapshot((prev) => (prev ? {
           ...prev,
           fields: {
             ...prev.fields,
             mode: { ...prev.fields.mode, decoded: result.mode.decoded,
-                    source: 'post-write-readback' },
+                    source: result.mode.source },
           },
         } : prev))
       }
@@ -349,54 +356,72 @@ export default function CintennaPanel() {
 
           {/* Writes are a separate opt-in, and we must know the radio's real
               mode before offering anything. Absent, not disabled: a control
-              that cannot be used is noise. */}
-          {writeEnabled && snapshot && selectedNearby && fields.mode?.decoded && (
+              that cannot be used is noise.
+
+              The outcome/error messages below are deliberately NOT gated on
+              selectedNearby, even though the container as a whole still is.
+              A mode write reboots the radio, and the roster drops it within
+              seconds of the write landing — well before the operator has
+              finished reading a "device did not come back" message. Gating
+              the outcome on presence-in-roster would make the single most
+              alarming result in the app auto-hide itself. The outcome
+              describes something that already happened to the device the
+              command was prepared for; it does not depend on the radio
+              still being nearby right now. Only the interactive controls
+              (mode toggle, Link/Unlink) stay gated on selectedNearby — firing
+              a new command at a radio that just walked out of range is a
+              different question from showing what the last command did. */}
+          {writeEnabled && snapshot && fields.mode?.decoded && (
             <div className="mt-3 border-t border-[var(--color-surface-2)] pt-2 space-y-2">
               <div className="text-[8px] font-mono text-text-muted uppercase tracking-widest">
                 control
               </div>
 
-              <div className="flex items-center gap-2">
-                <span className="text-[9px] font-mono text-text-muted">mode</span>
-                {['rx', 'tx'].map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    disabled={fields.mode.decoded === m}
-                    aria-pressed={fields.mode.decoded === m}
-                    onClick={() => startCommand(m === 'rx' ? 'set_mode_rx' : 'set_mode_tx')}
-                    className={'text-[9px] font-mono px-2 py-1 rounded-sm border ' +
-                      (fields.mode.decoded === m
-                        ? 'border-brand bg-brand-dim/30 text-text'
-                        : 'border-[var(--color-border)] hover:border-brand')}
-                  >
-                    {fields.mode.decoded === m ? m.toUpperCase() : `Switch to ${m.toUpperCase()}`}
-                  </button>
-                ))}
-              </div>
+              {selectedNearby && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[9px] font-mono text-text-muted">mode</span>
+                    {['rx', 'tx'].map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        disabled={fields.mode.decoded === m}
+                        aria-pressed={fields.mode.decoded === m}
+                        onClick={() => startCommand(m === 'rx' ? 'set_mode_rx' : 'set_mode_tx')}
+                        className={'text-[9px] font-mono px-2 py-1 rounded-sm border ' +
+                          (fields.mode.decoded === m
+                            ? 'border-brand bg-brand-dim/30 text-text'
+                            : 'border-[var(--color-border)] hover:border-brand')}
+                      >
+                        {fields.mode.decoded === m ? m.toUpperCase() : `Switch to ${m.toUpperCase()}`}
+                      </button>
+                    ))}
+                  </div>
 
-              {/* Never both. Link is a transmitter action; Unlink is a
-                  receiver action. The server re-checks this regardless. */}
-              <div>
-                {fields.mode.decoded === 'tx' && (
-                  <button
-                    type="button"
-                    onClick={() => startCommand('link')}
-                    className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
-                  >
-                    Link
-                  </button>
-                )}
-                {fields.mode.decoded === 'rx' && (
-                  <button
-                    type="button"
-                    onClick={() => startCommand('unlink')}
-                    className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
-                  >
-                    Unlink
-                  </button>
-                )}
-              </div>
+                  {/* Never both. Link is a transmitter action; Unlink is a
+                      receiver action. The server re-checks this regardless. */}
+                  <div>
+                    {fields.mode.decoded === 'tx' && (
+                      <button
+                        type="button"
+                        onClick={() => startCommand('link')}
+                        className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
+                      >
+                        Link
+                      </button>
+                    )}
+                    {fields.mode.decoded === 'rx' && (
+                      <button
+                        type="button"
+                        onClick={() => startCommand('unlink')}
+                        className="text-[9px] font-mono px-3 py-1 border border-brand text-brand-hi rounded-sm hover:bg-brand/10"
+                      >
+                        Unlink
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
 
               {outcome && (
                 <div className={'text-[10px] font-mono leading-relaxed ' +
@@ -419,6 +444,7 @@ export default function CintennaPanel() {
         <BleActionDialog
           deviceAlias={pending.prep.deviceAlias || pending.device.localName}
           hardwareId={pending.device.hardwareId}
+          currentMode={pending.prep.currentMode}
           warning={pending.prep.warning}
           actionLabel={ACTION_LABEL[pending.command]}
           busy={working}

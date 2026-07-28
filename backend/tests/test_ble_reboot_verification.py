@@ -101,6 +101,10 @@ def test_mode_change_verified_when_the_radio_returns_in_the_new_mode(rebooting):
     assert result['verification'] == 'verified'
     assert result['mode']['decoded'] == 'tx'
     assert result['attAcknowledged'] is True
+    # PROVENANCE, pinned. A genuine re-read happened after the write here
+    # (the reconnect-and-read loop in _verify_after_reboot), so this one has
+    # actually earned the 'post-write-readback' label.
+    assert result['mode']['source'] == 'post-write-readback'
 
 
 def test_mode_change_tolerates_failed_reconnect_attempts(rebooting):
@@ -118,6 +122,9 @@ def test_mode_change_accepted_unverified_when_the_old_mode_comes_back(rebooting)
                               attempts=[b'\x00'])
     assert result['verification'] == 'accepted-unverified'
     assert result['attAcknowledged'] is True
+    # The radio DID answer post-write, just with the old mode — a genuine
+    # re-read still happened, so 'post-write-readback' is honest here too.
+    assert result['mode']['source'] == 'post-write-readback'
 
 
 def test_mode_change_reports_a_radio_that_never_comes_back(rebooting):
@@ -127,6 +134,13 @@ def test_mode_change_reports_a_radio_that_never_comes_back(rebooting):
     assert result['verification'] == 'device-did-not-return'
     assert result['mode']['decoded'] is None
     assert result['attAcknowledged'] is True
+    # PROVENANCE, pinned — Fix 1b. Every reconnection attempt failed, so
+    # nothing was ever read after the write. Labelling this
+    # 'post-write-readback' (as decoded is already honestly None) would still
+    # claim a confirmation that was never taken. None matches decoded's own
+    # "genuinely unknown, nothing fabricated" convention, and the frontend's
+    # evidence badge already renders nothing for a falsy source.
+    assert result['mode']['source'] is None
 
 
 def test_a_failed_verification_is_never_reported_as_an_error(rebooting):

@@ -6,6 +6,7 @@ import BleActionDialog from './BleActionDialog'
 const PROPS = {
   deviceAlias: 'F12L - 2071',
   hardwareId: 'F1400000',
+  currentMode: 'tx',
   warning: 'Any unlinked receiver in range will pair to it.',
   actionLabel: 'Link',
   busy: false,
@@ -28,6 +29,19 @@ describe('BleActionDialog', () => {
   it('renders the server-supplied warning verbatim', () => {
     setup()
     expect(screen.getByText(PROPS.warning)).toBeInTheDocument()
+  })
+
+  it('shows the mode the server just read off the radio', () => {
+    // Fix 4: prepare_command's currentMode exists so the operator confirms
+    // against server-side fact, not whatever their browser last rendered —
+    // so it must actually reach the dialog.
+    setup()
+    expect(screen.getByText(/TX/)).toBeInTheDocument()
+  })
+
+  it('does not render a mode line when none was supplied', () => {
+    setup({ currentMode: undefined })
+    expect(screen.queryByText(/radio's mode/i)).not.toBeInTheDocument()
   })
 
   it('disables confirm until the operator acknowledges', async () => {

@@ -19,7 +19,16 @@ this step during a show.
 
 - [ ] With `FIVE12_BLE_WRITE` unset, the Cintenna panel shows no mode toggle,
       no Link, and no Unlink
-- [ ] With it unset, `POST /api/ble/devices/x/commands` returns 404
+- [ ] With it unset, `POST /api/ble/devices/x/commands` returns 404 **or**
+      405 — either is correct. No POST handler is registered for that path
+      with the gate off; whether the app matches it against the read-only
+      SPA catch-all (`/<path:path>`, GET/HEAD/OPTIONS only, which yields 405
+      Method Not Allowed) or against nothing at all (a bare 404) depends on
+      what else the app has registered, not on the gate. See
+      `backend/tests/test_ble_command_routes.py`'s
+      `test_command_routes_are_unreachable_with_the_write_gate_off` for the
+      full explanation — do not mark this FAILED on a 405, and do not "fix"
+      this checklist item back to a bare 404 requirement.
 - [ ] With both gates unset, Patch, Labels, Network and Devices all work
 
 ## Reads still work

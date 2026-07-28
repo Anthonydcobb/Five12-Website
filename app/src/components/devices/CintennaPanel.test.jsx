@@ -187,7 +187,7 @@ describe('CintennaPanel', () => {
     })
     bleApi.executeBleCommand.mockResolvedValue({
       command: 'link', attAcknowledged: true, verification: 'ack-only',
-      mode: { decoded: 'tx' }, durationMs: 400,
+      mode: { decoded: 'tx', source: 'gatt-read' }, durationMs: 400,
     })
     await openTx()
     await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
@@ -210,7 +210,7 @@ describe('CintennaPanel', () => {
     })
     bleApi.executeBleCommand.mockResolvedValue({
       command: 'link', attAcknowledged: true, verification: 'ack-only',
-      mode: { decoded: 'tx' }, durationMs: 400,
+      mode: { decoded: 'tx', source: 'gatt-read' }, durationMs: 400,
     })
     await openTx()
     await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
@@ -221,6 +221,32 @@ describe('CintennaPanel', () => {
     expect(screen.queryByText(/^linked/i)).not.toBeInTheDocument()
   })
 
+  it('renders the source the server reports for the post-command mode reading, not a hardcoded one', async () => {
+    // Fix 1 regression. command_service.py deliberately labels an ack-only
+    // command's mode 'gatt-read' because that value was read BEFORE the
+    // write, not after it (see execute_command's comment). Before the fix,
+    // the panel discarded result.mode.source and hardcoded
+    // 'post-write-readback' here regardless of what the server said —
+    // forging a confirmation that was never taken.
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'warning copy',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'link', attAcknowledged: true, verification: 'ack-only',
+      mode: { decoded: 'tx', source: 'gatt-read' }, durationMs: 400,
+    })
+    await openTx()
+    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    await userEvent.click(screen.getByRole('checkbox'))
+    await userEvent.click(confirmButton(/^link$/i))
+    await screen.findByText(/not confirmation/i)
+
+    expect(screen.getByText('GATT read')).toBeInTheDocument()
+    expect(screen.queryByText(/post-write/i)).not.toBeInTheDocument()
+  })
+
   it('reports an accepted-but-unverified mode change as neither success nor failure', async () => {
     bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
     bleApi.prepareBleCommand.mockResolvedValue({
@@ -229,7 +255,8 @@ describe('CintennaPanel', () => {
     })
     bleApi.executeBleCommand.mockResolvedValue({
       command: 'set_mode_rx', attAcknowledged: true,
-      verification: 'accepted-unverified', mode: { decoded: 'tx' }, durationMs: 31000,
+      verification: 'accepted-unverified',
+      mode: { decoded: 'tx', source: 'post-write-readback' }, durationMs: 31000,
     })
     await openTx()
     await userEvent.click(screen.getByRole('button', { name: /switch to rx/i }))
@@ -304,7 +331,7 @@ describe('CintennaPanel', () => {
     })
     bleApi.executeBleCommand.mockResolvedValue({
       command: 'link', attAcknowledged: true, verification: 'ack-only',
-      mode: { decoded: 'tx' }, durationMs: 400,
+      mode: { decoded: 'tx', source: 'gatt-read' }, durationMs: 400,
     })
     bleApi.fetchBleSnapshot.mockImplementation((osId) =>
       Promise.resolve(osId === 'tx-1' ? TX_SNAPSHOT : SNAPSHOT))
@@ -359,20 +386,77 @@ describe('CintennaPanel', () => {
     }
   })
 
-  it('renders its own copy for a verified outcome', async () => {
+  it('keeps showing a write outcome after the radio drops out of the roster, while hiding the controls', async () => {
+    // Fix 5: a mode write reboots the radio, and the roster drops it within
+    // about half a minute — often before the operator has finished reading
+    // a "device did not come back" message. Before the fix, the outcome and
+    // write-error text were gated on the SAME selectedNearby check as the
+    // interactive controls, so the single most alarming outcome in the app
+    // would silently vanish. The outcome describes something that already
+    // happened to the device the command was prepared for; it must survive
+    // the radio's temporary absence from the passive scan even though the
+    // controls correctly disappear.
     bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    const ROSTER_WITHOUT_TX1 = { deviceCount: 1, devices: [DEVICES.devices[0]] }
+    bleApi.fetchBleDevices
+      .mockResolvedValueOnce(DEVICES)
+      .mockResolvedValue(ROSTER_WITHOUT_TX1)
+    bleApi.fetchBleSnapshot.mockResolvedValue(TX_SNAPSHOT)
     bleApi.prepareBleCommand.mockResolvedValue({
-      command: 'link', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
-      currentMode: 'tx', warning: 'warning copy',
+      command: 'set_mode_rx', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'It will restart.',
     })
     bleApi.executeBleCommand.mockResolvedValue({
-      command: 'link', attAcknowledged: true, verification: 'verified',
-      mode: { decoded: 'tx' }, durationMs: 400,
+      command: 'set_mode_rx', attAcknowledged: true,
+      verification: 'device-did-not-return',
+      mode: { decoded: null, source: null }, durationMs: 31000,
+    })
+
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    try {
+      render(<CintennaPanel />)
+      await user.click(await screen.findByRole('button', { name: /F12L - 2071/ }))
+      await user.click(screen.getByRole('button', { name: /read status/i }))
+      await screen.findAllByText('TX')
+
+      await user.click(screen.getByRole('button', { name: /switch to rx/i }))
+      await user.click(screen.getByRole('checkbox'))
+      await user.click(confirmButton(/switch to rx/i))
+      expect(await screen.findByText(/did not come back in time/i)).toBeInTheDocument()
+
+      // Next 5s poll returns a roster that no longer includes tx-1 — the
+      // reboot the write itself triggered.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+
+      expect(await screen.findByText(/no longer nearby/i)).toBeInTheDocument()
+      expect(screen.getByText(/did not come back in time/i)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /switch to/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /^link$/i })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('renders its own copy for a verified outcome', async () => {
+    // Fix 6c: 'link' is always ack-only in command_service.py (see COMMANDS)
+    // and can never come back 'verified' — only a reboot-tolerant mode
+    // command can. Use set_mode_rx, mirroring the accepted-unverified and
+    // device-did-not-return tests below, so this pins a combination the
+    // server can actually produce.
+    bleApi.fetchBleCapabilities.mockResolvedValue(WRITE_ON)
+    bleApi.prepareBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', token: 'tok-1', ttlS: 60, deviceAlias: 'F12L - 2071',
+      currentMode: 'tx', warning: 'It will restart.',
+    })
+    bleApi.executeBleCommand.mockResolvedValue({
+      command: 'set_mode_rx', attAcknowledged: true, verification: 'verified',
+      mode: { decoded: 'rx', source: 'post-write-readback' }, durationMs: 400,
     })
     await openTx()
-    await userEvent.click(screen.getByRole('button', { name: /^link$/i }))
+    await userEvent.click(screen.getByRole('button', { name: /switch to rx/i }))
     await userEvent.click(screen.getByRole('checkbox'))
-    await userEvent.click(confirmButton(/^link$/i))
+    await userEvent.click(confirmButton(/switch to rx/i))
     expect(await screen.findByText(/verified — the radio came back in the new mode/i))
       .toBeInTheDocument()
   })
@@ -385,7 +469,12 @@ describe('CintennaPanel', () => {
     })
     bleApi.executeBleCommand.mockResolvedValue({
       command: 'set_mode_rx', attAcknowledged: true,
-      verification: 'device-did-not-return', mode: { decoded: 'tx' }, durationMs: 31000,
+      verification: 'device-did-not-return',
+      // decoded and source are both null here: every reconnection attempt
+      // failed, so nothing was ever read after the write (see
+      // command_service.py's execute_command). Nothing numeric is claimed
+      // and nothing is attributed to a source that never fired.
+      mode: { decoded: null, source: null }, durationMs: 31000,
     })
     await openTx()
     await userEvent.click(screen.getByRole('button', { name: /switch to rx/i }))

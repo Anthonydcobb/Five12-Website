@@ -4,6 +4,7 @@ const LABELS = {
   'service-uuid': 'service UUID',
   'manufacturer-data': 'mfr data',
   'gatt-read': 'GATT read',
+  'post-write-readback': 'post-write readback',
   mirror: 'mirror',
   sim: 'simulated',
 }

@@ -98,6 +98,11 @@ def test_link_writes_exactly_05_to_link_action(patched):
     assert len(patched['client'].writes) == 1
     assert result['attAcknowledged'] is True
     assert result['verification'] == 'ack-only'
+    # PROVENANCE, pinned. An ack-only command's mode was read BEFORE the
+    # write, inside the freshness check — nothing re-reads MODE after it —
+    # so 'gatt-read' is the honest label. 'post-write-readback' here would
+    # claim a confirmation that was never taken (see execute_command).
+    assert result['mode']['source'] == 'gatt-read'
 
 
 def test_unlink_writes_exactly_00_to_link_action(patched):
@@ -105,6 +110,7 @@ def test_unlink_writes_exactly_00_to_link_action(patched):
     patched['client'].assert_write(c.LINK_ACTION, bytes([0x00]))
     assert len(patched['client'].writes) == 1
     assert result['verification'] == 'ack-only'
+    assert result['mode']['source'] == 'gatt-read'
 
 
 def _walk(obj):

@@ -368,9 +368,20 @@ async def execute_command(os_id, command_name, expected_mode, token_value,
         target = 'rx' if command_name == 'set_mode_rx' else 'tx'
         verification, result_mode = await _verify_after_reboot(
             os_id, target, sleep=sleep, sim=sim)
-        # A genuine re-read happened after the write, so this one has
-        # actually earned the 'post-write-readback' label.
-        source = 'post-write-readback'
+        if verification == 'device-did-not-return':
+            # Every reconnection attempt inside _verify_after_reboot's window
+            # failed, so nothing was ever read after the write. decoded is
+            # already None here (see _verify_after_reboot's return) — nothing
+            # numeric is claimed — and the source must be equally honest
+            # rather than borrowing the label a real re-read earns. None
+            # matches the same "genuinely unknown, nothing fabricated"
+            # convention `known_mode` uses above, and the frontend's evidence
+            # badge already renders nothing for a falsy source.
+            source = None
+        else:
+            # A genuine re-read happened after the write, so this one has
+            # actually earned the 'post-write-readback' label.
+            source = 'post-write-readback'
 
     result = {
         'command': command_name,

@@ -13,10 +13,15 @@ from app.five12_ble.scanner import get_scan_service
 
 @pytest.fixture(scope='module')
 def ble_app():
+    # ENABLE_BLE_WRITE is pinned False rather than left to inherit whatever
+    # the process environment happens to have (e.g. FIVE12_BLE_WRITE=1 during
+    # the hardware acceptance walkthrough). This app must stay the read-only
+    # build regardless of what FIVE12_BLE_WRITE is set to outside the test.
     return create_app({
         'TESTING': True,
         'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
         'ENABLE_BLE_TOOLS': True,
+        'ENABLE_BLE_WRITE': False,
     })
 
 

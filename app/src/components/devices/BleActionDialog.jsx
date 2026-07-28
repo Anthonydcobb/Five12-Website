@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 // a real modal, Enter does nothing, and confirm stays disabled until the
 // operator ticks an acknowledgement.
 export default function BleActionDialog({
-  deviceAlias, hardwareId, warning, actionLabel, busy, onConfirm, onCancel,
+  deviceAlias, hardwareId, currentMode, warning, actionLabel, busy, onConfirm, onCancel,
 }) {
   const [acknowledged, setAcknowledged] = useState(false)
 
@@ -36,6 +36,18 @@ export default function BleActionDialog({
           <div className="text-[8px] font-mono text-text-muted mt-[2px]">
             hardware id {hardwareId}
           </div>
+          {currentMode && (
+            // prepare_command reads the radio's mode fresh, server-side, at
+            // the moment this dialog was opened — so the operator confirms
+            // against what the radio actually is right now, not whatever
+            // was last rendered in their browser. Deliberately styled the
+            // same as the muted hardware-id line above, not the warning
+            // below: this is confirmatory context, not the thing being
+            // agreed to.
+            <div className="text-[8px] font-mono text-text-muted mt-[2px]">
+              radio's mode, as just read from the device: {currentMode.toUpperCase()}
+            </div>
+          )}
         </div>
 
         {/* Server-supplied copy, rendered verbatim: the text the operator
