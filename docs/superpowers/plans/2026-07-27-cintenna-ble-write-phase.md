@@ -1973,7 +1973,6 @@ def test_posting_to_a_command_route_cannot_reach_a_handler_with_the_gate_off(rea
                  '/api/ble/devices/sim-cintenna-tx/commands/prepare'):
         status = read_only_client.post(path, json={'command': 'link'}).status_code
         assert status in (404, 405)
-        assert status not in (200, 403)
 
 
 def test_exactly_two_mutating_routes_exist_with_the_gate_on():
