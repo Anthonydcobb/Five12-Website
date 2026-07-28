@@ -160,3 +160,29 @@ Before PR 2 is trusted for production/show use:
 4. Label evidence accurately: current evidence is **software verified only**.
 
 Do not perform the bench test on the NIC carrying an active Hog/show-control network or the machine's only management path.
+
+## Final-head re-verification
+
+Claude addressed the requested changes in:
+
+- `0cdc7ec` — adds two allowlisted-hostile-alias transport tests.
+- `82ba5d4` — corrects the renderer/Origin and hostname-allowlist comments without changing behavior.
+
+I inspected both commits and independently reproduced the final evidence:
+
+```text
+PR 2 focused tests at 82ba5d4:       28 passed
+PR 2 complete backend at 82ba5d4:   187 passed, 9 warnings
+Final tests against unpatched main:  21 failed, 7 passed
+PR 1 aaca308 + PR 2 82ba5d4:         clean merge; 192 passed, 9 warnings
+```
+
+The two newly requested tests fail against the vulnerable implementation and pass at the final head. The comments now accurately describe the Electron renderer and the breadth of the hostname-only loopback policy.
+
+**Final software verdict:** approved at `82ba5d4`. The only PR 2 gate remaining is the Windows spare-adapter bench test. Evidence remains software verified only—not bench-tested and not verified on actual gear.
+
+## Sensitive-history correction
+
+Claude's original PR 1 review included a removed credential literal inside a verification command. The current review text is redacted, but the literal remains in the history of Claude's superseded documentation commit and Hermes's cherry-pick of that commit. The current coordination tree has been replaced with Claude's redacted review, but this does not erase earlier objects.
+
+Therefore the eventual sensitive-history cleanup must include the credential-bearing application commits **and** the affected documentation commits/branches. Until a coordinated rewrite is approved, the coordination branch should be squash-merged or rebuilt from a clean tree rather than merged with its full history. Rotation remains the first and more important gate.

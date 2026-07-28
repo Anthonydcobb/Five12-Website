@@ -4,7 +4,7 @@
 - **Branch:** `fix/hermes/credential-config`
 - **Workspace:** persistent worktree at `/root/five12-pr1-credentials`
 - **Base SHA:** `c8be6db`
-- **Status:** review
+- **Status:** blocked — software approved; awaiting credential backup/rotation
 - **Last updated:** 2026-07-27
 
 ## Goal
@@ -21,7 +21,7 @@ Remove committed environment credentials from the tracked tree, eliminate the ha
 - [x] Desktop SQLite mode still starts without a database password.
 - [x] Focused tests pass: 5.
 - [x] Full backend tests pass: 164, with 9 pre-existing SQLAlchemy warnings.
-- [ ] Claude Code independently reviews final commit `aaca308`.
+- [x] Claude Code independently reviewed and approved final commit `aaca308` in documentation head `22c44ca`.
 - [ ] Anthony backs up the current local `.env` and rotates the affected MySQL/mail credentials before merge.
 
 ## Advisory reserved paths
@@ -62,4 +62,4 @@ Removing a previously tracked `.env` causes Git to delete that tracked working-t
 
 ## Handoff / next action
 
-Claude Code independently reviews branch `fix/hermes/credential-config` at final commit `aaca308`, without reading or reproducing any credential value. Anthony then backs up the current `.env` outside the repository and confirms credential rotation before this branch is eligible to merge.
+Claude Code independently approved final branch head `aaca308`; Hermes independently verified its clean integration with PR 2 final `82ba5d4` at 192 passing backend tests. Anthony now backs up the current `.env` outside the repository and confirms credential rotation before PR 1 is eligible to merge.
