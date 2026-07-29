@@ -1,5 +1,9 @@
 param(
-    [string]$Mode = ""
+    [string]$Mode = "",
+    # Skip the preflight doctor. Every check it runs exists because something
+    # broke silently on 2026-07-28/29 — see scripts/doctor.ps1 — so this is an
+    # escape hatch, not a shortcut.
+    [switch]$SkipDoctor
 )
 
 $pythonExe    = "C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe"
@@ -22,6 +26,25 @@ if ($Mode -eq "app") {
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\electron'; npm start"
 } else {
     Write-Host "Starting Five12 in dev mode..." -ForegroundColor Yellow
+
+    # Preflight before anything launches. On 2026-07-28/29 six separate faults
+    # cost a session most of a day and not one of them printed a thing: a stale
+    # OneDrive clone, a doubled Flask process fighting over the Bluetooth
+    # adapter, a missing package swallowed by a blanket `except`, a renamed
+    # .env key, unset feature gates, and four show NICs on the Public network
+    # category. The doctor is read-only; it names the fix, it does not apply it.
+    if (-not $SkipDoctor) {
+        & (Join-Path $root 'scripts\doctor.ps1')
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  Preflight FAILED. Each fault above has silently broken this app before." -ForegroundColor Red
+            $answer = Read-Host "  Launch anyway? (y/N)"
+            if ($answer -ne 'y') {
+                Write-Host "  Aborted. Fix the FAIL lines, or re-run: .\start.ps1 -Mode dev -SkipDoctor" -ForegroundColor Yellow
+                exit 1
+            }
+        }
+    }
+
     $env:PATH = "$pythonScripts;" + $env:PATH
     # --no-reload is load-bearing, not a preference. Werkzeug's auto-reloader
     # runs the app in TWO processes; both start the Bluetooth service and race
