@@ -22,6 +22,10 @@ The test therefore passes if the misleading instruction regresses.
 
 Improve the assertion so the schema-management instruction and command cwd explicitly name `backend/migrations/` / `backend/`, or prohibit the ambiguous unqualified sentence.
 
+## Suggestion — correct the evidence labels
+
+The active record labels filesystem tests and disposable database migration checks as `verified on actual gear`. Those are software/database verification, not lighting-hardware evidence. Relabel them so the project's evidence taxonomy remains meaningful.
+
 ## Looks good
 
 - The deleted root migration tree is a separate obsolete chain, not a copy of the live revisions.

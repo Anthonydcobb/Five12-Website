@@ -51,6 +51,12 @@ Either limit this initial route to `sweepHints`, or add explicit validation and 
 
 The branch exposes sweep hints through the API but does not provide a Five12 UI for editing them. If UI work is intentionally separate, document the exact safe API/configuration workflow and add the UI task to the handoff. Otherwise the feature depends on manual API calls.
 
+## Suggestion — add a production-shaped interface fan-out test
+
+The current fan-out test calls `_scapy_scan("10.0.0.0/8")` directly, but production `_arp_scan` reduces wide networks to individual `/24` targets first. For a hinted `10.9.15.0/24`, interfaces elsewhere in the overlapping `/8` are not fan-out candidates; only the route-selected interface is used. That fixed the measured SideCar fault, but the test does not prove the broader fallback claim. Also, one `srp` exception currently prevents later interfaces from being tried.
+
+Add an end-to-end `_arp_scan` test with a wide configured subnet, a hinted `/24`, a failing first route/interface, and a later successful interface. Decide whether one interface failure should be isolated so remaining candidates still run.
+
 ## Looks good
 
 - Explicit `iface=` use fixes the original Scapy layer-2 routing defect.
