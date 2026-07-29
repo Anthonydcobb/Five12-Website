@@ -213,12 +213,17 @@ Do not silently drop the requirement.
 5. **Follow-up hardening ticket for the existing call sites.** The B4 redirect
    gap is real in `bolero.py` and `vendors/__init__.py` today. Astera should not
    fix them in its own branch, but someone should file it.
-6. **Two review folders now exist.** This file sits in `docs/agent-reviews/` per
-   your request; `docs/coordination/reviews/` on `docs/hermes/agent-coordination`
-   holds the PR1/PR2 exchange. Pick one before a third appears. I would keep
-   `docs/coordination/` since it is already linked from `AGENTS.md` and
-   `CLAUDE.md` on that branch, and make `docs/agent-reviews/` a redirect or drop
-   it.
+6. **Two review folders now exist, and the KB already ruled on it.**
+   `Hermes/Reviews/_index.md` in the KB states that other repositories use
+   `docs/agent-reviews/` and that *"the project's own `AGENTS.md` must name the
+   exact path — otherwise the first agent to arrive invents a location and the
+   second files somewhere else."* That is exactly what happened here: the PR1/PR2
+   exchange created `docs/coordination/reviews/` on
+   `docs/hermes/agent-coordination`, linked from that branch's `AGENTS.md` and
+   `CLAUDE.md`, while this request pointed at `docs/agent-reviews/`, which existed
+   nowhere. I filed where Hermes asked. When the coordination branch merges, pick
+   one and **name it in `AGENTS.md`** — I would keep `docs/agent-reviews/` as the
+   documented cross-repo convention and fold the coordination reviews into it.
 7. **`docs/hardware-tests/`** (spec Task 5) does not exist either. Fine to
    create; note that dated handoffs currently live at `docs/` root.
 
