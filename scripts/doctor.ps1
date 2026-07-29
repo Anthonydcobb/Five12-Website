@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Five12 preflight doctor. Read-only. Checks the invariants that broke
     silently on 2026-07-28/29.
@@ -243,7 +243,9 @@ $subnets = @()
 $subnetSource = 'none'
 if ($backendUp) {
     try {
-        $subnets = @(Invoke-RestMethod -Uri "$baseUrl/api/network/subnets" -TimeoutSec 2 -ErrorAction Stop)
+        $response = Invoke-RestMethod -Uri "$baseUrl/api/network/subnets" -TimeoutSec 2 -ErrorAction Stop
+        # Never iterate the response directly — see ConvertTo-Five12SubnetList.
+        $subnets = @(ConvertTo-Five12SubnetList -Response $response)
         $subnetSource = 'GET /api/network/subnets'
     }
     catch { $subnets = @() }
@@ -255,13 +257,25 @@ if ($subnets.Count -eq 0 -and $null -ne $probe -and $probe.subnets.ok) {
 
 $interfaces = @()
 try {
+    # Which interfaces carry a default route. A show NIC has none — that is why
+    # Windows cannot identify it — so this is what separates a real show NIC
+    # from an internet connection that merely happens to share the address
+    # range (a home router on 192.168.1.0/24 collides with Bolero exactly).
+    $gatewayAliases = @()
+    try {
+        $gatewayAliases = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.InterfaceAlias } | Select-Object -Unique)
+    }
+    catch { $gatewayAliases = @() }
+
     $interfaces = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
             Where-Object { $_.IPAddress -ne '127.0.0.1' } |
             ForEach-Object {
                 [pscustomobject]@{
-                    IPAddress      = $_.IPAddress
-                    PrefixLength   = $_.PrefixLength
-                    InterfaceAlias = $_.InterfaceAlias
+                    IPAddress          = $_.IPAddress
+                    PrefixLength       = $_.PrefixLength
+                    InterfaceAlias     = $_.InterfaceAlias
+                    HasDefaultGateway  = ($gatewayAliases -contains $_.InterfaceAlias)
                 }
             })
 }
@@ -272,12 +286,14 @@ if ($subnets.Count -eq 0) {
         -Message 'could not read the configured subnets' `
         -Fix @("$baseUrl/api/network/subnets   # is the backend up, and is the database reachable?")
     $showNics = @()
+    $coincidentalNics = @()
 }
 else {
     $coverage = Test-Five12SubnetCoverage -Subnets $subnets -Interfaces $interfaces
     $coverage.Details = @("source: $subnetSource") + $coverage.Details
     $checks += $coverage
     $showNics = $coverage.ShowNics
+    $coincidentalNics = $coverage.CoincidentalNics
 }
 
 $profiles = @()
@@ -320,7 +336,7 @@ catch {
 }
 
 $checks += Test-Five12NetworkCategories -ShowNics $showNics -Profiles $profiles `
-    -UnidentifiedPolicy $policyState -PolicyLocked $policyLocked
+    -UnidentifiedPolicy $policyState -PolicyLocked $policyLocked -CoincidentalNics $coincidentalNics
 
 # ---------------------------------------------------------------------------
 # Report

@@ -116,26 +116,43 @@ def config_env_keys(source: str) -> dict[str, bool]:
     return keys
 
 
-def parse_env_file(text: str) -> dict[str, str]:
-    """Parse a dotenv file into key -> value. Values stay in memory only."""
-    out: dict[str, str] = {}
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.lower().startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
-            continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        out[key] = value
-    return out
+def read_env_file(path) -> dict[str, str]:
+    """Parse the dotenv file with python-dotenv itself.
+
+    Deliberately not hand-rolled. A hand-written parser can disagree with the
+    parser the app uses, and then the doctor reports on a value the app will
+    never see. It did: the previous version kept an inline comment after a
+    quoted value as part of the value, where python-dotenv strips it. Any
+    divergence here is the same class of fault as the rest of this file —
+    a check that confidently describes something other than reality.
+
+    Values stay in memory and are never printed; only presence and length
+    cross the boundary.
+    """
+    from dotenv import dotenv_values
+
+    return {
+        key: ("" if value is None else value)
+        for key, value in dotenv_values(str(path)).items()
+    }
+
+
+def effective_env(env_file: dict[str, str], process_env: dict[str, str], key: str):
+    """What ``os.getenv(key)`` will actually return, and where it came from.
+
+    Flask's config calls ``load_dotenv()``, which does **not** overwrite
+    variables already in the process environment. So the process wins and the
+    file is the fallback — the opposite of what this probe assumed until
+    2026-07-29, which meant the doctor could connect with, and approve,
+    credentials the app would never use.
+
+    Returns (value, source) with source one of 'environment', 'env-file', None.
+    """
+    if key in process_env:
+        return process_env[key], "environment"
+    if key in env_file:
+        return env_file[key], "env-file"
+    return None, None
 
 
 def scan_env_references(sources: dict[str, str]) -> set[str]:
@@ -172,13 +189,28 @@ def env_report(
     missing_optional = []
     from_process_env = []
     present = []
+    overridden = []
 
     for key in sorted(config_keys):
         has_default = config_keys[key]
-        if key in env_file_keys:
-            present.append({"key": key, "length": len(env_file_keys[key])})
-        elif key in process_env:
-            from_process_env.append({"key": key, "length": len(process_env[key])})
+        value, source = effective_env(env_file_keys, process_env, key)
+
+        if source == "environment":
+            from_process_env.append({"key": key, "length": len(value)})
+            if key in env_file_keys:
+                # Both set. The process wins, so backend/.env is being ignored
+                # for this key — the operator needs to know which one the app
+                # will use, especially when they disagree.
+                overridden.append(
+                    {
+                        "key": key,
+                        "env_file_length": len(env_file_keys[key]),
+                        "environment_length": len(value),
+                        "values_differ": env_file_keys[key] != value,
+                    }
+                )
+        elif source == "env-file":
+            present.append({"key": key, "length": len(value)})
         elif has_default:
             missing_optional.append(key)
         else:
@@ -195,6 +227,7 @@ def env_report(
         "missing_optional": missing_optional,
         "from_process_env": from_process_env,
         "present": present,
+        "overridden": overridden,
         "unreferenced_in_env_file": unreferenced,
     }
 
@@ -450,7 +483,7 @@ def main(argv: list[str] | None = None) -> int:
 
     env_file_keys: dict[str, str] = {}
     if env_path.exists():
-        env_file_keys = parse_env_file(env_path.read_text(encoding="utf-8"))
+        env_file_keys = read_env_file(env_path)
     else:
         result["errors"].append(f"missing {env_path}")
 
@@ -468,12 +501,17 @@ def main(argv: list[str] | None = None) -> int:
     result["env"]["config_keys"] = {k: config_keys[k] for k in sorted(config_keys)}
     result["env"]["env_file_exists"] = env_path.exists()
 
-    # The app reads .env through python-dotenv at import time; the doctor must
-    # use the same source of truth rather than whatever is in its own shell.
-    merged = dict(env_file_keys)
+    # Resolve exactly as the app will. load_dotenv() does NOT overwrite an
+    # existing process variable, so the process wins and backend/.env is the
+    # fallback. This was inverted until 2026-07-29, which meant the doctor
+    # could connect with credentials the app would never use and report them
+    # as healthy — a green light in front of the precise fault (renamed or
+    # conflicting database configuration) it exists to catch.
+    merged = {}
     for key in ("DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME"):
-        if key not in merged and key in os.environ:
-            merged[key] = os.environ[key]
+        value, _source = effective_env(env_file_keys, dict(os.environ), key)
+        if value is not None:
+            merged[key] = value
 
     result["database"] = database_probe(merged)
     result["subnets"] = subnet_probe(merged)

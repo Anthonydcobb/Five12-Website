@@ -385,6 +385,115 @@ Describe 'Fault 5 - bluetooth feature gates' {
     }
 }
 
+Describe 'A coincidental address match is not a show NIC' {
+
+    # The live false positive, 2026-07-29: off-site, the operator's Wi-Fi got
+    # 192.168.1.226/24 — inside the Bolero subnet 192.168.1.0/24 at the exact
+    # prefix. The check called it a show NIC, saw Public (normal for Wi-Fi) and
+    # FAILed the launch. 192.168.1.0/24 is the commonest home-router range there
+    # is, so this would fire in every hotel room.
+    $bolero = @([pscustomobject]@{ label = 'Bolero'; cidr = '192.168.1.0/24'; active = $true; ignoreCidrs = $null })
+    $homeWifi = @([pscustomobject]@{
+            IPAddress = '192.168.1.226'; PrefixLength = 24
+            InterfaceAlias = 'Wi-Fi'; HasDefaultGateway = $true
+        })
+    $realNic = [pscustomobject]@{
+        IPAddress = '192.168.1.220'; PrefixLength = 24
+        InterfaceAlias = 'COMS'; HasDefaultGateway = $false
+    }
+
+    It 'treats a gatewayed match as coincidental, not as a show NIC' {
+        $r = Test-Five12SubnetCoverage -Subnets $bolero -Interfaces $homeWifi
+        @($r.ShowNics).Count | Should Be 0
+        @($r.CoincidentalNics).Count | Should Be 1
+        ($r.Details -join ' ') | Should Match 'coincidental address match'
+    }
+
+    It 'does NOT fail the launch when a coincidental match is Public' {
+        $coverage = Test-Five12SubnetCoverage -Subnets $bolero -Interfaces $homeWifi
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'Wi-Fi'; NetworkCategory = 'Public' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles `
+            -UnidentifiedPolicy 'Private' -CoincidentalNics $coverage.CoincidentalNics
+        $r.Status | Should Be 'WARN'
+        ($r.Details -join ' ') | Should Match 'NOT treated as a show NIC'
+    }
+
+    It 'prefers the gateway-less interface when both are in range' {
+        $r = Test-Five12SubnetCoverage -Subnets $bolero -Interfaces ($homeWifi + $realNic)
+        @($r.ShowNics | ForEach-Object { $_.InterfaceAlias }) | Should Be 'COMS'
+        @($r.CoincidentalNics).Count | Should Be 0
+    }
+
+    It 'still FAILS for a real gateway-less show NIC on Public' {
+        $coverage = Test-Five12SubnetCoverage -Subnets $bolero -Interfaces @($realNic)
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'COMS'; NetworkCategory = 'Public' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'NotSet'
+        $r.Status | Should Be 'FAIL'
+    }
+
+    It 'honours interfaceHint as authoritative when the operator sets one' {
+        $hinted = @([pscustomobject]@{
+                label = 'Bolero'; cidr = '192.168.1.0/24'; active = $true
+                ignoreCidrs = $null; interfaceHint = 'COMS'
+            })
+        $r = Test-Five12SubnetCoverage -Subnets $hinted -Interfaces ($homeWifi + $realNic)
+        @($r.ShowNics | ForEach-Object { $_.InterfaceAlias }) | Should Be 'COMS'
+        ($r.Details -join ' ') | Should Not Match 'Wi-Fi'
+    }
+
+    It 'treats a missing HasDefaultGateway property as no gateway' {
+        # Callers predating the field must not make the check throw under
+        # StrictMode, and must keep the old behaviour.
+        (Get-Five12HasGateway -Iface ([pscustomobject]@{ InterfaceAlias = 'x' })) | Should Be $false
+        (Get-Five12HasGateway -Iface $null) | Should Be $false
+    }
+}
+
+Describe 'Subnet list normalization' {
+
+    $wellFormed = @(
+        [pscustomobject]@{ label = 'Hognet'; cidr = '172.31.0.0/16'; active = $true; ignoreCidrs = $null },
+        [pscustomobject]@{ label = 'sACN'; cidr = '10.0.0.0/8'; active = $true; ignoreCidrs = $null }
+    )
+
+    It 'passes a well-formed list straight through' {
+        $r = ConvertTo-Five12SubnetList -Response $wellFormed
+        @($r).Count | Should Be 2
+        @($r)[0].label | Should Be 'Hognet'
+    }
+
+    It 'flattens a response that arrives as one nested collection' {
+        # The live failure on 2026-07-29: Invoke-RestMethod handed back the JSON
+        # array as a single nested collection, so `foreach` iterated ONCE and
+        # every field was really an array of all values. The next thing to touch
+        # $subnet.ignoreCidrs.Split(',') threw and took the whole check with it.
+        $nested = @(, $wellFormed)
+        $r = ConvertTo-Five12SubnetList -Response $nested
+        @($r).Count | Should Be 2
+        @($r)[1].cidr | Should Be '10.0.0.0/8'
+    }
+
+    It 'drops anything that is not shaped like a subnet' {
+        $junk = @(
+            [pscustomobject]@{ error = 'not found' },
+            [pscustomobject]@{ label = 'no cidr here' },
+            $null,
+            'a bare string'
+        )
+        @(ConvertTo-Five12SubnetList -Response $junk).Count | Should Be 0
+    }
+
+    It 'drops a subnet whose cidr is empty rather than trusting it' {
+        $blank = @([pscustomobject]@{ label = 'x'; cidr = '  '; active = $true; ignoreCidrs = $null })
+        @(ConvertTo-Five12SubnetList -Response $blank).Count | Should Be 0
+    }
+
+    It 'returns nothing for an empty or null response, so the caller can fall back' {
+        @(ConvertTo-Five12SubnetList -Response @()).Count | Should Be 0
+        @(ConvertTo-Five12SubnetList -Response $null).Count | Should Be 0
+    }
+}
+
 Describe 'Fault 6 - subnet coverage and network category' {
 
     $showSubnets = @(

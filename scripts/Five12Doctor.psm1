@@ -417,8 +417,27 @@ function Test-Five12EnvKeys {
         $statuses += 'WARN'
         $details += "set in backend\.env but read nowhere in backend/: $($unreferenced -join ', ') — renamed or misspelled?"
     }
+    # A key set in BOTH places is the dangerous case: load_dotenv() does not
+    # overwrite an existing process variable, so backend\.env is silently
+    # ignored for that key. If the two disagree, anyone reading backend\.env to
+    # work out what the app is using is reading the wrong file.
+    $overridden = @()
+    if ($null -ne $EnvReport.PSObject.Properties['overridden']) {
+        $overridden = @($EnvReport.overridden)
+    }
+    foreach ($o in $overridden) {
+        if ($o.values_differ) {
+            $statuses += 'WARN'
+            $details += "$($o.key): set in BOTH the process environment and backend\.env, and they DIFFER — the app uses the process value (length $($o.environment_length)); backend\.env (length $($o.env_file_length)) is ignored"
+            $fixes += "Get-Item Env:$($o.key)   # decide which is correct, then remove the other"
+        }
+        else {
+            $details += "$($o.key): set in both the process environment and backend\.env, same value; the process copy is the one in use"
+        }
+    }
+
     foreach ($p in $fromProcess) {
-        $details += "$($p.key): supplied by the process environment, not backend\.env (length $($p.length))"
+        $details += "$($p.key): supplied by the process environment, which takes precedence over backend\.env (length $($p.length))"
     }
     foreach ($p in $present) {
         $details += "$($p.key): present, length $($p.length)"
@@ -614,6 +633,71 @@ function Test-Five12FeatureGates {
 # blocks inbound traffic and broke Hog console show networking
 # ---------------------------------------------------------------------------
 
+function Get-Five12HasGateway {
+    <#
+    .SYNOPSIS
+        Does this interface carry a default route? Absent property means no.
+    .NOTES
+        Read defensively on purpose. Callers that predate the field, and any
+        caller passing a slightly different shape, must not make the whole
+        network check throw — under StrictMode a missing property is an error,
+        and a preflight that dies on an unexpected shape reports nothing at all.
+        Absent is treated as "no gateway", which is the pre-existing behaviour:
+        the interface is taken to be a show NIC.
+    #>
+    param($Iface)
+    if ($null -eq $Iface) { return $false }
+    $prop = $Iface.PSObject.Properties['HasDefaultGateway']
+    if ($null -eq $prop) { return $false }
+    return [bool]$prop.Value
+}
+
+function ConvertTo-Five12SubnetList {
+    <#
+    .SYNOPSIS
+        Flatten and shape-check whatever the subnets endpoint handed back.
+    .DESCRIPTION
+        `Invoke-RestMethod` does not reliably give one object per JSON array
+        element: depending on host and version the array can arrive as a single
+        nested collection. `foreach` then iterates it ONCE, and every field of
+        the "subnet" is really an array of all four values — at which point
+        `$subnet.ignoreCidrs.Split(',')` throws and the whole check dies.
+
+        Observed live on 2026-07-29: `label` came back as
+        `Hognet sACN Bolero Management` and `ignoreCidrs` as an `Object[]`.
+        Before that it had been silently falling back to the database probe, so
+        the API path looked fine while never actually being used.
+
+        Anything without a usable `cidr` is dropped rather than trusted, so a
+        changed or error response degrades to "no subnets" — which the caller
+        reports and falls back on — instead of crashing or inventing a subnet.
+    #>
+    param($Response)
+
+    $flat = @()
+    foreach ($item in @($Response)) {
+        if ($null -eq $item) { continue }
+        if ($item -is [string]) { continue }
+        if ($item -is [System.Collections.IEnumerable]) {
+            foreach ($inner in $item) {
+                if ($null -ne $inner) { $flat += $inner }
+            }
+        }
+        else {
+            $flat += $item
+        }
+    }
+
+    $out = @()
+    foreach ($candidate in $flat) {
+        $props = $candidate.PSObject.Properties
+        if ($null -eq $props['cidr']) { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$candidate.cidr)) { continue }
+        $out += $candidate
+    }
+    return $out
+}
+
 function Test-Five12SubnetCoverage {
     <#
     .SYNOPSIS
@@ -641,6 +725,7 @@ function Test-Five12SubnetCoverage {
     $fixes = @()
     $statuses = @()
     $showNics = @()
+    $coincidentalNics = @()
 
     $active = @($Subnets | Where-Object { $_.active })
     if ($active.Count -eq 0) {
@@ -655,9 +740,18 @@ function Test-Five12SubnetCoverage {
         }
         $wantedPrefix = (ConvertFrom-Five12Cidr -Cidr $subnet.cidr).Prefix
 
+        # An interface_hint, when the operator has set one, is authoritative:
+        # it names the adapter that IS this subnet's NIC.
+        $hint = ''
+        if ($subnet.PSObject.Properties['interfaceHint'] -and $subnet.interfaceHint) {
+            $hint = [string]$subnet.interfaceHint
+        }
+
         $exact = @()
         $wrongPrefix = @()
         foreach ($iface in @($Interfaces)) {
+            if ($hint -and ($iface.InterfaceAlias -ne $hint)) { continue }
+
             $inside = $false
             try { $inside = Test-Five12IpInCidr -Address $iface.IPAddress -Cidr $subnet.cidr } catch { $inside = $false }
             if (-not $inside) { continue }
@@ -672,10 +766,29 @@ function Test-Five12SubnetCoverage {
             else { $wrongPrefix += $iface }
         }
 
+        # A show NIC has no default gateway — that is why Windows cannot
+        # identify it. An interface WITH a gateway that lands in a configured
+        # range is far more likely a coincidence than a show NIC: 192.168.1.0/24
+        # is both the Bolero subnet and the commonest home-router range on
+        # earth, so a home or hotel Wi-Fi collides with it at the exact prefix.
+        # Observed live 2026-07-29, where it FAILed the launch over the
+        # operator's own Wi-Fi. Gateway-less matches win; a gatewayed match
+        # still counts as backing the subnet, but is reported as coincidental so
+        # the category check warns instead of blocking.
+        $exactNoGateway = @($exact | Where-Object { -not (Get-Five12HasGateway -Iface $_) })
+        if ($exactNoGateway.Count -gt 0) { $exact = $exactNoGateway }
+
         if ($exact.Count -gt 0) {
             foreach ($i in $exact) {
-                $details += "$($subnet.label) $($subnet.cidr) -> $($i.InterfaceAlias) $($i.IPAddress)/$($i.PrefixLength)"
-                $showNics += $i
+                $suffix = ''
+                if (Get-Five12HasGateway -Iface $i) {
+                    $suffix = '  (has a default gateway — likely a coincidental address match, not a show NIC)'
+                    $coincidentalNics += $i
+                }
+                else {
+                    $showNics += $i
+                }
+                $details += "$($subnet.label) $($subnet.cidr) -> $($i.InterfaceAlias) $($i.IPAddress)/$($i.PrefixLength)$suffix"
             }
         }
         elseif ($wrongPrefix.Count -gt 0) {
@@ -697,9 +810,14 @@ function Test-Five12SubnetCoverage {
     }
 
     $status = Get-Five12WorstStatus -Statuses $statuses
-    $message = "$($active.Count) configured subnets, $($showNics.Count) backed by a local interface"
+    $backed = $showNics.Count + $coincidentalNics.Count
+    $message = "$($active.Count) configured subnets, $backed backed by a local interface"
+    if ($coincidentalNics.Count -gt 0) {
+        $message += " ($($coincidentalNics.Count) coincidental)"
+    }
     $check = New-Five12Check -Name 'Network' -Status $status -Message $message -Details $details -Fix ($fixes | Select-Object -Unique)
-    return ($check | Add-Member -NotePropertyName ShowNics -NotePropertyValue $showNics -PassThru)
+    $check = $check | Add-Member -NotePropertyName ShowNics -NotePropertyValue $showNics -PassThru
+    return ($check | Add-Member -NotePropertyName CoincidentalNics -NotePropertyValue $coincidentalNics -PassThru)
 }
 
 function ConvertTo-Five12MaskString {
@@ -805,14 +923,40 @@ function Test-Five12NetworkCategories {
         $ShowNics = @(),
         $Profiles = @(),
         [string]$UnidentifiedPolicy = 'NotSet',
-        [bool]$PolicyLocked = $false
+        [bool]$PolicyLocked = $false,
+        $CoincidentalNics = @()
     )
     $details = @()
     $fixes = @()
     $statuses = @()
 
     $aliases = @(@($ShowNics) | ForEach-Object { $_.InterfaceAlias } | Select-Object -Unique)
+    $coincidentalAliases = @(@($CoincidentalNics) | ForEach-Object { $_.InterfaceAlias } | Select-Object -Unique)
+
+    # A gatewayed interface that merely happens to sit in a configured range is
+    # not a show NIC, and Public is normal for it. Report it, never block on it:
+    # failing a launch because someone's home router uses 192.168.1.0/24 is the
+    # kind of false alarm that gets a preflight switched off for good.
+    foreach ($alias in $coincidentalAliases) {
+        $prof = @($Profiles | Where-Object { $_.InterfaceAlias -eq $alias }) | Select-Object -First 1
+        $category = 'unknown'
+        if ($null -ne $prof) { $category = [string]$prof.NetworkCategory }
+        if ($category -eq 'Public') {
+            $statuses += 'WARN'
+            $details += "$alias : Public, but it has a default gateway and only coincidentally falls in a configured subnet — normal for an internet connection, NOT treated as a show NIC"
+        }
+        else {
+            $details += "$alias : $category (coincidental match, has a default gateway)"
+        }
+    }
+
     if ($aliases.Count -eq 0) {
+        if ($coincidentalAliases.Count -gt 0) {
+            return New-Five12Check -Name 'Network category' `
+                -Status (Get-Five12WorstStatus -Statuses $statuses) `
+                -Message 'no show NICs present; only coincidental address matches' `
+                -Details $details
+        }
         return New-Five12Check -Name 'Network category' -Status 'INFO' -Message 'no show NICs to inspect'
     }
 
@@ -891,6 +1035,8 @@ Export-ModuleMember -Function @(
     'Test-Five12Database',
     'Test-Five12FlaskProcesses',
     'Test-Five12FeatureGates',
+    'Get-Five12HasGateway',
+    'ConvertTo-Five12SubnetList',
     'Test-Five12SubnetCoverage',
     'ConvertFrom-Five12NlmPolicy',
     'Test-Five12NetworkCategories'

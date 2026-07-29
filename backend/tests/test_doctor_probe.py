@@ -180,22 +180,104 @@ def test_key_list_is_derived_from_the_real_config_not_hardcoded():
     assert "FIVE12_BLE_WRITE" in keys
 
 
-def test_parse_env_file_handles_quotes_exports_and_comments():
-    text = (
+def test_read_env_file_matches_python_dotenv(tmp_path):
+    """Parsed by python-dotenv itself, so the doctor cannot disagree with the
+    app about what the file says."""
+    path = tmp_path / ".env"
+    path.write_text(
         "# a comment\n"
         "\n"
         "DB_HOST=localhost\n"
         "export DB_USER=root\n"
         'DB_NAME="five12_website"\n'
-        "DB_PASSWORD='p@ss=word'\n"
-        "not a key line\n"
+        "DB_PASSWORD='p@ss=word'\n",
+        encoding="utf-8",
     )
-    parsed = probe.parse_env_file(text)
+    parsed = probe.read_env_file(path)
     assert parsed["DB_HOST"] == "localhost"
     assert parsed["DB_USER"] == "root"
     assert parsed["DB_NAME"] == "five12_website"
     assert parsed["DB_PASSWORD"] == "p@ss=word"  # '=' inside the value survives
-    assert "not a key line" not in parsed
+
+
+def test_read_env_file_strips_an_inline_comment_after_a_quoted_value(tmp_path):
+    """The hand-rolled parser kept `" # trailing` as part of the value, where
+    python-dotenv strips it — so the doctor reported a value the app never
+    sees. Found in review."""
+    path = tmp_path / ".env"
+    path.write_text('DB_NAME="five12_website"  # the dev database\n', encoding="utf-8")
+    assert probe.read_env_file(path)["DB_NAME"] == "five12_website"
+
+
+# ---------------------------------------------------------------------------
+# Fault 4, second face — which value does the app ACTUALLY use?
+# ---------------------------------------------------------------------------
+
+
+def test_process_environment_wins_because_load_dotenv_does_not_override():
+    """`load_dotenv()` does not overwrite an existing process variable, so the
+    process wins and backend/.env is the fallback. This probe had it inverted
+    until review, which meant it could connect with, and approve, credentials
+    the app would never use."""
+    value, source = probe.effective_env(
+        {"DB_PASSWORD": "from-file"}, {"DB_PASSWORD": "from-environment"}, "DB_PASSWORD"
+    )
+    assert (value, source) == ("from-environment", "environment")
+
+
+def test_env_file_is_the_fallback_when_the_process_does_not_set_it():
+    assert probe.effective_env({"DB_PASSWORD": "from-file"}, {}, "DB_PASSWORD") == (
+        "from-file",
+        "env-file",
+    )
+
+
+def test_effective_env_reports_absence_rather_than_guessing():
+    assert probe.effective_env({}, {}, "DB_PASSWORD") == (None, None)
+
+
+def test_env_report_flags_a_conflicting_override_without_printing_either_value():
+    file_value = "file-only-password"
+    env_value = "environment-password"
+    report = probe.env_report(
+        config_keys={"DB_PASSWORD": False},
+        env_file_keys={"DB_PASSWORD": file_value},
+        process_env={"DB_PASSWORD": env_value},
+        referenced_keys={"DB_PASSWORD"},
+    )
+
+    assert report["missing_required"] == []
+    assert report["overridden"] == [
+        {
+            "key": "DB_PASSWORD",
+            "env_file_length": len(file_value),
+            "environment_length": len(env_value),
+            "values_differ": True,
+        }
+    ]
+    assert file_value not in repr(report)
+    assert env_value not in repr(report)
+
+
+def test_env_report_does_not_cry_wolf_when_both_copies_agree():
+    report = probe.env_report(
+        config_keys={"DB_PASSWORD": False},
+        env_file_keys={"DB_PASSWORD": "same"},
+        process_env={"DB_PASSWORD": "same"},
+        referenced_keys={"DB_PASSWORD"},
+    )
+    assert report["overridden"][0]["values_differ"] is False
+
+
+def test_env_report_has_no_override_when_only_the_file_sets_it():
+    report = probe.env_report(
+        config_keys={"DB_PASSWORD": False},
+        env_file_keys={"DB_PASSWORD": "x"},
+        process_env={},
+        referenced_keys={"DB_PASSWORD"},
+    )
+    assert report["overridden"] == []
+    assert [p["key"] for p in report["present"]] == ["DB_PASSWORD"]
 
 
 def test_env_report_is_clean_when_every_key_is_present():
@@ -253,7 +335,10 @@ def test_env_report_never_carries_a_secret_value():
         referenced_keys={"DB_PASSWORD"},
     )
     assert secret not in repr(report)
-    assert report["present"] == [{"key": "DB_PASSWORD", "length": len(secret)}]
+    # Set in both places, so the process copy is the effective one — this used
+    # to assert it landed in `present`, which encoded the inverted precedence.
+    assert report["from_process_env"] == [{"key": "DB_PASSWORD", "length": len(secret)}]
+    assert report["present"] == []
 
 
 def test_scan_env_references_finds_every_read_form():
