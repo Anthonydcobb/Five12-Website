@@ -287,6 +287,75 @@ coordination surface (`docs/coordination/README.md`, a documented canonical
 command). It is additive — no existing command was removed or altered — but it
 is Hermes' workflow too, so it wants a second opinion rather than my say-so.
 
+### Why the show NIC categories drift — diagnosed 2026-07-29
+
+**It is not the VPN.** I suspected NordVPN in the earlier write-up; that was
+wrong. The trigger is **resume from sleep**, and the cause is that these
+networks have no identity for Windows to remember.
+
+The chain, each link evidenced from
+`Microsoft-Windows-NetworkProfile/Operational` and the System log:
+
+1. **No default gateway on any of the four.** `Get-NetIPConfiguration` reports
+   `gateway=NONE` for `HOG`, `sACN`, `COMS`, `Management`. Windows identifies a
+   network by hashing the default gateway's MAC address. No gateway, nothing to
+   hash.
+2. **So all four are literally named `Unidentified network`** in
+   `Get-NetConnectionProfile`.
+3. **Unidentified networks get no persistent profile.** Their category-set
+   events (ID 20002) carry `Profile GUID: {00000000-0000-0000-0000-000000000000}`
+   or `{ffffffff-...}` — placeholders, not a stored profile. There is nowhere
+   for a category to be saved.
+4. **So `Set-NetConnectionProfile` cannot persist.** It writes the live session
+   and nothing else. It is a fix with a shelf life.
+5. **Every resume re-identifies every adapter**, finds no stored profile for
+   these four, and falls back to the system default for unidentified networks:
+   `Public`.
+6. **The policy that would change that default is not set.**
+   `HKLM\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\NetworkList`
+   does not exist on this machine, so the Windows default applies.
+
+**The contrast that proves the mechanism.** In the same 10:27:53 resume,
+Tailscale was also set to `Public` — and was back to `Private` on its own by
+10:36:14, with a real stored profile GUID `{479c4579-...}`. Same event, same
+machine, opposite outcome. The only difference is having an identity to
+remember a category against.
+
+**Correlation, stated with its limits.** Every one of the **8** show-NIC
+"set Public" events in the entire log occurred within 120 seconds of a resume
+from sleep; **0** had any other cause. The log is circular, 1 MB, 2138 records
+reaching back to 07-25 13:52 — so this covers four days, not the whole history.
+An earlier pass of mine appeared to show resumes on 07-23 through 07-27 with no
+category flips; that was **missing data, not absence**, because the 400-event
+window I had fetched only reached 07-27 23:44. Worth stating plainly, because
+the wrong reading of it would have exonerated sleep.
+
+**Recommended durable fix — operator action, elevated, not the doctor's to
+apply:**
+
+```text
+secpol.msc → Network List Manager Policies → Unidentified Networks
+           → Location type: Private
+```
+
+This changes the default rather than patching each instance, so it survives
+every resume. **Trade-off, stated honestly:** it applies to *every*
+unidentified network on this machine, not just these four. In practice a hotel
+or venue Wi-Fi has a gateway and *is* identified, so the blast radius is small
+— but it is not zero, and it is a security setting, so it should be a conscious
+choice rather than something I do on Anthony's behalf.
+
+The doctor now prints both fixes and labels which is which: the
+`Set-NetConnectionProfile` line is marked as fixing it now and being lost on
+the next resume, and the policy line is marked `DURABLE FIX`. Without that
+distinction the operator re-fixes the same fault after every sleep and never
+learns it is a default rather than an accident.
+
+*Note for whoever merges this:* the diagnosis above is durable knowledge that
+outlives the branch. It probably belongs in `docs/coordination/decisions/`
+rather than an active note that gets archived. I have left it here rather than
+writing into `decisions/` unilaterally, since that is shared surface.
+
 ## Commits
 
 - `b8f567f` feat: add preflight doctor and run it before dev-mode launch
@@ -327,9 +396,11 @@ Open, in rough priority order:
 1. **Independent review** (Hermes). The judgement calls most worth a second
    opinion are the non-uniform severity (absent NIC = `WARN`, drifted prefix =
    `FAIL`) and the show-NIC derivation rule.
-2. **Why do the NIC categories drift?** The doctor now catches it every launch,
-   which is the important half, but something is changing them. Suspicion falls
-   on VPN adapter re-connects; unproven.
+2. ~~Why do the NIC categories drift?~~ **Diagnosed 2026-07-29 — resume from
+   sleep, see above.** The remaining action is Anthony's: decide whether to set
+   the Network List Manager policy, which is a security setting with a stated
+   trade-off. Until he does, the doctor will keep catching it every launch,
+   which is the safe failure mode.
 3. ~~The test suite does not run on the interpreter the app runs on.~~
    **Resolved 2026-07-29 — see below.** Hermes should still review the
    `docs/coordination/README.md` change, since that file is shared surface.

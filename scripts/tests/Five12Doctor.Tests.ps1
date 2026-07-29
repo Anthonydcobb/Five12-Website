@@ -460,7 +460,28 @@ Describe 'Fault 6 - subnet coverage and network category' {
         $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles
         $r.Status | Should Be 'FAIL'
         ($r.Fix -join ' ') | Should Match 'Set-NetConnectionProfile'
-        @($r.Fix).Count | Should Be 4
+        # four per-NIC fixes plus the durable policy fix
+        @($r.Fix).Count | Should Be 5
+    }
+
+    It 'offers the durable fix, not just the one that lasts until the next sleep' {
+        # Root cause (2026-07-29): these NICs have no gateway, so Windows never
+        # identifies them, stores no profile, and resets them to Public on every
+        # resume from sleep. All eight observed flips followed a resume within
+        # 120s. Set-NetConnectionProfile alone means fixing it again tomorrow.
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Public' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles
+        ($r.Fix -join ' ') | Should Match 'DURABLE FIX'
+        ($r.Fix -join ' ') | Should Match 'Unidentified Networks'
+        ($r.Details -join ' ') | Should Match 'resume from sleep'
+    }
+
+    It 'does not nag about the durable fix when nothing is Public' {
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Private' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles
+        ($r.Fix -join ' ') | Should Not Match 'DURABLE FIX'
     }
 
     It 'FAILS when even one show NIC is Public' {

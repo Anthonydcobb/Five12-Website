@@ -728,10 +728,32 @@ function Test-Five12NetworkCategories {
     .PARAMETER Profiles
         Objects with InterfaceAlias and NetworkCategory.
     .NOTES
-        Public blocks inbound traffic. On 2026-07-29 all four show NICs had
+        Public blocks inbound traffic. On 2026-07-28/29 all four show NICs had
         drifted to Public and Hog console show networking stopped working with
-        no error anywhere. The doctor reports it and prints the fix; changing a
-        Windows network category is the operator's call, never the script's.
+        no error anywhere.
+
+        Root cause, diagnosed 2026-07-29 from the NetworkProfile operational
+        log: the show NICs have no default gateway, and Windows identifies a
+        network by hashing the gateway's MAC. With no gateway there is nothing
+        to identify, so all four are literally named "Unidentified network" and
+        carry no persistent profile — their category-set events show profile
+        GUID {00000000-...}, a placeholder. `Set-NetConnectionProfile` therefore
+        has nowhere to persist to: it changes the live session only. On every
+        resume from sleep, NLA re-identifies each adapter, finds no stored
+        profile, and falls back to the system default for unidentified
+        networks, which is Public.
+
+        All eight show-NIC "set Public" events in the log occurred within 120
+        seconds of a resume from sleep. None had any other cause. The contrast
+        that proves the mechanism: Tailscale went Public in the same resume and
+        returned to Private by itself, because it has a real stored profile.
+
+        So this check prints TWO fixes and says which is which. Setting the
+        category fixes today; the Network List Manager policy changes the
+        default and survives the next resume.
+
+        The doctor reports and instructs. Changing a Windows network category
+        or a security policy is the operator's call, never the script's.
     #>
     param(
         $ShowNics = @(),
@@ -761,11 +783,18 @@ function Test-Five12NetworkCategories {
         if ($category -eq 'Public') {
             $statuses += 'FAIL'
             $details += "$alias : Public — inbound traffic is blocked, show networking will fail silently"
-            $fixes += "Set-NetConnectionProfile -InterfaceAlias '$alias' -NetworkCategory Private   # run as Administrator"
+            $fixes += "Set-NetConnectionProfile -InterfaceAlias '$alias' -NetworkCategory Private   # run as Administrator — fixes NOW, lost on next resume from sleep"
         }
         else {
             $details += "$alias : $category"
         }
+    }
+
+    if (@($statuses | Where-Object { $_ -eq 'FAIL' }).Count -gt 0) {
+        # Without this, the operator fixes the same fault after every sleep and
+        # never learns it is a default, not an accident.
+        $details += 'these NICs have no default gateway, so Windows cannot identify them and stores no profile — the category resets to Public on every resume from sleep'
+        $fixes += 'DURABLE FIX: secpol.msc → Network List Manager Policies → "Unidentified Networks" → Location type: Private   (changes the default, so it survives resume; applies to every unidentified network on this machine)'
     }
 
     $status = Get-Five12WorstStatus -Statuses $statuses
