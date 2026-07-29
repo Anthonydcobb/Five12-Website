@@ -18,15 +18,13 @@ def create_app(test_config=None):
     if test_config:
         app.config.update(test_config)
 
-    # Credential check moved here from config.py's class body. It fires ONLY
-    # when the selected/overridden config left no database URI — i.e. dev mode
-    # without DB_PASSWORD. Desktop mode always has a SQLite URI, so this never
-    # trips it (previously a raise in DevelopmentConfig's body crashed desktop
-    # startup just by importing the module).
+    # Fail only after test_config has had a chance to provide an isolated test
+    # database. Desktop mode always has a SQLite URI and needs no password.
     if app.config.get('SQLALCHEMY_DATABASE_URI') is None:
         raise RuntimeError(
-            "No database configured. For development, set DB_PASSWORD in "
-            "backend/.env. (Desktop mode uses SQLite and needs no password.)"
+            "No development database configured. Set DB_PASSWORD in an "
+            "untracked .env file (see the repository .env.example). "
+            "Desktop mode uses SQLite and needs no database password."
         )
 
     db.init_app(app)
