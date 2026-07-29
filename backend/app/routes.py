@@ -646,6 +646,20 @@ def _run_ps(cmd, params=None):
     return r.stdout.strip(), r.stderr.strip(), r.returncode
 
 
+def _run_netsh(args):
+    """Run netsh with every operator value as its own argument-vector entry.
+
+    Nothing here is parsed as text: subprocess passes the list straight to
+    CreateProcess without a shell, so an adapter name containing quotes,
+    semicolons or newlines is delivered verbatim as data. Preferred over the
+    PowerShell path for the two writes because it removes the parser entirely
+    rather than steering values around it.
+    """
+    r = subprocess.run(['netsh'] + list(args),
+                       capture_output=True, text=True, timeout=20)
+    return r.stdout.strip(), r.stderr.strip(), r.returncode
+
+
 def _local_origin():
     """False when a browser presents a cross-origin Origin on a state change.
 
@@ -802,50 +816,34 @@ def network_apply():
     if adapter not in known:
         return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
 
-    # $env: references, not interpolation — see _run_ps. `prefix` is an int and
-    # `gw_line` is one of two constants, so neither can carry operator text.
+    # [BENCH 2026-07-28] New-NetIPAddress cannot do this on a disconnected
+    # adapter. Verified on the rig: it fails with "Inconsistent parameters
+    # PolicyStore PersistentStore and Dhcp Enabled" (Windows error 87) because
+    # it writes persistently while the interface still reports DHCP, and
+    # Set-NetIPInterface -Dhcp Disabled will not clear that — the persistent
+    # store returns an *empty* Dhcp for such adapters, so there is nothing to
+    # read back and nothing that cmdlet can set. netsh performs the same change
+    # in one atomic operation and succeeded on the same adapter in the same
+    # session.
     #
-    # [BENCH 2026-07-28] On a Disconnected adapter, plain `Set-NetIPInterface
-    # -Dhcp Disabled` returns success and changes nothing — verified on the rig:
-    # the cmdlet exited clean while Get-NetIPInterface still reported
-    # `Dhcp: Enabled`. New-NetIPAddress then failed with "Inconsistent
-    # parameters PolicyStore PersistentStore and Dhcp Enabled" (error 87),
-    # because it writes to the persistent store and that store still said DHCP.
-    # Setting a static IP on an unplugged NIC is a normal load-in step, so
-    # target the persistent store explicitly and then confirm it actually took
-    # rather than trusting a cmdlet that reports success without acting.
-    #
-    # The confirmation only fires on a *definite* contrary reading. The
-    # persistent store returns an empty Dhcp for some adapters, and a first cut
-    # of this check treated empty as "still enabled" and threw — blocking a
-    # configuration that had in fact worked. An inconclusive check must not veto
-    # the operation; when the state cannot be read, fall through and let
-    # New-NetIPAddress report the real problem, which _ps_failure now surfaces.
-    gw_line = "-DefaultGateway $env:FIVE12_GATEWAY" if gateway else ''
-    ps = f"""
-$ErrorActionPreference = 'Stop'
-Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -PolicyStore PersistentStore
-Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue
+    # This is also the stronger guarantee for the injection fix, not a
+    # concession. The adapter name is one element of an argument vector handed
+    # to CreateProcess — there is no shell, no script text, and no parser that
+    # could treat it as anything but a value. That supersedes the environment
+    # variable transport for these two writes; reads still use PowerShell,
+    # which never takes operator input.
+    mask = str(ipaddress.IPv4Network(f'0.0.0.0/{prefix}', strict=False).netmask)
+    args = ['interface', 'ipv4', 'set', 'address',
+            f'name={adapter}', 'static', ip, mask]
+    if gateway:
+        args.append(gateway)
 
-$persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
-$dhcpState = if ($persisted) {{ [string]$persisted.Dhcp }} else {{ '' }}
-if ($dhcpState -and $dhcpState -ne 'Disabled') {{
-    throw "Could not turn DHCP off for this adapter (still $dhcpState). It may be managed by another service."
-}}
-
-Get-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Get-NetRoute       -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-New-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -IPAddress $env:FIVE12_IP -PrefixLength {prefix} {gw_line}
-"""
-    out, err, code = _run_ps(ps, {
-        'FIVE12_ADAPTER': adapter,
-        'FIVE12_IP': ip,
-        'FIVE12_GATEWAY': gateway,
-    })
+    out, err, code = _run_netsh(args)
     if code != 0:
         detail = _ps_failure(out, err, code, 'Apply failed')
         admin = any(w in detail.lower()
-                    for w in ('access is denied', 'administrator', 'privileged'))
+                    for w in ('access is denied', 'administrator', 'privileged',
+                              'requires elevation'))
         current_app.logger.error('network_apply failed (exit %s): %s', code, detail)
         return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
     return jsonify({'success': True})
@@ -869,32 +867,17 @@ def network_dhcp():
     if adapter not in known:
         return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
 
-    # Same persistent-store handling as network_apply — see the note there. The
-    # rig hit this route failing with a non-zero exit and empty stderr, which is
-    # consistent with the same silent no-op, so it gets the same treatment and
-    # the same explicit confirmation.
-    ps = """
-$ErrorActionPreference = 'Stop'
-Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled -PolicyStore PersistentStore
-Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
-
-$persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
-$dhcpState = if ($persisted) { [string]$persisted.Dhcp } else { '' }
-if ($dhcpState -and $dhcpState -ne 'Enabled') {
-    throw "Could not turn DHCP on for this adapter (still $dhcpState). It may be managed by another service."
-}
-
-Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.PrefixOrigin -ne 'Dhcp' } |
-    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-"""
-    out, err, code = _run_ps(ps, {'FIVE12_ADAPTER': adapter})
-    if code != 0:
+    # netsh for the same reason as network_apply — see the note there. It also
+    # reports "DHCP is already enabled on this interface", which is the desired
+    # end state, not a failure.
+    out, err, code = _run_netsh(['interface', 'ipv4', 'set', 'address',
+                                 f'name={adapter}', 'source=dhcp'])
+    combined = f'{out}\n{err}'.lower()
+    if code != 0 and 'already enabled' not in combined:
         detail = _ps_failure(out, err, code, 'DHCP switch failed')
         admin = any(w in detail.lower()
-                    for w in ('access is denied', 'administrator', 'privileged'))
+                    for w in ('access is denied', 'administrator', 'privileged',
+                              'requires elevation'))
         current_app.logger.error('network_dhcp failed (exit %s): %s', code, detail)
         return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
     return jsonify({'success': True})
