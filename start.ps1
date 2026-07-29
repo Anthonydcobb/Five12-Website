@@ -30,8 +30,18 @@ if ($Mode -eq "app") {
     # and scans nothing, so the Cintennas tab stays empty while the radio is
     # sitting right there. Observed 2026-07-28. Cost: you restart the backend
     # by hand after editing Python.
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$env:PATH = '$pythonScripts;' + `$env:PATH; cd '$root\backend'; & '$pythonExe' -m flask run --port 5000 --no-reload"
+    # Bluetooth is gated by two env vars that default OFF, so that a hosted
+    # deploy never starts a radio scan or writes to a fixture unasked. On this
+    # rig, launching Five12 IS the ask — without these the Cintennas tab just
+    # reports "Bluetooth tools are switched off" every time.
+    #   FIVE12_BLE_TOOLS : passive discovery + connected status reads
+    #   FIVE12_BLE_WRITE : mode switch, Link, Unlink
+    # Writes are still individually confirmed in the UI and re-checked
+    # server-side; this only decides whether the controls exist at all.
+    # To launch read-only, set either to '0' below.
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "`$env:PATH = '$pythonScripts;' + `$env:PATH; `$env:FIVE12_BLE_TOOLS = '1'; `$env:FIVE12_BLE_WRITE = '1'; cd '$root\backend'; & '$pythonExe' -m flask run --port 5000 --no-reload"
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\app'; npm run dev"
     Write-Host "Backend:  http://localhost:5000" -ForegroundColor Cyan
     Write-Host "Frontend: http://localhost:5173" -ForegroundColor Cyan
+    Write-Host "Bluetooth: discovery ON, writes ON (Link/Unlink available)" -ForegroundColor DarkYellow
 }
