@@ -52,10 +52,33 @@ def test_the_real_migrations_directory_is_where_we_say_it_is():
 
 
 def test_the_docs_point_at_the_real_directory():
-    """AGENTS.md sent an agent to the dead copy once already."""
+    """AGENTS.md sent an agent to the dead copy once already.
+
+    Checking merely that `backend/migrations` appears somewhere is not enough:
+    both files already contained that phrase in their repository-layout section
+    while the database paragraph still said `migrations/`. A test that passes
+    while the misleading sentence is present guards nothing. So this asserts
+    the schema-management sentence itself names the real directory, and that
+    the ambiguous unqualified form is absent.
+    """
+    ambiguous = re.compile(r'Alembic in `migrations/`')
+    schema_sentence = re.compile(
+        r'Schema managed via [^\n]*`backend/migrations/`'
+    )
     for name in ('AGENTS.md', 'CLAUDE.md'):
         text = (REPO / name).read_text(encoding='utf-8')
-        assert 'backend/migrations' in text, f'{name} does not name backend/migrations/'
+        assert not ambiguous.search(text), (
+            f'{name} still says "Alembic in `migrations/`" — that is the dead '
+            'copy, and it is what sent an agent to the wrong directory'
+        )
+        assert schema_sentence.search(text), (
+            f'{name}: the schema-management sentence must name '
+            '`backend/migrations/` explicitly, not just mention it elsewhere'
+        )
+        assert 'from `backend/`' in text, (
+            f'{name} must say to run flask db commands from `backend/` — the '
+            'directory is resolved relative to the working directory'
+        )
 
 
 def test_revision_ids_are_unique():

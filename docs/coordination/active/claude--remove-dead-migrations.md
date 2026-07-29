@@ -75,9 +75,14 @@ done at the time, not instructions to follow now.
 
 | Command | Result | Evidence level |
 |---|---|---|
-| `python -m pytest tests/test_migrations_layout.py` | **6 passed** | verified on actual gear |
-| `python -m pytest` (full) | **384 passed, 5 failed** (the BLE lock tests — the app is running and holds the adapter lock; reproducible on clean `main`) | verified on actual gear |
-| Whole chain applied to an empty MySQL database **after** the deletion, then compared to the models | 12 tables, `alembic_version` = `c5f1a2b3d4e6`, **0 differences** | verified on actual gear |
+| `python -m pytest tests/test_migrations_layout.py` | **6 passed** | software — no hardware claim |
+| `python -m pytest` (full) | **384 passed, 5 failed** (the BLE lock tests — the app is running and holds the adapter lock; reproducible on clean `main`) | software — no hardware claim |
+| Whole chain applied to an empty MySQL database **after** the deletion, then compared to the models | 12 tables, `alembic_version` = `c5f1a2b3d4e6`, **0 differences** | database — disposable MySQL |
+
+Evidence labels corrected after review: an earlier version of this table marked
+all three as `verified on actual gear`. That label exists for **hardware**
+behaviour (README rule 8), and applying it to filesystem and database checks
+devalues it for the claims that need it. Nothing here touched lighting gear.
 
 The last one is the one that matters: it proves deleting the root copy did not
 disturb the real chain. Scratch database created and dropped by the check; the
