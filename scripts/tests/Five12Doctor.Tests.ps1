@@ -155,6 +155,62 @@ Describe 'Fault 3 - python deps on the app interpreter' {
     }
 }
 
+Describe 'Packet capture - installed is not the same as working' {
+
+    It 'passes when scapy is installed and the Npcap service is running' {
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $true `
+            -DriverPresent $true -ServiceStatus 'Running' -DriverVersion '1.88'
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match '1.88'
+    }
+
+    It 'FAILS when scapy is installed but no capture driver exists' {
+        # The false green this check exists for: metadata says installed,
+        # `--full` imports it fine, and every packet send still fails.
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $true `
+            -DriverPresent $false -ServiceStatus ''
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'import cleanly and then fail'
+        ($r.Fix -join ' ') | Should Match 'npcap.com'
+    }
+
+    It 'FAILS when the driver is installed but its service is stopped' {
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $true `
+            -DriverPresent $true -ServiceStatus 'Stopped' -DriverVersion '1.88'
+        $r.Status | Should Be 'FAIL'
+        ($r.Fix -join ' ') | Should Match 'Start-Service npcap'
+    }
+
+    It 'FAILS when scapy itself reports no capture provider, whatever is on disk' {
+        # -Full asks scapy directly, and scapy outranks the filesystem.
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $true `
+            -DriverPresent $true -ServiceStatus 'Running' -UsePcap $false
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'conf.use_pcap = False'
+    }
+
+    It 'records the direct answer from scapy when it is affirmative' {
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $true `
+            -DriverPresent $true -ServiceStatus 'Running' -UsePcap $true
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match 'conf.use_pcap = True'
+    }
+
+    It 'does not double-FAIL when scapy is simply not installed' {
+        # The Python deps check already owns that failure.
+        $r = Test-Five12PacketCapture -ScapyRequired $true -ScapyInstalled $false `
+            -DriverPresent $false -ServiceStatus ''
+        $r.Status | Should Be 'INFO'
+        ($r.Details -join ' ') | Should Match 'ARP cache'
+    }
+
+    It 'stays quiet when scapy is not a requirement of the app' {
+        $r = Test-Five12PacketCapture -ScapyRequired $false -ScapyInstalled $false `
+            -DriverPresent $false -ServiceStatus ''
+        $r.Status | Should Be 'INFO'
+    }
+}
+
 Describe 'Fault 4 - .env completeness' {
 
     It 'passes when every key config.py reads is present' {

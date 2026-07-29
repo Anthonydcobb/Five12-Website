@@ -82,7 +82,16 @@ def test_package_report_is_clean_when_everything_matches():
     reqs = probe.parse_requirements("Flask==3.1.1\nwebsocket-client==1.9.0\n")
     installed = {"flask": "3.1.1", "websocket-client": "1.9.0"}
     report = probe.package_report(reqs, installed)
-    assert report == {"missing": [], "mismatched": []}
+    assert report["missing"] == []
+    assert report["mismatched"] == []
+
+
+def test_package_report_lists_what_was_required():
+    """The packet-capture check needs to know whether scapy is part of this app
+    at all before it has an opinion about Npcap."""
+    reqs = probe.parse_requirements("scapy==2.6.1\nFlask==3.1.1\n")
+    report = probe.package_report(reqs, {"scapy": "2.6.1", "flask": "3.1.1"})
+    assert report["required"] == ["scapy", "flask"]
 
 
 def test_package_report_FAILS_when_websocket_client_is_absent():
@@ -109,6 +118,20 @@ def test_package_report_reports_version_drift():
     assert report["mismatched"] == [
         {"name": "Flask", "wanted": "3.1.1", "installed": "3.1.0"}
     ]
+
+
+def test_packet_capture_probe_reports_a_real_answer_or_a_real_error():
+    """Whatever scapy's state on this machine, the probe must return a decided
+    answer rather than an empty shrug — an unanswerable check is the thing the
+    doctor exists to prevent."""
+    result = probe.packet_capture_probe()
+    assert set(result) == {"available", "use_pcap", "interfaces", "error"}
+    if result["available"]:
+        assert result["use_pcap"] in (True, False)
+        assert result["error"] is None
+    else:
+        assert result["use_pcap"] is None
+        assert result["error"]
 
 
 # ---------------------------------------------------------------------------

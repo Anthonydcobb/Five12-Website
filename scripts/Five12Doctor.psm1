@@ -276,6 +276,103 @@ function Test-Five12PythonPackages {
     return New-Five12Check -Name 'Python deps' -Status $status -Message $message -Details $details -Fix ($fixes | Select-Object -Unique)
 }
 
+function Test-Five12PacketCapture {
+    <#
+    .SYNOPSIS
+        scapy needs a packet-capture driver. Installed is not the same as working.
+    .DESCRIPTION
+        This check exists because the dependency check alone can go green over a
+        dead capability. On Windows, scapy imports perfectly well with no Npcap
+        installed — metadata check passes, `--full` real-import check passes —
+        and then every send and receive fails at runtime, down in
+        `scanner.py` where the failure is swallowed into `log.debug`. Discovery
+        quietly degrades to the OS ARP cache and nothing anywhere says so.
+
+        That is fault 3 wearing a different hat: a check that cannot fail is a
+        green light with nothing behind it.
+    .PARAMETER ScapyRequired
+        Is scapy in requirements.txt at all?
+    .PARAMETER ScapyInstalled
+        Is the distribution present on the app interpreter?
+    .PARAMETER DriverPresent
+        Is wpcap.dll on disk (Npcap's own directory or WinPcap-compatible mode)?
+    .PARAMETER ServiceStatus
+        'Running', 'Stopped', or '' when the service does not exist.
+    .PARAMETER UsePcap
+        scapy's own `conf.use_pcap`, from the probe under -Full. $null when not
+        collected — the authoritative answer when it is.
+    #>
+    param(
+        [bool]$ScapyRequired = $true,
+        [bool]$ScapyInstalled = $true,
+        [bool]$DriverPresent = $false,
+        [string]$ServiceStatus = '',
+        [string]$DriverVersion = '',
+        $UsePcap = $null
+    )
+
+    if (-not $ScapyRequired) {
+        return New-Five12Check -Name 'Packet capture' -Status 'INFO' `
+            -Message 'scapy is not a requirement of this app'
+    }
+    if (-not $ScapyInstalled) {
+        # The Python deps check already FAILs on this. Say why it matters here
+        # rather than failing the same fact twice.
+        return New-Five12Check -Name 'Packet capture' -Status 'INFO' `
+            -Message 'scapy is not installed — see the Python deps line' `
+            -Details @('without it the active ARP sweep degrades to the OS ARP cache, silently')
+    }
+
+    $details = @()
+    $fixes = @()
+    $statuses = @()
+
+    if (-not $DriverPresent) {
+        $statuses += 'FAIL'
+        $details += 'scapy is installed but there is no packet-capture driver (Npcap) — it will import cleanly and then fail on every send'
+        $details += 'scanner.py swallows that failure into log.debug, so discovery silently falls back to the OS ARP cache'
+        $fixes += 'Install Npcap from https://npcap.com (needs Administrator; tick "WinPcap API-compatible mode" if anything else on this rig wants it)'
+    }
+    else {
+        # Label this as the wpcap.dll file version, not the Npcap product
+        # version — Npcap ships a wpcap.dll versioned after the WinPcap API it
+        # emulates (1.10.6 on Npcap 1.88), and reading it as "Npcap 1.10" would
+        # send someone chasing a downgrade that never happened.
+        $version = 'version unreadable'
+        if ($DriverVersion) { $version = "wpcap.dll $DriverVersion" }
+        $details += "capture driver present ($version)"
+
+        if ($ServiceStatus -eq '') {
+            $statuses += 'WARN'
+            $details += 'the npcap service does not exist, though the driver is on disk'
+            $fixes += 'Reinstall Npcap from https://npcap.com (needs Administrator)'
+        }
+        elseif ($ServiceStatus -ne 'Running') {
+            $statuses += 'FAIL'
+            $details += "the npcap service is $ServiceStatus"
+            $fixes += 'Start-Service npcap   # run as Administrator'
+        }
+    }
+
+    if ($null -ne $UsePcap) {
+        # -Full asked scapy directly, which outranks anything inferred from the
+        # filesystem.
+        if ($UsePcap) {
+            $details += 'scapy reports conf.use_pcap = True (asked directly, -Full)'
+        }
+        else {
+            $statuses += 'FAIL'
+            $details += 'scapy reports conf.use_pcap = False — it has no capture provider regardless of what is on disk'
+            $fixes += 'Install or repair Npcap from https://npcap.com (needs Administrator)'
+        }
+    }
+
+    $status = Get-Five12WorstStatus -Statuses $statuses
+    $message = 'scapy has a capture driver'
+    if ($status -eq 'FAIL') { $message = 'scapy cannot capture packets' }
+    return New-Five12Check -Name 'Packet capture' -Status $status -Message $message -Details $details -Fix $fixes
+}
+
 # ---------------------------------------------------------------------------
 # Fault 4 — backend/.env had DB_PASS while config.py reads DB_PASSWORD
 # ---------------------------------------------------------------------------
@@ -685,6 +782,7 @@ Export-ModuleMember -Function @(
     'Test-Five12IpInCidr',
     'Test-Five12RepoIdentity',
     'Test-Five12PythonPackages',
+    'Test-Five12PacketCapture',
     'Test-Five12EnvKeys',
     'Test-Five12Database',
     'Test-Five12FlaskProcesses',

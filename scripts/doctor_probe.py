@@ -214,7 +214,13 @@ def package_report(requirements: list[dict], installed: dict[str, str]) -> dict:
             mismatched.append(
                 {"name": req["name"], "wanted": req["version"], "installed": actual}
             )
-    return {"missing": missing, "mismatched": mismatched}
+    return {
+        "missing": missing,
+        "mismatched": mismatched,
+        # The packet-capture check needs to know whether scapy is even part of
+        # this app before it has an opinion about Npcap.
+        "required": [r["normalized"] for r in requirements],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +274,41 @@ def import_failures(requirements: list[dict]) -> list[dict]:
                 {"name": req["name"], "module": module, "error": f"{type(exc).__name__}: {exc}"}
             )
     return failures
+
+
+def packet_capture_probe() -> dict:
+    """Ask scapy itself whether it has a working packet-capture provider.
+
+    This answers the question the installed-package check cannot. On Windows
+    scapy imports perfectly well with no Npcap present, and then every send and
+    receive fails at runtime — down in ``scanner.py`` where the failure is
+    swallowed into ``log.debug``. A green dependency check over a dead
+    capability is the exact shape of fault 3, so it gets its own answer.
+
+    Importing ``scapy.all`` costs about a second, so this runs under --full
+    only; the fast path checks for the Npcap driver from PowerShell instead.
+    """
+    try:
+        from scapy.all import conf
+
+        interfaces = 0
+        try:
+            interfaces = len(conf.ifaces.data)
+        except Exception:  # noqa: BLE001 - scapy internals, not a contract
+            interfaces = 0
+        return {
+            "available": True,
+            "use_pcap": bool(conf.use_pcap),
+            "interfaces": interfaces,
+            "error": None,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": False,
+            "use_pcap": None,
+            "interfaces": 0,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
 
 
 def database_probe(env: dict[str, str]) -> dict:
@@ -399,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
     result["packages"]["import_failures"] = (
         import_failures(requirements) if args.full else None
     )
+    result["packet_capture"] = packet_capture_probe() if args.full else None
 
     config_keys: dict[str, bool] = {}
     if config_path.exists():

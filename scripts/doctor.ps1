@@ -123,6 +123,40 @@ else {
 
 if ($null -ne $probe) {
     $checks += Test-Five12PythonPackages -Packages $probe.packages -Interpreter $PythonExe -RepoRoot $repoRoot
+
+    # scapy needs a capture driver, and "installed" is not "working": with no
+    # Npcap it imports cleanly and fails on every send, where scanner.py hides
+    # the failure in log.debug. Driver presence is a file check and a service
+    # query — cheap enough for the fast path.
+    $npcapDll = @(
+        (Join-Path $env:SystemRoot 'System32\Npcap\wpcap.dll'),   # Npcap's own directory
+        (Join-Path $env:SystemRoot 'System32\wpcap.dll')          # WinPcap-compatible mode
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    $driverVersion = ''
+    if ($npcapDll) {
+        try { $driverVersion = [string](Get-Item $npcapDll).VersionInfo.ProductVersion } catch { $driverVersion = '' }
+    }
+    $npcapService = ''
+    try {
+        $svc = Get-Service npcap -ErrorAction SilentlyContinue
+        if ($null -ne $svc) { $npcapService = [string]$svc.Status }
+    }
+    catch { $npcapService = '' }
+
+    $usePcap = $null
+    if ($null -ne $probe.packet_capture -and $probe.packet_capture.available) {
+        $usePcap = [bool]$probe.packet_capture.use_pcap
+    }
+
+    $checks += Test-Five12PacketCapture `
+        -ScapyRequired (@($probe.packages.required) -contains 'scapy') `
+        -ScapyInstalled (-not (@($probe.packages.missing) -contains 'scapy')) `
+        -DriverPresent ([bool]$npcapDll) `
+        -ServiceStatus $npcapService `
+        -DriverVersion $driverVersion `
+        -UsePcap $usePcap
+
     $checks += Test-Five12EnvKeys -EnvReport $probe.env -RepoRoot $repoRoot
     $checks += Test-Five12Database -Database $probe.database
 }
