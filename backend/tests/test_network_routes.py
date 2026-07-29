@@ -380,3 +380,60 @@ def test_apply_failure_also_carries_detail(client):
                           json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
     assert res.status_code == 500
     assert 'exited 2' in res.get_json()['error']
+
+
+# ── Persistent-store handling ────────────────────────────────────────────────
+#
+# [BENCH 2026-07-28] Reproduced on the rig: `Set-NetIPInterface -Dhcp Disabled`
+# on a Disconnected adapter exits clean and changes nothing — Get-NetIPInterface
+# still reported `Dhcp: Enabled` afterwards. New-NetIPAddress then failed with
+# "Inconsistent parameters PolicyStore PersistentStore and Dhcp Enabled"
+# (Windows error 87), because it writes persistently and that store still said
+# DHCP. Configuring an unplugged NIC is a normal load-in step, so these pin that
+# the script targets the persistent store and verifies the result.
+#
+# These assert the *shape of the script we send*. Whether Windows then behaves
+# is a bench question, not something a fake shell can answer.
+
+def apply_script(calls):
+    return ps_scripts(calls)[0]
+
+
+def test_apply_targets_the_persistent_store(client, ps_calls):
+    res = client.post('/api/network/apply',
+                      json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
+    assert res.status_code == 200
+    script = apply_script(ps_calls)
+    assert '-Dhcp Disabled -PolicyStore PersistentStore' in script, (
+        'the plain form silently no-ops on a disconnected adapter')
+
+
+def test_apply_verifies_dhcp_actually_turned_off(client, ps_calls):
+    """The cmdlet reports success without acting, so its word is not enough."""
+    client.post('/api/network/apply',
+                json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
+    script = apply_script(ps_calls)
+    assert '-PolicyStore PersistentStore' in script
+    assert 'throw' in script, 'no failure path if DHCP stays enabled'
+    assert "$persisted.Dhcp -ne 'Disabled'" in script
+
+
+def test_dhcp_targets_the_persistent_store_and_verifies(client, ps_calls):
+    res = client.post('/api/network/dhcp', json={'adapter': 'Wi-Fi'})
+    assert res.status_code == 200
+    script = ps_scripts(ps_calls)[0]
+    assert '-Dhcp Enabled -PolicyStore PersistentStore' in script
+    assert "$persisted.Dhcp -ne 'Enabled'" in script
+    assert 'throw' in script
+
+
+def test_persistent_store_change_still_carries_no_operator_text(
+        client, ps_calls_hostile_inventory):
+    """The new lines must not reintroduce interpolation of the adapter name."""
+    res = client.post('/api/network/apply',
+                      json={'adapter': INJECTION, 'ip': '192.168.1.50'})
+    assert res.status_code == 200
+    script = apply_script(ps_calls_hostile_inventory)
+    assert INJECTION not in script
+    assert 'Start-Process' not in script
+    assert script.count('$env:FIVE12_ADAPTER') >= 4

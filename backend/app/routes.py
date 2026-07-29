@@ -802,11 +802,29 @@ def network_apply():
     if adapter not in known:
         return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
 
-    # $env: references, not interpolation — see _run_ps.
+    # $env: references, not interpolation — see _run_ps. `prefix` is an int and
+    # `gw_line` is one of two constants, so neither can carry operator text.
+    #
+    # [BENCH 2026-07-28] On a Disconnected adapter, plain `Set-NetIPInterface
+    # -Dhcp Disabled` returns success and changes nothing — verified on the rig:
+    # the cmdlet exited clean while Get-NetIPInterface still reported
+    # `Dhcp: Enabled`. New-NetIPAddress then failed with "Inconsistent
+    # parameters PolicyStore PersistentStore and Dhcp Enabled" (error 87),
+    # because it writes to the persistent store and that store still said DHCP.
+    # Setting a static IP on an unplugged NIC is a normal load-in step, so
+    # target the persistent store explicitly and then confirm it actually took
+    # rather than trusting a cmdlet that reports success without acting.
     gw_line = "-DefaultGateway $env:FIVE12_GATEWAY" if gateway else ''
     ps = f"""
 $ErrorActionPreference = 'Stop'
+Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -PolicyStore PersistentStore
 Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue
+
+$persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($persisted -and $persisted.Dhcp -ne 'Disabled') {{
+    throw "Could not turn DHCP off for this adapter (still $($persisted.Dhcp)). It may be managed by another service."
+}}
+
 Get-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
 Get-NetRoute       -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 New-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -IPAddress $env:FIVE12_IP -PrefixLength {prefix} {gw_line}
@@ -843,9 +861,20 @@ def network_dhcp():
     if adapter not in known:
         return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
 
+    # Same persistent-store handling as network_apply — see the note there. The
+    # rig hit this route failing with a non-zero exit and empty stderr, which is
+    # consistent with the same silent no-op, so it gets the same treatment and
+    # the same explicit confirmation.
     ps = """
 $ErrorActionPreference = 'Stop'
-Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled
+Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled -PolicyStore PersistentStore
+Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
+
+$persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($persisted -and $persisted.Dhcp -ne 'Enabled') {
+    throw "Could not turn DHCP on for this adapter (still $($persisted.Dhcp)). It may be managed by another service."
+}
+
 Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
     Where-Object { $_.PrefixOrigin -ne 'Dhcp' } |
     Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
