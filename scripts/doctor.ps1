@@ -292,7 +292,35 @@ try {
 }
 catch { $profiles = @() }
 
-$checks += Test-Five12NetworkCategories -ShowNics $showNics -Profiles $profiles
+# Is the durable fix in place? Without this the doctor cannot tell an operator
+# who has already applied the policy from one who never has, and it would keep
+# prescribing a fix that is already applied. A reimage silently loses it.
+$policyState = 'NotSet'
+$policyLocked = $false
+try {
+    $sigPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures'
+    if (Test-Path $sigPath) {
+        $entries = @(Get-ChildItem -Recurse $sigPath -ErrorAction SilentlyContinue | ForEach-Object {
+                $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                $category = $null
+                $readOnly = $null
+                if ($null -ne $props) {
+                    if ($props.PSObject.Properties['Category']) { $category = $props.Category }
+                    if ($props.PSObject.Properties['CategoryReadOnly']) { $readOnly = $props.CategoryReadOnly }
+                }
+                [pscustomobject]@{ Name = $_.PSChildName; Category = $category; CategoryReadOnly = $readOnly }
+            })
+        $policy = ConvertFrom-Five12NlmPolicy -Entries $entries
+        $policyState = $policy.State
+        $policyLocked = $policy.Locked
+    }
+}
+catch {
+    $policyState = 'NotSet'
+}
+
+$checks += Test-Five12NetworkCategories -ShowNics $showNics -Profiles $profiles `
+    -UnidentifiedPolicy $policyState -PolicyLocked $policyLocked
 
 # ---------------------------------------------------------------------------
 # Report

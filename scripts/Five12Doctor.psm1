@@ -719,6 +719,52 @@ function ConvertTo-Five12MaskString {
     return ($octets -join '.')
 }
 
+function ConvertFrom-Five12NlmPolicy {
+    <#
+    .SYNOPSIS
+        Interpret the Network List Manager policy entries for unidentified networks.
+    .PARAMETER Entries
+        Objects with Name, Category, CategoryReadOnly — one per subkey under
+        HKLM\SOFTWARE\Policies\Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures.
+    .OUTPUTS
+        State: 'Private' | 'Public' | 'Domain' | 'NotSet' | 'Unknown'
+        Locked: $true when the operator may not change the location by hand.
+    .NOTES
+        The "Unidentified Networks" policy is stored under a fixed pseudo-
+        signature rather than a real network signature.
+
+        Provenance of that constant, because it matters: this was not taken
+        from documentation. On this machine the policy key did not exist at
+        all; the operator then set exactly one thing — secpol.msc → Network
+        List Manager Policies → Unidentified Networks → Private — and exactly
+        this entry appeared, with Category=1. Observed 2026-07-29.
+
+        Entries that do not match are per-network policies for identified
+        networks, and say nothing about the unidentified default, so they are
+        ignored rather than counted.
+    #>
+    param($Entries = @())
+
+    $unidentifiedPrefix = '010103000F0000F0010000000F0000F0'
+    $categories = @{ 0 = 'Public'; 1 = 'Private'; 2 = 'Domain' }
+
+    foreach ($entry in @($Entries)) {
+        if (-not $entry.Name) { continue }
+        if ($entry.Name -notlike "$unidentifiedPrefix*") { continue }
+
+        $state = 'Unknown'
+        $raw = $entry.Category
+        if ($null -ne $raw -and $categories.ContainsKey([int]$raw)) { $state = $categories[[int]$raw] }
+
+        $locked = $false
+        if ($null -ne $entry.CategoryReadOnly -and [int]$entry.CategoryReadOnly -eq 1) { $locked = $true }
+
+        return [pscustomobject]@{ State = $state; Locked = $locked }
+    }
+
+    return [pscustomobject]@{ State = 'NotSet'; Locked = $false }
+}
+
 function Test-Five12NetworkCategories {
     <#
     .SYNOPSIS
@@ -757,7 +803,9 @@ function Test-Five12NetworkCategories {
     #>
     param(
         $ShowNics = @(),
-        $Profiles = @()
+        $Profiles = @(),
+        [string]$UnidentifiedPolicy = 'NotSet',
+        [bool]$PolicyLocked = $false
     )
     $details = @()
     $fixes = @()
@@ -790,11 +838,38 @@ function Test-Five12NetworkCategories {
         }
     }
 
-    if (@($statuses | Where-Object { $_ -eq 'FAIL' }).Count -gt 0) {
-        # Without this, the operator fixes the same fault after every sleep and
-        # never learns it is a default, not an accident.
-        $details += 'these NICs have no default gateway, so Windows cannot identify them and stores no profile — the category resets to Public on every resume from sleep'
-        $fixes += 'DURABLE FIX: secpol.msc → Network List Manager Policies → "Unidentified Networks" → Location type: Private   (changes the default, so it survives resume; applies to every unidentified network on this machine)'
+    $anyPublic = (@($statuses | Where-Object { $_ -eq 'FAIL' }).Count -gt 0)
+
+    # State the policy either way. Without it the operator re-fixes the same
+    # fault after every sleep and never learns it is a default rather than an
+    # accident — and if the machine is ever reimaged, the fix disappears with
+    # nothing to say so.
+    switch ($UnidentifiedPolicy) {
+        'Private' {
+            $lockNote = 'operator can still change it by hand'
+            if ($PolicyLocked) { $lockNote = 'locked against manual change' }
+            $details += "unidentified-networks policy: Private — survives resume from sleep ($lockNote)"
+            if ($anyPublic) {
+                # The durable fix is already in place, so repeating it would be
+                # wrong. Something else put these on Public.
+                $details += 'the durable fix is already applied, so this is NOT the usual post-resume drift — look for a manual change or a third party setting the category'
+                $fixes += 'Get-WinEvent -LogName Microsoft-Windows-NetworkProfile/Operational -MaxEvents 40 | Where-Object Id -eq 20002   # who set it, and when'
+            }
+        }
+        'NotSet' {
+            $details += 'unidentified-networks policy: not set — these NICs will reset to Public on the next resume from sleep'
+            $statuses += 'INFO'
+            $fixes += 'DURABLE FIX: secpol.msc → Network List Manager Policies → "Unidentified Networks" → Location type: Private   (changes the default, so it survives resume; applies to every unidentified network on this machine)'
+        }
+        default {
+            $details += "unidentified-networks policy: $UnidentifiedPolicy — this forces unidentified networks to $UnidentifiedPolicy, which is the wrong direction for show NICs"
+            $statuses += 'WARN'
+            $fixes += 'secpol.msc → Network List Manager Policies → "Unidentified Networks" → Location type: Private'
+        }
+    }
+
+    if ($anyPublic) {
+        $details += 'these NICs have no default gateway, so Windows cannot identify them and stores no profile — with no policy, the category resets to Public on every resume from sleep'
     }
 
     $status = Get-Five12WorstStatus -Statuses $statuses
@@ -817,5 +892,6 @@ Export-ModuleMember -Function @(
     'Test-Five12FlaskProcesses',
     'Test-Five12FeatureGates',
     'Test-Five12SubnetCoverage',
+    'ConvertFrom-Five12NlmPolicy',
     'Test-Five12NetworkCategories'
 )

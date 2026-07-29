@@ -445,7 +445,7 @@ Describe 'Fault 6 - subnet coverage and network category' {
             [pscustomobject]@{ InterfaceAlias = 'COMS'; NetworkCategory = 'Private' },
             [pscustomobject]@{ InterfaceAlias = 'Management'; NetworkCategory = 'Private' }
         )
-        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'Private'
         $r.Status | Should Be 'OK'
     }
 
@@ -464,6 +464,73 @@ Describe 'Fault 6 - subnet coverage and network category' {
         @($r.Fix).Count | Should Be 5
     }
 
+    It 'reads the unidentified-networks policy as Private when it is set' {
+        # Shape observed on the rig: the operator set exactly one thing in
+        # secpol and exactly this entry appeared, Category=1.
+        $entries = @([pscustomobject]@{
+                Name = '010103000F0000F0010000000F0000F0C967A3643C3AD745950DA7859209176EF5B87C875FA20DF21951640E807D7C24'
+                Category = 1; CategoryReadOnly = 0
+            })
+        $p = ConvertFrom-Five12NlmPolicy -Entries $entries
+        $p.State | Should Be 'Private'
+        $p.Locked | Should Be $false
+    }
+
+    It 'reports NotSet when no policy exists' {
+        (ConvertFrom-Five12NlmPolicy -Entries @()).State | Should Be 'NotSet'
+    }
+
+    It 'does not mistake a per-network policy for the unidentified default' {
+        # Signatures for identified networks live in the same key and say
+        # nothing about the unidentified default.
+        $entries = @([pscustomobject]@{ Name = '0103000F0000F0DEADBEEF'; Category = 1; CategoryReadOnly = 0 })
+        (ConvertFrom-Five12NlmPolicy -Entries $entries).State | Should Be 'NotSet'
+    }
+
+    It 'reports the policy set the wrong way round' {
+        $entries = @([pscustomobject]@{
+                Name = '010103000F0000F0010000000F0000F0ABC'; Category = 0; CategoryReadOnly = 1
+            })
+        $p = ConvertFrom-Five12NlmPolicy -Entries $entries
+        $p.State | Should Be 'Public'
+        $p.Locked | Should Be $true
+    }
+
+    It 'says the drift will recur when the policy is not set, even with everything Private' {
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Private' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'NotSet'
+        $r.Status | Should Be 'INFO'
+        ($r.Details -join ' ') | Should Match 'will reset to Public on the next resume'
+    }
+
+    It 'confirms the durable fix instead of prescribing it once the policy is Private' {
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Private' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'Private'
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match 'survives resume from sleep'
+        ($r.Fix -join ' ') | Should Not Match 'DURABLE FIX'
+    }
+
+    It 'stops blaming resume drift when a NIC is Public despite the policy being Private' {
+        # This combination means something else set the category, so repeating
+        # the durable fix would send the operator down the wrong path.
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Public' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'Private'
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'NOT the usual post-resume drift'
+        ($r.Fix -join ' ') | Should Not Match 'DURABLE FIX'
+    }
+
+    It 'notes when the policy is locked against manual change' {
+        $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
+        $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Private' })
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'Private' -PolicyLocked $true
+        ($r.Details -join ' ') | Should Match 'locked against manual change'
+    }
+
     It 'offers the durable fix, not just the one that lasts until the next sleep' {
         # Root cause (2026-07-29): these NICs have no gateway, so Windows never
         # identifies them, stores no profile, and resets them to Public on every
@@ -477,11 +544,17 @@ Describe 'Fault 6 - subnet coverage and network category' {
         ($r.Details -join ' ') | Should Match 'resume from sleep'
     }
 
-    It 'does not nag about the durable fix when nothing is Public' {
+    It 'offers the durable fix BEFORE anything is Public, because the drift is a certainty' {
+        # Everything is Private here and the check still speaks up. On a machine
+        # with no policy the reset is not a risk, it is what happens at the next
+        # resume — so waiting until it has already broken would be waiting to
+        # report a fault that is fully predictable now.
         $coverage = Test-Five12SubnetCoverage -Subnets @($showSubnets[0]) -Interfaces $showNics
         $profiles = @([pscustomobject]@{ InterfaceAlias = 'HOG'; NetworkCategory = 'Private' })
-        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles
-        ($r.Fix -join ' ') | Should Not Match 'DURABLE FIX'
+        $r = Test-Five12NetworkCategories -ShowNics $coverage.ShowNics -Profiles $profiles -UnidentifiedPolicy 'NotSet'
+        ($r.Fix -join ' ') | Should Match 'DURABLE FIX'
+        # ...but it must not FAIL over a future problem and block a launch.
+        $r.Status | Should Be 'INFO'
     }
 
     It 'FAILS when even one show NIC is Public' {
