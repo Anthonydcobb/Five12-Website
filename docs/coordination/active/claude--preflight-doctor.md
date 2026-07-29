@@ -94,6 +94,9 @@ to prevent. Hence the **Packet capture** check:
 - `backend/tests/test_doctor_probe.py`
 - `start.ps1`
 - `backend/requirements.txt` (one line: the `requests` pin — see "Version pins")
+- `backend/requirements-dev.txt` (new)
+- `docs/coordination/README.md` (canonical-checks section only — **shared
+  surface, additive, wants Hermes' review**)
 - `docs/coordination/active/claude--preflight-doctor.md`
 
 ## Must-not-touch paths
@@ -255,6 +258,35 @@ only thing that exercised the new versions. This is the same two-interpreter
 split that hid fault 3, showing up as a gap in test coverage rather than as a
 runtime bug — see "Still open".
 
+### Tests now run on the app interpreter — resolved 2026-07-29
+
+Anthony's decision, taken after the pin sync exposed the gap. The root cause of
+fault 3 was never the missing package; it was that **nothing verified the
+interpreter the app actually runs on**. A test suite on a different Python is a
+green light pointed at the wrong runtime.
+
+- `backend/requirements-dev.txt` added: `pytest==9.0.3`, `pytest-flask==1.3.0`,
+  matching what the old test interpreter had. Both installed on the app
+  interpreter.
+- `docs/coordination/README.md` canonical checks updated: the Linux worktree
+  command stays for Hermes, a Windows line names the app interpreter
+  explicitly, and the section now says *why* the interpreter is part of the
+  check rather than an implementation detail.
+
+Result: **406 passed** on the app interpreter — the same count as on the old
+one, so nothing was silently skipping in either direction. That equality is the
+useful part: the move changed which runtime is under test without changing what
+is tested.
+
+The doctor deliberately does **not** check `requirements-dev.txt`. A missing
+`pytest` fails loudly the moment you run the suite, which is the opposite of
+the silent failure the doctor exists for; adding it would be noise.
+
+Note for review: this is the one change in this branch that touches shared
+coordination surface (`docs/coordination/README.md`, a documented canonical
+command). It is additive — no existing command was removed or altered — but it
+is Hermes' workflow too, so it wants a second opinion rather than my say-so.
+
 ## Commits
 
 - `b8f567f` feat: add preflight doctor and run it before dev-mode launch
@@ -298,17 +330,6 @@ Open, in rough priority order:
 2. **Why do the NIC categories drift?** The doctor now catches it every launch,
    which is the important half, but something is changing them. Suspicion falls
    on VPN adapter re-connects; unproven.
-3. **The test suite does not run on the interpreter the app runs on.** This is
-   the root of fault 3 and it is still there: `cd backend && python -m pytest`
-   uses Python 3.14 from `PATH`, which as of today is missing six of the app's
-   requirements including `bleak`, while the app runs on Python 3.12 at
-   `%LOCALAPPDATA%\Programs\Python\Python312`. Every dependency upgrade is
-   therefore untested by CI-equivalent means; today's was covered by a live
-   smoke test instead, which does not scale.
-
-   Not fixed here because it is a real decision, not a chore: pointing the
-   tests at the app interpreter needs `pytest` installed there, and syncing the
-   3.14 environment to `requirements.txt` may not even be possible for every
-   pin. Worth a decision from Anthony and Hermes rather than a unilateral move
-   from me. **Recommendation:** run the tests on the app interpreter, and let
-   the doctor's Python deps check become the thing that keeps both honest.
+3. ~~The test suite does not run on the interpreter the app runs on.~~
+   **Resolved 2026-07-29 — see below.** Hermes should still review the
+   `docs/coordination/README.md` change, since that file is shared surface.
