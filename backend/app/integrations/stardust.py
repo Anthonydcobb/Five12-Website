@@ -260,6 +260,9 @@ class StardustAdapter(DeviceAdapter):
         self._outputs_cache = None
         self._outputs_cache_at = 0.0
         self._outputs_cache_host = None
+        # Why the last outputs fetch failed, in operator-facing words, or None.
+        # Surfaced as status['outputsError'] so an empty grid always says why.
+        self._outputs_error = None
         # Shared, serialized Art-Net discovery (see NODES_TTL).
         self._nodes_cache = None
         self._nodes_cache_at = 0.0
@@ -473,20 +476,54 @@ class StardustAdapter(DeviceAdapter):
         Returns the last good list (or None). A stale entry triggers one
         refetch; a failed refetch logs and keeps whatever was cached. Changing
         ws_host invalidates the cache so a moved/renamed unit refetches at once.
+
+        Every failure path records a reason in self._outputs_error. This used
+        to be one blanket `except Exception` that logged and moved on, which
+        meant a missing Python package and a fixture that had walked out of
+        range produced identical, invisible results: an empty grid, no error,
+        nothing to tell them apart from the UI. Best-effort is right for the
+        DEVICE being unreachable; it is wrong for a broken install.
         """
         now = time.time()
         fresh = (self._outputs_cache_host == ws_host
                  and now - self._outputs_cache_at < OUTPUTS_TTL)
         if fresh:
             return self._outputs_cache
+
         try:
             timo, sacn, artnet = self._ws_fetch_settings(ws_host)
-            if timo.get('universe_nrs'):
-                self._outputs_cache = _merge_outputs(timo, sacn, artnet)
-                self._outputs_cache_at = now
-                self._outputs_cache_host = ws_host
-        except Exception as exc:  # noqa: BLE001 — outputs are best-effort
-            log.warning('Stardust /ws outputs fetch failed: %s', exc)
+        except ImportError as exc:
+            # NOT best-effort. websocket-client is pinned in requirements.txt,
+            # so its absence is a broken server install, not a device
+            # condition, and it will never fix itself by retrying.
+            self._outputs_error = (
+                'The server cannot read output configuration: the '
+                'websocket-client package is not installed. Run '
+                '"pip install -r backend/requirements.txt" and restart.'
+            )
+            log.error('Stardust /ws outputs unavailable — missing dependency: %s', exc)
+            return self._outputs_cache
+        except Exception as exc:  # noqa: BLE001 — the unit itself is best-effort
+            self._outputs_error = (
+                f'Could not read output configuration from {ws_host}. '
+                f'The unit may be busy, rebooting, or off the network '
+                f'({type(exc).__name__}).'
+            )
+            log.warning('Stardust /ws outputs fetch failed for %s: %s', ws_host, exc)
+            return self._outputs_cache
+
+        if not timo.get('universe_nrs'):
+            # Answered, but with nothing usable. Distinct from "did not answer".
+            self._outputs_error = (
+                f'{ws_host} responded but reported no output configuration.'
+            )
+            log.warning('Stardust /ws returned no universe_nrs from %s', ws_host)
+            return self._outputs_cache
+
+        self._outputs_cache = _merge_outputs(timo, sacn, artnet)
+        self._outputs_cache_at = now
+        self._outputs_cache_host = ws_host
+        self._outputs_error = None
         return self._outputs_cache
 
     # ── control: CRMX linking (the ONE deliberate write) ──
@@ -670,6 +707,14 @@ class StardustAdapter(DeviceAdapter):
         ws_host = node.get('ip') or self.host
         if ws_host:
             status['outputs'] = self._cached_outputs(ws_host)
+        else:
+            self._outputs_error = (
+                'No address is known for this unit, so its output '
+                'configuration cannot be read.'
+            )
+        # Always present, so an empty grid can state its reason instead of
+        # leaving the operator to guess between "unreachable" and "broken".
+        status['outputsError'] = self._outputs_error
         return status
 
     # ── simulator ──
@@ -719,6 +764,8 @@ class StardustAdapter(DeviceAdapter):
             'weakestRfPct': min(rfs) if rfs else None,
             'fixturesDiscovered': sum(len(u['fixtures']) for u in universes),
             'outputs': sim_outputs,
+            # Shape parity with _real_status: the key always exists.
+            'outputsError': None,
         }
 
     # ── patch reconciliation (the novel bit) ──

@@ -168,6 +168,88 @@ def test_real_status_outputs_none_when_ws_fails():
     assert status['outputs'] is None
 
 
+# ── the empty grid must always say WHY ──────────────────────────────────────
+# These exist because a blanket `except Exception` once made a missing Python
+# package and an unreachable fixture produce identical, invisible results: an
+# empty grid with no error anywhere. Diagnosing that took far longer than it
+# should have. Each failure class now has to name itself.
+
+def _adapter_with_node():
+    a = StardustAdapter(sim=False)
+    node = {'ip': '10.0.1.3', 'mac': 'AA:BB:CC:DD:EE:FF', 'shortName': 'Stardust',
+            'longName': 'Stardust DTx8', 'firmware': '1.0', 'via': '', 'ports': []}
+    a._discover_nodes = lambda: [node]
+    a._open_socket = lambda *args, **kwargs: _FakeSock()
+    return a
+
+
+def test_missing_dependency_names_the_package_not_the_device():
+    """A broken server install must not read as a flaky fixture. It will never
+    fix itself by retrying, and the operator can act on it only if told."""
+    a = _adapter_with_node()
+
+    def _no_lib(ip):
+        raise ImportError("No module named 'websocket'")
+
+    a._ws_fetch_settings = _no_lib
+    status = a._real_status()
+    assert status['outputs'] is None
+    err = status['outputsError']
+    assert 'websocket-client' in err
+    assert 'requirements.txt' in err
+    # Must NOT blame the radio — that is the wrong thing to go and check.
+    assert '10.0.1.3' not in err
+
+
+def test_unreachable_unit_names_the_unit():
+    a = _adapter_with_node()
+
+    def _boom(ip):
+        raise OSError('ws refused')
+
+    a._ws_fetch_settings = _boom
+    status = a._real_status()
+    assert status['outputs'] is None
+    err = status['outputsError']
+    assert '10.0.1.3' in err
+    assert 'websocket-client' not in err   # not a dependency problem
+
+
+def test_unit_answering_with_nothing_is_distinct_from_not_answering():
+    a = _adapter_with_node()
+    a._ws_fetch_settings = lambda ip: ({}, {}, {})
+    status = a._real_status()
+    assert status['outputs'] is None
+    assert 'responded' in status['outputsError']
+
+
+def test_success_clears_a_previous_error():
+    """A recovered unit must not keep showing yesterday's failure."""
+    a = _adapter_with_node()
+
+    def _boom(ip):
+        raise OSError('ws refused')
+
+    a._ws_fetch_settings = _boom
+    assert a._real_status()['outputsError'] is not None
+
+    a._outputs_cache_at = 0.0     # force a refetch past the TTL
+    a._ws_fetch_settings = lambda ip: (
+        {'universe_nrs': [1], 'output_names': ['X'], 'output_powers_mw': [100],
+         'rf_protocols': ['CRMX'], 'enabled_universe_nrs': [1]},
+        {'universe_map': {'5': [1]}},
+        {'universe_map': {}},
+    )
+    status = a._real_status()
+    assert status['outputs'][0]['output'] == 'A'
+    assert status['outputsError'] is None
+
+
+def test_sim_status_carries_the_key_too():
+    """Shape parity: the panel reads status.outputsError unconditionally."""
+    assert 'outputsError' in StardustAdapter(sim=True)._sim_status()
+
+
 def test_ws_fetch_throttled_by_ttl():
     """The slow /ws fetch must not run on every poll: within OUTPUTS_TTL the
     cached outputs are reused, and a later failed refetch keeps the last good

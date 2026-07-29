@@ -403,7 +403,12 @@ function StardustPanel() {
           })}
         </div>
       ) : (
-        <div className="text-[9px] font-mono text-text-muted">outputs config unavailable (/ws)</div>
+        /* Say WHY the grid is empty. The backend distinguishes a broken server
+           install from a unit that did not answer; showing only "unavailable"
+           made those indistinguishable and cost a long hunt once already. */
+        <div className="text-[9px] font-mono text-text-muted leading-relaxed max-w-lg">
+          {status.outputsError || 'outputs config unavailable (/ws)'}
+        </div>
       )}
 
       {status.outputs?.length > 0 && (
