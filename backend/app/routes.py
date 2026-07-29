@@ -888,17 +888,30 @@ def network_dhcp():
     # manually-assigned addresses are gone, so remove them explicitly and say so
     # if any survive. Remove-NetIPAddress is unaffected by the New-NetIPAddress
     # defect, and the adapter name still travels by environment, never as source.
+    # An adapter with no IPv4 address is the *success* state here, but
+    # Get-NetIPAddress raises a terminating CIM "no matching objects" error for
+    # it, and terminating errors ignore -ErrorAction SilentlyContinue. On the
+    # rig that killed the script at exit 1 with no output and reported a failed
+    # switch immediately after the switch had in fact worked. Every enumeration
+    # is wrapped so that "nothing found" reads as an empty list.
     cleanup = """
 $ErrorActionPreference = 'Stop'
-Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.PrefixOrigin -ne 'Dhcp' } |
-    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
-    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
 
-$leftover = Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object { $_.PrefixOrigin -eq 'Manual' } |
-    Select-Object -First 1
+function Get-Ipv4Addresses {
+    try { @(Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction Stop) }
+    catch { @() }
+}
+
+foreach ($addr in Get-Ipv4Addresses | Where-Object { $_.PrefixOrigin -ne 'Dhcp' }) {
+    Remove-NetIPAddress -InputObject $addr -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+try {
+    @(Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction Stop) |
+        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+} catch { }
+
+$leftover = Get-Ipv4Addresses | Where-Object { $_.PrefixOrigin -eq 'Manual' } | Select-Object -First 1
 if ($leftover) {
     throw "Switched to DHCP but the static address $($leftover.IPAddress) could not be removed."
 }

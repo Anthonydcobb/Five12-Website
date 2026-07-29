@@ -413,3 +413,33 @@ def test_apply_failure_also_carries_detail(client):
                           json={'adapter': 'Ethernet 2', 'ip': '192.168.1.50'})
     assert res.status_code == 500
     assert 'exited 2' in res.get_json()['error']
+
+
+def test_dhcp_cleanup_treats_no_addresses_as_the_success_state(client):
+    """[BENCH 2026-07-28] An adapter with no IPv4 address is what success looks
+    like, but Get-NetIPAddress raises a *terminating* CIM "no matching objects"
+    error for it, and terminating errors ignore -ErrorAction SilentlyContinue.
+    On the rig that killed the cleanup at exit 1 with no output and reported a
+    failed switch immediately after the switch had worked.
+
+    Script-shape assertion: every enumeration is wrapped so "nothing found"
+    becomes an empty list. Whether PowerShell then behaves is a bench question.
+    """
+    calls = []
+    fake = fake_shell(calls)
+    with patch('app.routes.subprocess.run', side_effect=fake):
+        res = client.post('/api/network/dhcp', json={'adapter': 'Wi-Fi'})
+    assert res.status_code == 200
+
+    cleanup = [c for c in calls
+               if c['argv'][0] != 'netsh'
+               and 'Remove-NetIPAddress' in c['argv'][-1]][0]['argv'][-1]
+
+    assert 'try {' in cleanup and 'catch { @() }' in cleanup, (
+        'an empty enumeration must not terminate the script')
+    assert '-ErrorAction Stop' in cleanup, (
+        'SilentlyContinue does not suppress terminating CIM errors'
+    )
+    # The guard still exists, so a genuine leftover is still a failure.
+    assert 'throw' in cleanup
+    assert "PrefixOrigin -eq 'Manual'" in cleanup
