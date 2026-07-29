@@ -349,12 +349,60 @@ def test_unrelated_failure_is_not_mislabelled_as_admin(client):
     assert res.get_json()['adminRequired'] is False
 
 
-def test_dhcp_already_enabled_is_success_not_failure(client):
-    """netsh says this when the adapter is already where we want it."""
-    res = post_dhcp_failing(
-        client, stdout='DHCP is already enabled on this interface.',
-        returncode=1)
-    assert res.status_code == 200, 'the desired end state is not an error'
+def test_dhcp_already_enabled_does_not_skip_the_cleanup(client):
+    """[BENCH 2026-07-28] netsh reports "already enabled" off the same interface
+    flag a disconnected adapter always sets, so it declares success and removes
+    nothing. Observed on the rig: the route returned 200 while the static
+    192.168.50.20 was still assigned with PrefixOrigin Manual. The message must
+    not short-circuit the removal of manually-assigned addresses.
+    """
+    calls = []
+    fake = fake_shell(calls, netsh=FakeCompleted(
+        stdout='DHCP is already enabled on this interface.', returncode=1))
+    with patch('app.routes.subprocess.run', side_effect=fake):
+        res = client.post('/api/network/dhcp', json={'adapter': 'Wi-Fi'})
+
+    assert res.status_code == 200
+    cleanup = [c for c in calls
+               if c['argv'][0] != 'netsh' and 'Remove-NetIPAddress' in c['argv'][-1]]
+    assert cleanup, 'netsh saying "already enabled" must not skip the cleanup'
+    assert "PrefixOrigin -ne 'Dhcp'" in cleanup[0]['argv'][-1]
+    assert cleanup[0]['kwargs']['env']['FIVE12_ADAPTER'] == 'Wi-Fi'
+
+
+def test_dhcp_reports_a_static_address_it_could_not_remove(client):
+    """The cleanup verifies rather than assumes; a survivor is a failure."""
+    calls = []
+
+    def _run(argv, **kwargs):
+        argv = list(argv)
+        calls.append({'argv': argv, 'kwargs': kwargs})
+        if argv[0] == 'netsh':
+            return FakeCompleted()
+        if 'Remove-NetIPAddress' in argv[-1]:
+            return FakeCompleted(
+                stderr='Switched to DHCP but the static address 192.168.50.20 '
+                       'could not be removed.', returncode=1)
+        return FakeCompleted(stdout=json.dumps(ADAPTERS))
+
+    with patch('app.routes.subprocess.run', side_effect=_run):
+        res = client.post('/api/network/dhcp', json={'adapter': 'Wi-Fi'})
+
+    assert res.status_code == 500
+    assert '192.168.50.20' in res.get_json()['error']
+
+
+def test_dhcp_cleanup_carries_no_operator_text_into_the_script(
+        client, shell_hostile_inventory):
+    """The cleanup is PowerShell again, so the transport rule still applies."""
+    res = client.post('/api/network/dhcp', json={'adapter': INJECTION})
+    assert res.status_code == 200
+    cleanup = [c for c in shell_hostile_inventory
+               if c['argv'][0] != 'netsh'
+               and 'Remove-NetIPAddress' in c['argv'][-1]][0]
+    assert INJECTION not in cleanup['argv'][-1]
+    assert 'Start-Process' not in cleanup['argv'][-1]
+    assert cleanup['kwargs']['env']['FIVE12_ADAPTER'] == INJECTION
 
 
 def test_apply_failure_also_carries_detail(client):

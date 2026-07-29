@@ -867,9 +867,7 @@ def network_dhcp():
     if adapter not in known:
         return jsonify({'error': f'Unknown network adapter: {adapter}'}), 400
 
-    # netsh for the same reason as network_apply — see the note there. It also
-    # reports "DHCP is already enabled on this interface", which is the desired
-    # end state, not a failure.
+    # netsh for the same reason as network_apply — see the note there.
     out, err, code = _run_netsh(['interface', 'ipv4', 'set', 'address',
                                  f'name={adapter}', 'source=dhcp'])
     combined = f'{out}\n{err}'.lower()
@@ -879,6 +877,40 @@ def network_dhcp():
                     for w in ('access is denied', 'administrator', 'privileged',
                               'requires elevation'))
         current_app.logger.error('network_dhcp failed (exit %s): %s', code, detail)
+        return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
+
+    # [BENCH 2026-07-28] "DHCP is already enabled on this interface" is not
+    # proof of anything. netsh reads the same interface flag that a disconnected
+    # adapter reports as Enabled regardless of its actual addresses, so it
+    # declares success and removes nothing — observed on the rig, where the
+    # route returned 200 while Get-NetIPAddress still showed the static
+    # 192.168.50.20 with PrefixOrigin Manual. Switching to DHCP has to mean the
+    # manually-assigned addresses are gone, so remove them explicitly and say so
+    # if any survive. Remove-NetIPAddress is unaffected by the New-NetIPAddress
+    # defect, and the adapter name still travels by environment, never as source.
+    cleanup = """
+$ErrorActionPreference = 'Stop'
+Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -ne 'Dhcp' } |
+    Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
+Get-NetRoute -InterfaceAlias $env:FIVE12_ADAPTER -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+    Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+
+$leftover = Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.PrefixOrigin -eq 'Manual' } |
+    Select-Object -First 1
+if ($leftover) {
+    throw "Switched to DHCP but the static address $($leftover.IPAddress) could not be removed."
+}
+"""
+    out, err, code = _run_ps(cleanup, {'FIVE12_ADAPTER': adapter})
+    if code != 0:
+        detail = _ps_failure(out, err, code, 'DHCP switch failed')
+        admin = any(w in detail.lower()
+                    for w in ('access is denied', 'administrator', 'privileged',
+                              'requires elevation'))
+        current_app.logger.error('network_dhcp cleanup failed (exit %s): %s',
+                                 code, detail)
         return jsonify({'error': detail, 'adminRequired': admin}), 403 if admin else 500
     return jsonify({'success': True})
 
