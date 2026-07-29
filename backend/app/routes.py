@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory
 from .models import Show, PatchSheet, Fixture, PatchRow, LabelTemplate
 from . import db
+from .fixture_library import FixtureLibraryBusyError, fixture_catalog_mutation_lock
 from .patch_import import (read_table, detect_header_row, guess_mapping,
                            apply_mapping)
 import pandas as pd
@@ -111,6 +112,24 @@ def delete_patch_sheet(patch_id):
 
 # ───────────── PATCH ROWS ───────────── #
 
+def _patch_address_error(row):
+    values = (row.universe, row.address, row.end_address)
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        return 'Universe, address, and end address must be set together'
+    try:
+        universe, address, end_address = map(int, values)
+    except (TypeError, ValueError):
+        return 'Universe and addresses must be integers'
+    if universe < 1:
+        return 'Universe must be 1 or greater'
+    if not 1 <= address <= 512 or not 1 <= end_address <= 512:
+        return 'DMX addresses must stay between 1 and 512'
+    if end_address < address:
+        return 'End address cannot be before start address'
+    return None
+
 @bp.route('/api/patch-sheets/<int:patch_id>/rows', methods=['GET'])
 def list_rows_for_patch(patch_id):
     PatchSheet.query.get_or_404(patch_id)
@@ -142,6 +161,8 @@ def create_patch_row(patch_id):
             notes=data.get('notes'),
             firmware=data.get('firmware'),
         )
+        if error := _patch_address_error(r):
+            return jsonify({'error': error}), 400
         db.session.add(r)
         db.session.commit()
         return jsonify(r.to_dict()), 201
@@ -172,6 +193,9 @@ def update_patch_row(row_id):
         for field, attr in mapping.items():
             if field in data:
                 setattr(r, attr, data[field])
+        if error := _patch_address_error(r):
+            db.session.rollback()
+            return jsonify({'error': error}), 400
         db.session.commit()
         return jsonify(r.to_dict())
     except Exception as e:
@@ -197,17 +221,21 @@ def list_fixtures():
 def create_fixture():
     try:
         data = request.get_json(force=True)
-        f = Fixture(
-            fixture=data.get('fixture', '').strip(),
-            notes=data.get('notes', '').strip(),
-            channel_count=data.get('channelCount', 0),
-            wattage=data.get('wattage', 0),
-            weight=data.get('weight', 0),
-            firmware=data.get('firmware', '').strip()
-        )
-        db.session.add(f)
-        db.session.commit()
+        with fixture_catalog_mutation_lock():
+            f = Fixture(
+                fixture=data.get('fixture', '').strip(),
+                notes=data.get('notes', '').strip(),
+                channel_count=data.get('channelCount', 0),
+                wattage=data.get('wattage', 0),
+                weight=data.get('weight', 0),
+                firmware=data.get('firmware', '').strip()
+            )
+            db.session.add(f)
+            db.session.commit()
         return jsonify(f.to_dict()), 201
+    except FixtureLibraryBusyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
     except Exception as e:
         db.session.rollback()
         current_app.logger.exception("Failed to create fixture")
@@ -216,16 +244,34 @@ def create_fixture():
 @bp.route('/api/fixtures/<int:id>', methods=['PUT'])
 def update_fixture(id):
     try:
-        f = Fixture.query.get_or_404(id)
         data = request.get_json(force=True)
-        f.fixture = data.get('fixture', f.fixture).strip()
-        f.notes = data.get('notes', f.notes).strip()
-        f.channel_count = data.get('channelCount', f.channel_count)
-        f.wattage = data.get('wattage', f.wattage)
-        f.weight = data.get('weight', f.weight)
-        f.firmware = data.get('firmware', f.firmware).strip()
-        db.session.commit()
+        with fixture_catalog_mutation_lock():
+            f = Fixture.query.get_or_404(id)
+            new_fixture = (data.get('fixture', f.fixture) or '').strip()
+            new_channel_count = data.get('channelCount', f.channel_count)
+            if f.library_source and (
+                new_fixture != f.fixture or new_channel_count != f.channel_count
+            ):
+                # Once a vendor profile's identity/footprint is edited it is a
+                # manual Five12 row, not an official Hog profile.
+                f.manufacturer = None
+                f.hog_uuid = None
+                f.revision_id = None
+                f.library_type = None
+                f.library_origin = None
+                f.library_source = None
+                f.library_version = None
+            f.fixture = new_fixture
+            f.notes = (data.get('notes', f.notes) or '').strip()
+            f.channel_count = new_channel_count
+            f.wattage = data.get('wattage', f.wattage)
+            f.weight = data.get('weight', f.weight)
+            f.firmware = (data.get('firmware', f.firmware) or '').strip()
+            db.session.commit()
         return jsonify(f.to_dict())
+    except FixtureLibraryBusyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
     except Exception as e:
         db.session.rollback()
         current_app.logger.exception("Failed to update fixture")
@@ -233,10 +279,15 @@ def update_fixture(id):
 
 @bp.route('/api/fixtures/<int:id>', methods=['DELETE'])
 def delete_fixture(id):
-    f = Fixture.query.get_or_404(id)
-    db.session.delete(f)
-    db.session.commit()
-    return '', 204
+    try:
+        with fixture_catalog_mutation_lock():
+            f = Fixture.query.get_or_404(id)
+            db.session.delete(f)
+            db.session.commit()
+        return '', 204
+    except FixtureLibraryBusyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
 
 # ───────────── ALL PATCH ROWS FOR SHOW ───────────── #
 
@@ -451,33 +502,38 @@ def import_fixtures_excel():
 
         from .models import Fixture
 
-        existing = {f.fixture.lower(): f for f in Fixture.query.all()}
-        duplicates = []
-        inserted = 0
+        with fixture_catalog_mutation_lock():
+            existing = {f.fixture.lower(): f for f in Fixture.query.all()}
+            duplicates = []
+            inserted = 0
 
-        for _, row in df.iterrows():
-            name = str(row.get('fixture')).strip()
-            if not name:
-                continue
-            if name.lower() in existing:
-                duplicates.append({'existing': existing[name.lower()].to_dict(), 'new': row.to_dict()})
-                continue
-            new = Fixture(
-                fixture=str(row.get('fixture') or '').strip(),
-                notes=str(row.get('notes') or '').strip(),
-                channel_count=to_int(row.get('channel_count')),
-                wattage=to_int(row.get('wattage')),
-                weight=to_int(row.get('weight')),
-                firmware=str(row.get('firmware') or '').strip()
-            )
+            for _, row in df.iterrows():
+                name = str(row.get('fixture')).strip()
+                if not name:
+                    continue
+                if name.lower() in existing:
+                    duplicates.append({'existing': existing[name.lower()].to_dict(), 'new': row.to_dict()})
+                    continue
+                new = Fixture(
+                    fixture=str(row.get('fixture') or '').strip(),
+                    notes=str(row.get('notes') or '').strip(),
+                    channel_count=to_int(row.get('channel_count')),
+                    wattage=to_int(row.get('wattage')),
+                    weight=to_int(row.get('weight')),
+                    firmware=str(row.get('firmware') or '').strip()
+                )
 
-            db.session.add(new)
-            inserted += 1
+                db.session.add(new)
+                inserted += 1
 
-        db.session.commit()
+            db.session.commit()
         return jsonify({'inserted': inserted, 'duplicates': duplicates})
 
+    except FixtureLibraryBusyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
     except Exception as e:
+        db.session.rollback()
         current_app.logger.exception("Fixture import failed")
         return jsonify({'error': str(e)}), 500
     

@@ -5,6 +5,8 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 
 class DevelopmentConfig:
     DEBUG = True
+    SECRET_KEY = os.getenv("SECRET_KEY", "five12-development")
+    MAX_CONTENT_LENGTH = 26 * 1024 * 1024
 
     DB_USER = os.getenv("DB_USER", "root")
     DB_PASSWORD = os.getenv("DB_PASSWORD")
@@ -41,6 +43,7 @@ class DevelopmentConfig:
 class DesktopConfig:
     DEBUG = False
     SECRET_KEY = 'five12-desktop'
+    MAX_CONTENT_LENGTH = 26 * 1024 * 1024
 
     # Store the database in ~/Five12Data/five12.db
     DATA_DIR = os.getenv(

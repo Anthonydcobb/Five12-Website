@@ -35,7 +35,6 @@ export default function PatchSheet() {
   const [showName, setShowName] = useState('');
   const [patchName, setPatchName] = useState('');
   const [rows, setRows] = useState([]);
-  const [fixtures, setFixtures] = useState([]);
   const [conflicts, setConflicts] = useState([]);
 
   // Dialog states
@@ -55,12 +54,10 @@ export default function PatchSheet() {
       safeFetch(`/api/shows/${showId}`),
       safeFetch(`/api/shows/${showId}/patch-sheets/${patchId}`),
       safeFetch(`/api/patch-sheets/${patchId}/rows`),
-      safeFetch('/api/fixtures'),
-    ]).then(([show, sheet, patchRows, fixtureList]) => {
+    ]).then(([show, sheet, patchRows]) => {
       setShowName(show.name);
       setPatchName(sheet.name);
       setRows(patchRows);
-      setFixtures(fixtureList);
     }).catch(console.error);
   }, [showId, patchId]);
 
@@ -287,7 +284,6 @@ export default function PatchSheet() {
           <PatchTab
             patchId={patchId}
             rows={rows}
-            fixtures={fixtures}
             conflicts={conflicts}
             onPatch={handlePatch}
             onRePatch={handleRePatch}

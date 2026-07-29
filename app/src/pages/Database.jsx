@@ -1,211 +1,414 @@
 // File: src/pages/Database.jsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
+
+const MAX_VISIBLE_ROWS = 500;
+
+async function readJson(response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  return data;
+}
 
 export default function Database() {
   const [rows, setRows] = useState([]);
+  const [backups, setBackups] = useState([]);
+  const [libraryStatus, setLibraryStatus] = useState(null);
+  const [search, setSearch] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState(null);
 
-  // Load persisted fixtures on mount
+  const loadCatalog = async (query = search, nextOffset = offset, signal) => {
+    const params = new URLSearchParams({
+      q: query.trim(), limit: String(MAX_VISIBLE_ROWS), offset: String(nextOffset),
+    });
+    const page = await fetch(`/api/fixture-library/catalog?${params}`, { signal }).then(readJson);
+    setRows(page.items);
+    setCatalogTotal(page.total);
+  };
+
+  const loadMetadata = async () => {
+    const [status, savedBackups] = await Promise.all([
+      fetch('/api/fixture-library/status').then(readJson),
+      fetch('/api/fixture-library/backups').then(readJson),
+    ]);
+    setLibraryStatus(status);
+    setBackups(savedBackups);
+  };
+
+  const reloadAll = async () => {
+    setOffset(0);
+    await Promise.all([loadCatalog(search, 0), loadMetadata()]);
+  };
+
   useEffect(() => {
-    fetch('/api/fixtures')
-      .then(res => res.json())
-      .then(data => setRows(data))
-      .catch(err => console.error('Error loading fixtures:', err));
+    loadMetadata().catch(error => setMessage({ type: 'error', text: error.message }));
   }, []);
 
-  // Add a new fixture row via API
-  const addRow = () => {
-    fetch('/api/fixtures', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        fixture: '',
-        notes: '',
-        channelCount: 0,
-        wattage: 0,
-        weight: 0,
-        firmware: ''
-      })
-    })
-      .then(res => res.json())
-      .then(newRow => setRows(prev => [...prev, newRow]))
-      .catch(err => console.error('Error creating fixture:', err));
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setCatalogLoading(true);
+      loadCatalog(search, offset, controller.signal)
+        .catch(error => {
+          if (error.name !== 'AbortError') setMessage({ type: 'error', text: error.message });
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setCatalogLoading(false);
+        });
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [search, offset]);
+
+  const addRow = async () => {
+    try {
+      const newRow = await fetch('/api/fixtures', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fixture: '', notes: '', channelCount: 0, wattage: 0, weight: 0, firmware: '',
+        }),
+      }).then(readJson);
+      setRows(previous => [...previous, newRow]);
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    }
   };
 
-  // Delete a fixture via API
-  const deleteRow = (id) => {
-    fetch(`/api/fixtures/${id}`, { method: 'DELETE' })
-      .then(() => setRows(prev => prev.filter(r => r.id !== id)))
-      .catch(err => console.error('Error deleting fixture:', err));
+  const deleteRow = async (id) => {
+    try {
+      const response = await fetch(`/api/fixtures/${id}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      setRows(previous => previous.filter(row => row.id !== id));
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    }
   };
 
-  // Update a cell locally and via API
-  const updateCell = (id, field, value) => {
-    setRows(prev => {
-      const updatedRows = prev.map(r => (r.id === id ? { ...r, [field]: value } : r));
-      const updated = updatedRows.find(r => r.id === id);
-      fetch(`/api/fixtures/${id}`, {
+  const editCell = (id, field, value) => {
+    setRows(previous => previous.map(row => (
+      row.id === id ? { ...row, [field]: value } : row
+    )));
+  };
+
+  const saveRow = async id => {
+    const updated = rows.find(row => row.id === id);
+    if (!updated) return;
+    try {
+      const saved = await fetch(`/api/fixtures/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fixture: updated.fixture,
-          notes: updated.notes,
+          notes: updated.notes || '',
           channelCount: Number(updated.channelCount),
-          wattage: Number(updated.wattage),
-          weight: Number(updated.weight),
-          firmware: updated.firmware
-        })
-      }).catch(err => console.error('Error updating fixture:', err));
-      return updatedRows;
-    });
+          wattage: updated.wattage === '' || updated.wattage == null ? null : Number(updated.wattage),
+          weight: updated.weight === '' || updated.weight == null ? null : Number(updated.weight),
+          firmware: updated.firmware || '',
+        }),
+      }).then(readJson);
+      setRows(previous => previous.map(row => row.id === id ? saved : row));
+      await loadMetadata();
+    } catch (error) {
+      setMessage({ type: 'error', text: `Fixture update failed: ${error.message}` });
+      await loadCatalog(search, offset).catch(() => {});
+    }
   };
 
-  const handleImportExcel = (e) => {
-    const file = e.target.files[0];
+  const handleImportExcel = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
     const formData = new FormData();
     formData.append('file', file);
 
-    fetch('/api/fixtures/import-excel', {
-      method: 'POST',
-      body: formData
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (data.error) {
-          alert(`Import error: ${data.error}`);
-          return;
-        }
-
-        if (data.duplicates && data.duplicates.length > 0) {
-          const names = data.duplicates.map(d => `• ${d.new.fixture}`).join('\n');
-          const shouldReplace = confirm(`The following fixtures already exist:\n\n${names}\n\nReplace existing fixtures?`);
-
-          if (shouldReplace) {
-            Promise.all(
-              data.duplicates.map(d =>
-                fetch(`/api/fixtures/${d.existing.id}`, { method: 'DELETE' }).then(() =>
-                  fetch('/api/fixtures', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      fixture: d.new.fixture,
-                      notes: d.new.notes || '',
-                      channelCount: Number(d.new.channel_count) || 0,
-                      wattage: Number(d.new.wattage) || 0,
-                      weight: Number(d.new.weight) || 0,
-                      firmware: d.new.firmware || ''
-                    })
-                  })
-                )
-              )
-            ).then(() => {
-              alert(`✅ Imported ${data.inserted} fixtures (duplicates replaced)`);
-              window.location.reload();
-            });
-          } else {
-            alert(`Skipped ${data.duplicates.length} duplicate rows.`);
-            window.location.reload();
-          }
-        } else {
-          alert(`✅ Imported ${data.inserted} fixtures.`);
-          window.location.reload();
-        }
-      })
-      .catch(err => {
-        console.error('Import failed:', err);
-        alert('Import failed. See console for details.');
+    try {
+      setBusy('excel');
+      const data = await fetch('/api/fixtures/import-excel', {
+        method: 'POST', body: formData,
+      }).then(readJson);
+      setMessage({
+        type: 'success',
+        text: `Imported ${data.inserted} fixtures. ${data.duplicates?.length || 0} duplicates were skipped.`,
       });
+      await reloadAll();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
   };
 
-  const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      const fa = a.fixture?.trim().toLowerCase();
-      const fb = b.fixture?.trim().toLowerCase();
-      if (!fa && !fb) return 0;
-      if (!fa) return 1;
-      if (!fb) return -1;
-      return fa.localeCompare(fb);
-    });
-  }, [rows]);
+  const handleImportHogXml = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+      setBusy('hog');
+      setMessage({ type: 'info', text: 'Validating the Hog fixture library…' });
+      const previewForm = new FormData();
+      previewForm.append('file', file);
+      const preview = await fetch('/api/fixture-library/hog/preview', {
+        method: 'POST', body: previewForm,
+      }).then(readJson);
+
+      const confirmed = window.confirm(
+        `Import Hog ${preview.version}?\n\n` +
+        `${preview.fixtureCount.toLocaleString()} source profiles from ` +
+        `${preview.manufacturers.toLocaleString()} manufacturers.\n` +
+        `${preview.patchable.toLocaleString()} are currently patchable; ` +
+        `${preview.unsupported.toLocaleString()} internal parts or profiles wider than one universe stay in the database but are hidden from the picker.\n\n` +
+        `This replaces ${preview.currentCount.toLocaleString()} current fixtures after creating a checked, restorable backup. Existing show patch rows are not deleted.`
+      );
+      if (!confirmed) {
+        setMessage({ type: 'info', text: 'Hog fixture import cancelled; nothing changed.' });
+        return;
+      }
+
+      setMessage({ type: 'info', text: 'Backing up and importing the Hog fixture library…' });
+      const importForm = new FormData();
+      importForm.append('file', file);
+      importForm.append('confirmReplace', 'true');
+      importForm.append('previewToken', preview.previewToken);
+      const data = await fetch('/api/fixture-library/hog/import', {
+        method: 'POST', body: importForm,
+      }).then(readJson);
+      setMessage({
+        type: 'success',
+        text: (
+          `Imported ${data.imported.toLocaleString()} Hog ${data.version} profiles from ` +
+          `${data.manufacturers.toLocaleString()} manufacturers. The previous ` +
+          `catalog is saved as backup #${data.backup.id}.`
+        ),
+      });
+      await reloadAll();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const restoreBackup = async backup => {
+    const confirmed = window.confirm(
+      `Restore fixture backup #${backup.id} (${backup.fixtureCount.toLocaleString()} fixtures)?\n\n` +
+      'Five12 will back up the current catalog before restoring this one.'
+    );
+    if (!confirmed) return;
+
+    try {
+      setBusy(`restore-${backup.id}`);
+      const data = await fetch(`/api/fixture-library/backups/${backup.id}/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          confirmReplace: true,
+          expectedCatalogChecksum: libraryStatus?.catalogChecksum,
+        }),
+      }).then(readJson);
+      setMessage({
+        type: 'success',
+        text: (
+          `Restored ${data.restored.toLocaleString()} fixtures. The catalog you just ` +
+          `replaced is saved as backup #${data.rollbackBackup.id}.`
+        ),
+      });
+      await reloadAll();
+    } catch (error) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setBusy('');
+    }
+  };
 
   return (
     <div className="p-6 bg-bg min-h-screen text-white">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Lighting Database</h1>
-        <div className="flex gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+        <div>
+          <h1 className="text-2xl font-bold">Lighting Database</h1>
+          <p className="text-sm text-text-muted mt-1">
+            {libraryStatus?.fixtureCount?.toLocaleString() || rows.length.toLocaleString()} fixtures
+            {libraryStatus?.source && ` · ${libraryStatus.source} ${libraryStatus.version || ''}`}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={addRow}
-            className="px-4 py-2 bg-online hover:brightness-110 rounded"
+            disabled={Boolean(busy)}
+            className="px-4 py-2 bg-online hover:brightness-110 rounded disabled:opacity-50"
           >
             + Add Row
           </button>
-          <label className="px-4 py-2 bg-brand hover:bg-brand-hi rounded cursor-pointer text-sm">
-            Import Excel
-            <input
-              type="file"
-              accept=".xlsx"
-              className="hidden"
-              onChange={handleImportExcel}
-            />
+          <label className={`px-4 py-2 bg-brand hover:bg-brand-hi rounded cursor-pointer text-sm ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            {busy === 'excel' ? 'Importing…' : 'Import Excel'}
+            <input type="file" accept=".xlsx" className="hidden" onChange={handleImportExcel} />
+          </label>
+          <label className={`px-4 py-2 bg-brand hover:bg-brand-hi rounded cursor-pointer text-sm ${busy ? 'opacity-50 pointer-events-none' : ''}`}>
+            {busy === 'hog' ? 'Importing Hog XML…' : 'Replace with Hog summary.xml'}
+            <input type="file" accept=".xml,text/xml,application/xml" className="hidden" onChange={handleImportHogXml} />
           </label>
         </div>
       </div>
+
+      {message && (
+        <div className={`mb-4 rounded border p-3 text-sm ${
+          message.type === 'error'
+            ? 'border-brand bg-brand-dim/40 text-brand-hi'
+            : message.type === 'success'
+              ? 'border-online/60 bg-online/10 text-online'
+              : 'border-border bg-surface text-text'
+        }`}>
+          {message.text}
+        </div>
+      )}
+
+      {backups.length > 0 && (
+        <section className="mb-5 rounded border border-border bg-surface p-4">
+          <h2 className="font-semibold mb-2">Fixture backups</h2>
+          <p className="text-xs text-text-muted mb-3">
+            Backups stay inside Five12. Download a JSON copy if you also want it outside the app database.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {backups.slice(0, 8).map(backup => (
+              <div key={backup.id} className="rounded bg-bg border border-border px-3 py-2 text-xs">
+                <div className="font-medium">#{backup.id} · {backup.fixtureCount.toLocaleString()} fixtures</div>
+                <div className="text-text-muted mb-2">{backup.reason}</div>
+                <div className="flex gap-2">
+                  <a
+                    href={`/api/fixture-library/backups/${backup.id}/download`}
+                    className="text-brand-hi hover:underline"
+                  >
+                    Download JSON
+                  </a>
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => restoreBackup(backup)}
+                    className="text-online hover:underline disabled:opacity-50"
+                  >
+                    {busy === `restore-${backup.id}` ? 'Restoring…' : 'Restore'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="flex items-center gap-3 mb-3">
+        <input
+          type="search"
+          value={search}
+          onChange={event => { setSearch(event.target.value); setOffset(0); }}
+          placeholder="Search manufacturer or profile…"
+          className="w-full max-w-xl px-3 py-2 bg-surface border border-border rounded text-white"
+        />
+        <span className="text-xs text-text-muted whitespace-nowrap">
+          {catalogLoading
+            ? 'Loading…'
+            : catalogTotal === 0
+              ? '0 fixtures'
+              : `${offset + 1}–${Math.min(offset + rows.length, catalogTotal)} of ${catalogTotal.toLocaleString()}`}
+        </span>
+        <button
+          type="button"
+          disabled={offset === 0 || catalogLoading}
+          onClick={() => setOffset(Math.max(0, offset - MAX_VISIBLE_ROWS))}
+          className="px-2 py-1 bg-surface-2 rounded disabled:opacity-40"
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          disabled={offset + rows.length >= catalogTotal || catalogLoading}
+          onClick={() => setOffset(offset + MAX_VISIBLE_ROWS)}
+          className="px-2 py-1 bg-surface-2 rounded disabled:opacity-40"
+        >
+          Next
+        </button>
+      </div>
+
       <div className="overflow-auto">
         <table className="min-w-full table-auto bg-surface rounded">
           <thead>
             <tr className="bg-surface-2">
-              <th className="px-4 py-2 border">Fixture</th>
-              <th className="px-4 py-2 border">Channel Count</th>
-              <th className="px-4 py-2 border">Wattage</th>
-              <th className="px-4 py-2 border">Weight</th>
-              <th className="px-4 py-2 border">Firmware</th>
-              <th className="px-4 py-2 border">Notes</th>
-              <th className="px-4 py-2 border">Actions</th>
+              <th className="px-3 py-2 border">Manufacturer</th>
+              <th className="px-3 py-2 border">Fixture / Profile</th>
+              <th className="px-3 py-2 border">Channels</th>
+              <th className="px-3 py-2 border">Kind</th>
+              <th className="px-3 py-2 border">Wattage</th>
+              <th className="px-3 py-2 border">Weight</th>
+              <th className="px-3 py-2 border">Firmware</th>
+              <th className="px-3 py-2 border">Notes</th>
+              <th className="px-3 py-2 border">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {sortedRows.map(row => (
+            {rows.map(row => (
               <tr key={row.id} className="even:bg-surface odd:bg-bg">
-                {['fixture'].map(field => (
-                  <td key={field} className="px-4 py-2 border">
-                    <input
-                      type="text"
-                      value={row[field]}
-                      onChange={e => updateCell(row.id, field, e.target.value)}
-                      className="w-full bg-transparent focus:outline-none text-white"
-                    />
-                  </td>
-                ))}
-                {['channelCount', 'wattage', 'weight'].map(field => (
-                  <td key={field} className="px-4 py-2 border">
+                <td className="px-3 py-2 border text-sm">{row.manufacturer || '—'}</td>
+                <td className="px-3 py-2 border">
+                  <input
+                    type="text"
+                    value={row.fixture || ''}
+                    disabled={Boolean(busy)}
+                    onChange={event => editCell(row.id, 'fixture', event.target.value)}
+                    onBlur={() => saveRow(row.id)}
+                    className="w-full bg-transparent focus:outline-none text-white"
+                  />
+                </td>
+                <td className="px-3 py-2 border">
+                  <input
+                    type="number"
+                    value={row.channelCount ?? 0}
+                    disabled={Boolean(busy)}
+                    onChange={event => editCell(row.id, 'channelCount', event.target.value)}
+                    onBlur={() => saveRow(row.id)}
+                    className="w-20 bg-transparent focus:outline-none text-white"
+                  />
+                </td>
+                <td className="px-3 py-2 border text-sm">{row.libraryType || 'manual'}</td>
+                {['wattage', 'weight'].map(field => (
+                  <td key={field} className="px-3 py-2 border">
                     <input
                       type="number"
-                      value={row[field]}
-                      onChange={e => updateCell(row.id, field, e.target.value)}
-                      className="w-full bg-transparent focus:outline-none text-white"
+                      value={row[field] ?? ''}
+                      disabled={Boolean(busy)}
+                      placeholder="Unknown"
+                      onChange={event => editCell(row.id, field, event.target.value)}
+                      onBlur={() => saveRow(row.id)}
+                      className="w-20 bg-transparent focus:outline-none text-white"
                     />
                   </td>
                 ))}
-                <td className="px-4 py-2 border">
+                <td className="px-3 py-2 border">
                   <input
                     type="text"
-                    value={row.firmware}
-                    onChange={e => updateCell(row.id, 'firmware', e.target.value)}
+                    value={row.firmware || ''}
+                    disabled={Boolean(busy)}
+                    onChange={event => editCell(row.id, 'firmware', event.target.value)}
+                    onBlur={() => saveRow(row.id)}
                     className="w-full bg-transparent focus:outline-none text-white"
                   />
                 </td>
-                <td className="px-4 py-2 border">
+                <td className="px-3 py-2 border">
                   <input
                     type="text"
-                    value={row.notes}
-                    onChange={e => updateCell(row.id, 'notes', e.target.value)}
+                    value={row.notes || ''}
+                    disabled={Boolean(busy)}
+                    onChange={event => editCell(row.id, 'notes', event.target.value)}
+                    onBlur={() => saveRow(row.id)}
                     className="w-full bg-transparent focus:outline-none text-white"
                   />
                 </td>
-                <td className="px-4 py-2 border text-center">
-                  <button
-                    onClick={() => deleteRow(row.id)}
-                    className="text-brand-hi hover:text-brand"
-                  >
+                <td className="px-3 py-2 border text-center">
+                  <button disabled={Boolean(busy)} onClick={() => deleteRow(row.id)} className="text-brand-hi hover:text-brand disabled:opacity-50">
                     Delete
                   </button>
                 </td>

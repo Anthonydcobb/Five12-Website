@@ -25,7 +25,6 @@ const cellKey = (id, field) => `${id}::${field}`;
 export default function PatchTab({
   patchId,
   rows,
-  fixtures,
   conflicts,
   onPatch,
   onRePatch,
@@ -424,7 +423,6 @@ export default function PatchTab({
 
       {showPatchForm && (
         <PatchForm
-          fixtures={fixtures}
           onPatch={onPatch}
           onClose={() => setShowPatchForm(false)}
         />

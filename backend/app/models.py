@@ -1,4 +1,6 @@
 # backend/app/models.py
+from datetime import datetime, timezone
+
 from sqlalchemy.dialects import mysql
 
 from . import db
@@ -30,23 +32,80 @@ class Fixture(db.Model):
     __tablename__ = 'fixtures'
     id = db.Column(db.Integer, primary_key=True)
     fixture = db.Column(db.String(120), nullable=False)
-    
     channel_count = db.Column(db.Integer, nullable=False)
-    wattage       = db.Column(db.Integer, nullable=False)
-    weight        = db.Column(db.Integer, nullable=False)
-    firmware      = db.Column(db.String(120), nullable=True)
-    notes         = db.Column(db.Text,    nullable=True)       # ← New!
-    
+    wattage = db.Column(db.Integer, nullable=True)
+    weight = db.Column(db.Integer, nullable=True)
+    firmware = db.Column(db.String(120), nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
+    # Optional vendor-library identity. Hand-entered and legacy fixtures leave
+    # these fields null; Hog summary.xml imports populate them from the official
+    # catalog without pretending the summary contains detailed DMX functions.
+    manufacturer = db.Column(db.String(120), nullable=True, index=True)
+    hog_uuid = db.Column(db.String(36), nullable=True, index=True)
+    revision_id = db.Column(db.Integer, nullable=True)
+    library_type = db.Column(db.String(20), nullable=True)
+    library_origin = db.Column(db.String(120), nullable=True)
+    library_source = db.Column(db.String(50), nullable=True, index=True)
+    library_version = db.Column(db.String(32), nullable=True, index=True)
+
     def to_dict(self):
+        display_name = (
+            f'{self.manufacturer} — {self.fixture}'
+            if self.manufacturer else self.fixture
+        )
+        unsupported_reason = None
+        if self.library_type == 'part':
+            unsupported_reason = 'Internal compound-fixture part'
+        elif not self.channel_count or self.channel_count < 1:
+            unsupported_reason = 'DMX footprint is missing'
+        elif self.channel_count > 512:
+            unsupported_reason = 'Profiles wider than one universe are not supported yet'
         return {
             'id': self.id,
             'fixture': self.fixture,
-            
+            'displayName': display_name,
             'channelCount': self.channel_count,
             'wattage': self.wattage,
             'weight': self.weight,
             'firmware': self.firmware,
-             'notes': self.notes,
+            'notes': self.notes,
+            'manufacturer': self.manufacturer,
+            'hogUuid': self.hog_uuid,
+            'revisionId': self.revision_id,
+            'libraryType': self.library_type,
+            'libraryOrigin': self.library_origin,
+            'librarySource': self.library_source,
+            'libraryVersion': self.library_version,
+            'isPatchable': unsupported_reason is None,
+            'unsupportedReason': unsupported_reason,
+        }
+
+
+class FixtureLibraryBackup(db.Model):
+    """Restorable snapshot created before a bulk fixture replacement."""
+
+    __tablename__ = 'fixture_library_backups'
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    reason = db.Column(db.String(200), nullable=False)
+    fixture_count = db.Column(db.Integer, nullable=False)
+    source = db.Column(db.String(50), nullable=True)
+    version = db.Column(db.String(32), nullable=True)
+    schema_version = db.Column(db.Integer, nullable=False, default=1)
+    checksum = db.Column(db.String(64), nullable=False)
+    fixtures_json = db.Column(db.JSON, nullable=False)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'createdAt': _utc_iso(self.created_at),
+            'reason': self.reason,
+            'fixtureCount': self.fixture_count,
+            'source': self.source,
+            'version': self.version,
+            'schemaVersion': self.schema_version,
+            'checksum': self.checksum,
         }
     
 
@@ -141,9 +200,6 @@ class DymoCsvSource(db.Model):
         if include_rows:
             d['rows'] = self.rows
         return d
-
-
-from datetime import datetime, timezone
 
 
 def _utc_iso(dt):
