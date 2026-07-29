@@ -4,7 +4,7 @@
 - **Branch:** `feat/hermes/hog-fixture-import`
 - **Workspace:** persistent worktree at `/root/five12-worktrees/hermes-hog-fixture-import`
 - **Base SHA:** `aa4b25b9d2411ec9565ebcb918b3e302f9883701`
-- **Status:** implementation complete; ready for review/integration
+- **Status:** implementation complete; pushed for review/integration
 - **Last updated:** 2026-07-29
 
 ## Goal
@@ -92,6 +92,8 @@ Use the existing flat `fixtures` table with additive Hog metadata rather than in
 
 ## Commits
 
+- `1921fdb` — `feat: import Hog fixture library safely`
+
 ## Risks and skipped checks
 
 - No redistribution permission has been established; Five12 therefore imports a file the operator selects and does not bundle the vendor library.
@@ -99,4 +101,4 @@ Use the existing flat `fixtures` table with additive Hog metadata rather than in
 
 ## Handoff / next action
 
-Review the final diff, commit, push, and verify the remote feature branch. Do not run the import against a real user database until its path and external backup are confirmed.
+Review and integrate the pushed feature branch. Do not run the import against a real user database until its path and external backup are confirmed.
