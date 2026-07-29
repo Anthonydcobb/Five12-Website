@@ -415,7 +415,7 @@ def test_apply_verifies_dhcp_actually_turned_off(client, ps_calls):
     script = apply_script(ps_calls)
     assert '-PolicyStore PersistentStore' in script
     assert 'throw' in script, 'no failure path if DHCP stays enabled'
-    assert "$persisted.Dhcp -ne 'Disabled'" in script
+    assert "$dhcpState -ne 'Disabled'" in script
 
 
 def test_dhcp_targets_the_persistent_store_and_verifies(client, ps_calls):
@@ -423,7 +423,7 @@ def test_dhcp_targets_the_persistent_store_and_verifies(client, ps_calls):
     assert res.status_code == 200
     script = ps_scripts(ps_calls)[0]
     assert '-Dhcp Enabled -PolicyStore PersistentStore' in script
-    assert "$persisted.Dhcp -ne 'Enabled'" in script
+    assert "$dhcpState -ne 'Enabled'" in script
     assert 'throw' in script
 
 
@@ -437,3 +437,20 @@ def test_persistent_store_change_still_carries_no_operator_text(
     assert INJECTION not in script
     assert 'Start-Process' not in script
     assert script.count('$env:FIVE12_ADAPTER') >= 4
+
+
+def test_unreadable_dhcp_state_does_not_veto_the_operation():
+    """[BENCH 2026-07-28] The persistent store returned an empty Dhcp on the
+    rig. The first cut of this guard read empty as "still enabled" and threw,
+    failing a configuration that had in fact worked — the operator saw
+    "Could not turn DHCP off for this adapter (still )". An inconclusive check
+    must fall through to New-NetIPAddress, which reports the real problem, not
+    block it.
+    """
+    from app import routes
+
+    src = open(routes.__file__).read()
+    assert "$dhcpState -and $dhcpState -ne 'Disabled'" in src
+    assert "$dhcpState -and $dhcpState -ne 'Enabled'" in src
+    assert "$persisted.Dhcp -ne" not in src, (
+        'the unguarded form treats an empty reading as a failure')

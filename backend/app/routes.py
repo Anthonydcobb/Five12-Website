@@ -814,6 +814,13 @@ def network_apply():
     # Setting a static IP on an unplugged NIC is a normal load-in step, so
     # target the persistent store explicitly and then confirm it actually took
     # rather than trusting a cmdlet that reports success without acting.
+    #
+    # The confirmation only fires on a *definite* contrary reading. The
+    # persistent store returns an empty Dhcp for some adapters, and a first cut
+    # of this check treated empty as "still enabled" and threw — blocking a
+    # configuration that had in fact worked. An inconclusive check must not veto
+    # the operation; when the state cannot be read, fall through and let
+    # New-NetIPAddress report the real problem, which _ps_failure now surfaces.
     gw_line = "-DefaultGateway $env:FIVE12_GATEWAY" if gateway else ''
     ps = f"""
 $ErrorActionPreference = 'Stop'
@@ -821,8 +828,9 @@ Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp
 Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Disabled -ErrorAction SilentlyContinue
 
 $persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($persisted -and $persisted.Dhcp -ne 'Disabled') {{
-    throw "Could not turn DHCP off for this adapter (still $($persisted.Dhcp)). It may be managed by another service."
+$dhcpState = if ($persisted) {{ [string]$persisted.Dhcp }} else {{ '' }}
+if ($dhcpState -and $dhcpState -ne 'Disabled') {{
+    throw "Could not turn DHCP off for this adapter (still $dhcpState). It may be managed by another service."
 }}
 
 Get-NetIPAddress   -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
@@ -871,8 +879,9 @@ Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp
 Set-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -Dhcp Enabled -ErrorAction SilentlyContinue
 
 $persisted = Get-NetIPInterface -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -PolicyStore PersistentStore -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($persisted -and $persisted.Dhcp -ne 'Enabled') {
-    throw "Could not turn DHCP on for this adapter (still $($persisted.Dhcp)). It may be managed by another service."
+$dhcpState = if ($persisted) { [string]$persisted.Dhcp } else { '' }
+if ($dhcpState -and $dhcpState -ne 'Enabled') {
+    throw "Could not turn DHCP on for this adapter (still $dhcpState). It may be managed by another service."
 }
 
 Get-NetIPAddress -InterfaceAlias $env:FIVE12_ADAPTER -AddressFamily IPv4 -ErrorAction SilentlyContinue |
