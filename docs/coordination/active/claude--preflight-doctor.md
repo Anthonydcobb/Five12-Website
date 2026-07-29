@@ -93,6 +93,7 @@ to prevent. Hence the **Packet capture** check:
 - `scripts/tests/Five12Doctor.Tests.ps1`
 - `backend/tests/test_doctor_probe.py`
 - `start.ps1`
+- `backend/requirements.txt` (one line: the `requests` pin — see "Version pins")
 - `docs/coordination/active/claude--preflight-doctor.md`
 
 ## Must-not-touch paths
@@ -198,13 +199,61 @@ package.
 the app interpreter only, and verified functional rather than merely present:
 `conf.use_pcap = True`, 18 interfaces visible, Npcap 1.88 service running.
 
-Nine version drifts remain and are deliberately left alone. `pip install -r
-requirements.txt` wholesale would upgrade eight packages **and downgrade
-`requests`** (2.34.2 → 2.32.3), which is a larger change than the situation
-called for. Drift is a `WARN` and never blocks a launch. Aligning the pins is
-worth doing deliberately — and the pins arguably should move up to what is
-installed rather than the reverse — but it is a separate task with its own
-test run.
+### Version pins — resolved 2026-07-29
+
+The nine drifts are gone. The direction turned out to be the opposite of my
+first assumption, which is worth stating because it changes the right answer:
+for **eight** packages the installed version was *older* than the pin, so this
+was a forward sync, not a rollback. Only `requests` was installed newer
+(2.34.2) than pinned (2.32.3).
+
+What was done:
+
+1. Raised the `requests` pin to `2.34.2` — the one line changed in
+   `backend/requirements.txt`. Downgrading an HTTP/TLS library to satisfy a
+   stale pin is a regression risk with no upside.
+2. `python -m pip install -r requirements.txt` on the **app interpreter only**,
+   which upgraded `Flask 3.1.0→3.1.1`, `SQLAlchemy 2.0.40→2.0.41`,
+   `click 8.1.8→8.2.0`, `numpy 2.2.4→2.2.6`, `greenlet 3.1.1→3.2.2`,
+   `Mako 1.3.9→1.3.10`, `python-dotenv 1.1.0→1.2.2`,
+   `typing_extensions 4.13.1→4.13.2`, and left `requests` alone.
+
+`click 8.1→8.2` was the only non-patch bump. Flask 3.1.1 requires
+`click>=8.1.3` and the app only ever invokes `flask run`, so the surface is
+small — but it is the one to look at first if anything odd appears.
+
+Rollback snapshot of all 63 packages was taken before the change
+(`pip freeze`), outside the repo.
+
+**Verified by running the app, not just by reading the table.** A green
+dependency line proves nothing on its own, so the backend was started exactly
+the way `start.ps1` starts it — app interpreter, `--no-reload`, both BLE gates
+on — and driven:
+
+| Endpoint | Result |
+|---|---|
+| `GET /api/network/subnets` | 200, 507 bytes |
+| `GET /api/ble/capabilities` | 200, 109 bytes (so the tools gate is on and `bleak` imported) |
+| `GET /api/ble/status` | 200, 86 bytes |
+| `GET /api/network/devices` | 200, 18670 bytes |
+
+No tracebacks in the backend log. Two lines in it are worth keeping as
+evidence — **verified on actual gear**:
+
+- `sACN: listening on :5568 across 9 interface(s)` followed by
+  `universe 1 source 10.0.0.5 "Processor, Netnumber 5, Output 1"` through
+  `Output 6` — live console output being received on the upgraded stack.
+- `INFO in scanner: Scanning 172.31.0.0/16` — the scapy ARP sweep running,
+  which it had not been doing at all while scapy was missing.
+
+Backend stopped afterwards; 0 listeners left on 5000.
+
+**Caveat, and it is the interesting one:** `cd backend && python -m pytest`
+runs on the *test* interpreter, which was **not** upgraded. So 406 passing
+tests validate the code, not this upgrade. The live smoke test above is the
+only thing that exercised the new versions. This is the same two-interpreter
+split that hid fault 3, showing up as a gap in test coverage rather than as a
+runtime bug — see "Still open".
 
 ## Commits
 
@@ -249,5 +298,17 @@ Open, in rough priority order:
 2. **Why do the NIC categories drift?** The doctor now catches it every launch,
    which is the important half, but something is changing them. Suspicion falls
    on VPN adapter re-connects; unproven.
-3. **Version pins.** Nine drifts, `requests` would be a downgrade. Deliberate
-   task, not a drive-by.
+3. **The test suite does not run on the interpreter the app runs on.** This is
+   the root of fault 3 and it is still there: `cd backend && python -m pytest`
+   uses Python 3.14 from `PATH`, which as of today is missing six of the app's
+   requirements including `bleak`, while the app runs on Python 3.12 at
+   `%LOCALAPPDATA%\Programs\Python\Python312`. Every dependency upgrade is
+   therefore untested by CI-equivalent means; today's was covered by a live
+   smoke test instead, which does not scale.
+
+   Not fixed here because it is a real decision, not a chore: pointing the
+   tests at the app interpreter needs `pytest` installed there, and syncing the
+   3.14 environment to `requirements.txt` may not even be possible for every
+   pin. Worth a decision from Anthony and Hermes rather than a unilateral move
+   from me. **Recommendation:** run the tests on the app interpreter, and let
+   the doctor's Python deps check become the thing that keeps both honest.
