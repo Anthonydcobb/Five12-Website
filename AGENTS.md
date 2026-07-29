@@ -48,7 +48,7 @@ Both servers must run concurrently during development. Vite proxies all `/api/*`
 
 **Backend entry:** `backend/app.py` → `backend/app/__init__.py` (app factory) → `backend/app/routes.py` (all API endpoints as a Blueprint)
 
-**Database:** MySQL, credentials in `backend/.env`. Schema managed via Flask-Migrate/Alembic in `migrations/`.
+**Database:** MySQL, credentials in `backend/.env`. Schema managed via Flask-Migrate/Alembic in `backend/migrations/` — run `flask db` commands from `backend/`, since Flask-Migrate resolves the directory relative to the working directory.
 
 ## Data Model
 

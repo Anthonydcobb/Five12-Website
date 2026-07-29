@@ -94,7 +94,7 @@ scanner. Redundant ARP pings are merely wasteful; **two processes contending for
 one Bluetooth adapter is broken**, so the BLE service adds single-owner
 enforcement the ARP scanner does not need.
 
-**Persistence.** MySQL in dev via Alembic (`migrations/`), SQLite on desktop
+**Persistence.** MySQL in dev via Alembic (`backend/migrations/`), SQLite on desktop
 where the factory calls `db.create_all()`. `NetworkDevice` carries
 `mac_address` + `device_type` and is reused by Stardust to persist operator
 labels. **Cintenna cannot reuse this directly** — see Identity below.

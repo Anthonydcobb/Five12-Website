@@ -22,9 +22,14 @@ __pycache__/
 
 # 🛑 Flask & Database
 instance/
-# Anchored so this ignores ONLY the dead root-level migrations/ copy. The live
-# Alembic history is backend/migrations/ — a bare `migrations/` matched that too
-# and silently kept every real migration out of git.
+# The dead root-level migrations/ copy was deleted on 2026-07-29; the live
+# Alembic history is and was backend/migrations/. This anchored rule stays so
+# the dead copy cannot come back by accident — `flask db init` run from the
+# repository root would recreate it, and a second chain that alembic silently
+# prefers depending on your working directory is a trap that has already cost
+# this project a day and a wrong diagnosis. Note the anchor: a bare
+# `migrations/` would match backend/migrations/ too and silently keep every
+# real migration out of git.
 /migrations/
 *.sqlite3
 *.db
