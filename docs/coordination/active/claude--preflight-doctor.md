@@ -4,7 +4,7 @@
 - **Branch:** `feat/claude/preflight-doctor`
 - **Workspace:** local integration checkout `C:\dev\Five12-TheApp` (branch, not `main`)
 - **Base SHA:** `aa4b25b` (`main`)
-- **Head SHA:** `91f643e`
+- **Head SHA:** `7ac118f`
 - **Status:** review
 - **Last updated:** 2026-07-29
 
@@ -25,6 +25,49 @@ output. The app ran; it just ran wrong.
 | 4 | `.env` had `DB_PASS`, `config.py` reads `DB_PASSWORD` | `.env` completeness |
 | 5 | Launcher did not set `FIVE12_BLE_TOOLS` / `FIVE12_BLE_WRITE` | Feature gates |
 | 6 | All four show NICs drifted to Windows network category `Public` | Network |
+
+A seventh check, **Packet capture**, was added after the first pass exposed a
+false green in the doctor itself — see "Fault 3 has a second face" below.
+
+## Live results in the first two days
+
+The doctor has already caught two real faults on Anthony's rig, neither of them
+staged:
+
+1. **Fault 6 recurred, 2026-07-29.** All four show NICs (`HOG`, `sACN`, `COMS`,
+   `Management`) were verified `Private` during development and had drifted to
+   `Public` roughly an hour later, on the next `start.ps1`. The doctor FAILed
+   and blocked the launch; Anthony ran the four `Set-NetConnectionProfile`
+   lines and the recheck came back clean. Worth noting for whoever picks this
+   up: **this drifts on its own**, so a one-time fix is not a fix. NordVPN /
+   NordLynx is present on this machine and adapter re-connects create fresh
+   profiles that default to `Public` — a plausible cause, not a confirmed one.
+2. **`scapy` was missing from the app interpreter** and had been for an unknown
+   period, silently degrading ARP discovery to the OS cache via the swallowed
+   failure at `backend/app/scanner.py:199`. Now installed (2.6.1), along with
+   `puresnmp`, `t61codec`, `verlib`. Confirmed functional, not merely
+   importable: `conf.use_pcap = True`, 18 interfaces visible.
+
+## Fault 3 has a second face
+
+Installing `scapy` would have turned the Python deps line green **without**
+restoring the ARP sweep: on Windows scapy imports cleanly with no Npcap
+present, so both the metadata check and the `-Full` real-import check pass
+while every packet send still fails — into the same `log.debug` that hid the
+original fault.
+
+Npcap 1.88 turned out to already be installed here, so the sweep genuinely is
+back. But the doctor could not have told the difference, and a preflight that
+cannot distinguish "working" from "importable" is the exact failure it exists
+to prevent. Hence the **Packet capture** check:
+
+- fast path (~32 ms): `wpcap.dll` on disk, in Npcap's own directory or in
+  WinPcap-compatible mode, plus the `npcap` service state
+- `-Full`: asks scapy directly for `conf.use_pcap`, which outranks anything
+  inferred from the filesystem
+- `INFO` rather than a second `FAIL` when scapy is simply absent — the Python
+  deps check already owns that fact — and `INFO` when scapy is not a
+  requirement at all
 
 ## Acceptance criteria
 
@@ -116,8 +159,11 @@ Spec is the task brief; this note is the plan. No separate
 
 | Command | Result | Evidence level |
 |---|---|---|
-| `pwsh -File scripts\tests\Run-DoctorTests.ps1` | **44 passed, 0 failed** (Pester 3.4.0) | verified on actual gear |
-| `cd backend && python -m pytest` | **404 passed**, 101 pre-existing warnings | verified on actual gear |
+| `pwsh -File scripts\tests\Run-DoctorTests.ps1` | **51 passed, 0 failed** (Pester 3.4.0; 44 before the Packet capture check) | verified on actual gear |
+| `cd backend && python -m pytest` | **406 passed**, 101 pre-existing warnings (404 before) | verified on actual gear |
+| `scripts\doctor.ps1 -Full -Detailed` | `OK Packet capture — capture driver present (wpcap.dll 1.10.6); scapy reports conf.use_pcap = True` | verified on actual gear |
+| `scripts\doctor.ps1 -PythonExe C:\Python314\python.exe` | `FAIL Python deps — not installed: pytz, scapy, puresnmp, t61codec, verlib, bleak`; `INFO Packet capture — scapy is not installed`. A live demonstration of the interpreter split that hid fault 3. | verified on actual gear |
+| doctor timing after the new check | 2.1 s steady default, 6.0 s `-Full` | verified on actual gear |
 | `cd backend && python -m pytest tests/test_doctor_probe.py -q` | **21 passed** before the unused-import cleanup; 20 after | verified on actual gear |
 | `pwsh -File scripts\doctor.ps1` | exit 1 — real finding, see below | verified on actual gear |
 | `pwsh -File scripts\doctor.ps1 -Full` | exit 1, 3.6 s | verified on actual gear |
@@ -136,31 +182,40 @@ Spec is the task brief; this note is the plan. No separate
 | 6 (Public category) | real NICs and real subnets, with the category list flipped to `Public` **in memory only** | `FAIL` naming HOG, sACN, COMS and Management with a `Set-NetConnectionProfile` fix each; `Get-NetConnectionProfile` immediately afterwards confirmed the machine was unchanged |
 | 1 (OneDrive clone) | unit test only — `Test-Five12RepoIdentity` with a OneDrive root | `FAIL`, fix points at `C:\dev\Five12-TheApp`. Not reproduced live; that would mean creating a second clone. |
 
+| Packet capture | ran the whole doctor against the test interpreter, which genuinely has no scapy | `INFO Packet capture — scapy is not installed, see the Python deps line`, no double-FAIL. Driver-absent and service-stopped paths are Pester-tested; uninstalling Npcap to prove them live was not worth breaking the rig. |
+
 ### Real finding, not a demo
 
-On this rig today the doctor exits 1 for a genuine reason: four packages in
-`backend/requirements.txt` — `scapy`, `puresnmp`, `t61codec`, `verlib` — are
-**not installed on the app interpreter**, plus nine version drifts. `scapy` is
-the one that matters: `backend/app/scanner.py:197` calls `_scapy_scan`, and
-line 199 swallows the failure into `log.debug`, so the active ARP sweep has
-been silently degrading to the OS ARP cache. This is fault 3's exact shape in
-a different package. The doctor does not install anything; the fix line is:
+On its first real run the doctor exited 1 for a genuine reason: four packages
+in `backend/requirements.txt` — `scapy`, `puresnmp`, `t61codec`, `verlib` —
+were **not installed on the app interpreter**. `scapy` is the one that
+mattered: `backend/app/scanner.py:197` calls `_scapy_scan` and line 199
+swallows the failure into `log.debug`, so the active ARP sweep had been
+silently degrading to the OS ARP cache. Fault 3's exact shape in a different
+package.
 
-```
-& 'C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe' -m pip install -r 'C:\dev\Five12-TheApp\backend\requirements.txt'
-```
+**Resolved 2026-07-29.** The four were installed at their pinned versions on
+the app interpreter only, and verified functional rather than merely present:
+`conf.use_pcap = True`, 18 interfaces visible, Npcap 1.88 service running.
 
-Anthony's call whether to run it — `scapy` on Windows also wants Npcap, which
-is a separate operator decision.
+Nine version drifts remain and are deliberately left alone. `pip install -r
+requirements.txt` wholesale would upgrade eight packages **and downgrade
+`requests`** (2.34.2 → 2.32.3), which is a larger change than the situation
+called for. Drift is a `WARN` and never blocks a launch. Aligning the pins is
+worth doing deliberately — and the pins arguably should move up to what is
+installed rather than the reverse — but it is a separate task with its own
+test run.
 
 ## Commits
 
 - `b8f567f` feat: add preflight doctor and run it before dev-mode launch
 - `71ea7ec` docs: claim preflight-doctor scope and record verification
 - `91f643e` fix: add UTF-8 BOM so Windows PowerShell 5.1 parses these scripts
+- `1adc6e8` docs: record head SHA and both-shell verification
+- `7ac118f` feat: check that scapy can actually capture, not just that it imports
 
 Both shells verified at `91f643e`: `powershell` 5.1 and `pwsh` 7.6.4 each run
-the doctor (2.3 s / 1.7 s) and the Pester suite (44 passed).
+the doctor (2.3 s / 1.7 s) and the Pester suite (44 passed, 51 as of `7ac118f`).
 
 ## Risks and skipped checks
 
@@ -180,8 +235,19 @@ the doctor (2.3 s / 1.7 s) and the Pester suite (44 passed).
 
 ## Handoff / next action
 
-Branch pushed and ready for independent review by Hermes. Two things for
-Anthony, both of them operator decisions the doctor deliberately will not make:
+Branch pushed and ready for independent review by Hermes at `7ac118f`.
 
-1. Decide whether to install the four missing packages (see "Real finding").
-2. Nothing else — no network, firewall, or `.env` change is requested.
+Nothing is blocked on Anthony. The two live findings are both resolved: the
+show NICs are back on `Private` and the four packages are installed and
+verified functional.
+
+Open, in rough priority order:
+
+1. **Independent review** (Hermes). The judgement calls most worth a second
+   opinion are the non-uniform severity (absent NIC = `WARN`, drifted prefix =
+   `FAIL`) and the show-NIC derivation rule.
+2. **Why do the NIC categories drift?** The doctor now catches it every launch,
+   which is the important half, but something is changing them. Suspicion falls
+   on VPN adapter re-connects; unproven.
+3. **Version pins.** Nine drifts, `requests` would be a downgrade. Deliberate
+   task, not a drive-by.
