@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Run the doctor's Pester tests.
 

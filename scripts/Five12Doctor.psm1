@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Pure check logic for the Five12 preflight doctor.
 

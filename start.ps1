@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Mode = "",
     # Skip the preflight doctor. Every check it runs exists because something
     # broke silently on 2026-07-28/29 — see scripts/doctor.ps1 — so this is an

@@ -1,4 +1,4 @@
-<#
+﻿<#
     Tests for the preflight doctor's check logic.
 
     The point of these is narrow and specific: prove that every check FAILS
