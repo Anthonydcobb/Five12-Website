@@ -4,7 +4,7 @@
 - **Branch:** `feat/claude/preflight-doctor`
 - **Workspace:** local integration checkout `C:\dev\Five12-TheApp` (branch, not `main`)
 - **Base SHA:** `aa4b25b` (`main`)
-- **Head SHA:** `b8f567f`
+- **Head SHA:** `91f643e`
 - **Status:** review
 - **Last updated:** 2026-07-29
 
@@ -156,6 +156,11 @@ is a separate operator decision.
 ## Commits
 
 - `b8f567f` feat: add preflight doctor and run it before dev-mode launch
+- `71ea7ec` docs: claim preflight-doctor scope and record verification
+- `91f643e` fix: add UTF-8 BOM so Windows PowerShell 5.1 parses these scripts
+
+Both shells verified at `91f643e`: `powershell` 5.1 and `pwsh` 7.6.4 each run
+the doctor (2.3 s / 1.7 s) and the Pester suite (44 passed).
 
 ## Risks and skipped checks
 
