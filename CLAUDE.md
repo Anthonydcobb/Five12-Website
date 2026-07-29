@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Shared agent workflow — mandatory
+
+Before planning or editing, read `docs/coordination/README.md` and every file under
+`docs/coordination/active/`. Work on a dedicated `<type>/<agent>/<slug>` branch and
+isolated worktree, claim reserved paths in an active-work file, and follow the
+handoff, evidence-label, safety, and verification rules there. Detailed feature
+plans remain under `docs/superpowers/`; link them from the active-work note rather
+than duplicating them.
+
+Do not commit directly to `main`. Do not modify a path reserved by another active
+task without an explicit handoff.
+
 ## Project Overview
 
 Five12 Lighting Playground — a full-stack web app for theatrical lighting management. Core features: show/patch sheet management, DMX fixture inventory, universe conflict detection, Excel import/export, and a label designer for printing fixture labels.
@@ -30,7 +42,7 @@ Both servers must run concurrently during development. Vite proxies all `/api/*`
 **Monorepo layout:**
 - `app/` — React 19 + Vite frontend
 - `backend/` — Flask + SQLAlchemy API server
-- `migrations/` — Alembic database migration history
+- `backend/migrations/` — live Alembic database migration history
 
 **Frontend entry:** `app/src/main.jsx` → `App.jsx` (React Router routes) → `src/pages/`
 

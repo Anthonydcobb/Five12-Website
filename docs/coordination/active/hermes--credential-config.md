@@ -1,0 +1,66 @@
+# Active work — credential configuration cleanup
+
+- **Owner:** Hermes
+- **Branch:** `fix/hermes/credential-config`
+- **Workspace:** persistent worktree at `/root/five12-pr1-credentials`
+- **Base SHA:** `c8be6db`
+- **Status:** complete — merged to `main` at `aaca308`
+- **Last updated:** 2026-07-28
+
+## Goal
+
+Remove committed environment credentials from the tracked tree, eliminate the hard-coded database-password fallback, and establish `DB_PASSWORD` as the single configuration contract.
+
+## Acceptance criteria
+
+- [x] Root `.env` is no longer tracked on the feature branch.
+- [x] Placeholder-only `.env.example` documents required keys.
+- [x] No known database password default remains in the candidate tree.
+- [x] `DB_PASS` is rejected by regression test and absent from active backend code.
+- [x] Missing `DB_PASSWORD` fails with a clear startup error in development mode.
+- [x] Desktop SQLite mode still starts without a database password.
+- [x] Focused tests pass: 5.
+- [x] Full backend tests pass: 164, with 9 pre-existing SQLAlchemy warnings.
+- [x] Claude Code independently reviewed and approved final commit `aaca308` in documentation head `22c44ca`.
+- [x] Anthony backed up the local `.env`, completed the credential migration, verified the new database login through the actual backend, and deleted the temporary old-credential backup.
+- [x] Merged to remote `main` at `aaca308cbbc8513da0bfa014937bd5b5eb5bef6f`.
+
+## Advisory reserved paths
+
+- `.env`
+- `.env.example`
+- `.gitignore`
+- `backend/config.py`
+- `backend/app/__init__.py`
+- `app/__init__.py` (remove the dead duplicate Flask package and its credential path)
+- `__pycache__/app.cpython-310.pyc` (remove the secret-bearing compiled artifact)
+- `CREDENTIAL-MIGRATION.md`
+- Credential-configuration regression tests added by this task
+
+## Must-not-touch paths
+
+- `backend/app/routes.py` and network-route behavior (reserved for PR 2)
+- Frontend manifests and lockfiles
+- Cintenna BLE branch files
+- Database migrations
+
+## Interfaces and contracts
+
+Development MySQL configuration uses `DB_HOST`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`. Desktop mode remains SQLite-only and does not require those values.
+
+## Checks run
+
+- `/root/five12-website/.venv/bin/python -m pytest -q backend/tests/test_config.py` → **5 passed**.
+- `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` → **164 passed, 9 pre-existing SQLAlchemy warnings**.
+- `git diff --cached --check` → clean before commit.
+- Candidate-tree checks → root `.env` untracked; `.env.example` tracked with empty password/secret fields; legacy `DB_PASS` absent from active backend source; known removed default absent from the candidate tree; local worktree `.env` retained and not displayed.
+- Python syntax compilation passed for the changed Python files.
+- An isolated Hermes subagent reviewed commit `6ad834b`; its test-isolation, stale-app, and migration-documentation warnings were addressed in follow-up commit `aaca308`.
+
+## Risks and skipped checks
+
+Removing a previously tracked `.env` causes Git to delete that tracked working-tree file when existing clones pull the merge. Anthony's Windows checkout completed the migration safely; other existing clones must still preserve any local-only configuration before updating. Credential rotation is complete, but this PR does not rewrite Git history.
+
+## Handoff / next action
+
+Claude Code independently approved final branch head `aaca308`. Anthony completed the external rotation/migration gate without placing credentials in Git or coordination records. Hermes reran the exact-head backend suite at **164 passed, 9 warnings**, fast-forwarded `main`, and fetched GitHub's remote state back to verify `main == aaca308` and that only `.env.example` remains tracked. Claude should now treat PR 1 as complete and use `origin/main` at `aaca308` as the base for subsequent work.
