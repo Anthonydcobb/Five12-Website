@@ -185,6 +185,9 @@ function Test-Five12RepoIdentity {
         # obsolete feature branch that happens to have been pushed. The second
         # comparison is against the branch everything integrates through.
         [string]$IntegrationRef = '',
+        # False by default so callers cannot accidentally turn a failed Git
+        # comparison into the numeric zero that means "current".
+        [bool]$IntegrationRefAvailable = $false,
         [int]$BehindIntegration = 0
     )
 
@@ -275,10 +278,17 @@ function Test-Five12RepoIdentity {
         # still reflects the project. A pushed-but-abandoned feature branch
         # matches its upstream exactly and can be months behind the work
         # everyone else has integrated — fault 1 in different clothes.
-        if ($IntegrationRef -and $Branch -ne 'main' -and $BehindIntegration -gt 0) {
-            $statuses += 'WARN'
-            $details += "this branch is $BehindIntegration commit(s) behind ${IntegrationRef}$asOf — it predates work already integrated"
-            $fixes += "git fetch origin; git log --oneline HEAD..$IntegrationRef"
+        if ($IntegrationRef -and $Branch -ne 'main') {
+            if (-not $IntegrationRefAvailable) {
+                $statuses += 'FAIL'
+                $details += "could not compare HEAD to $IntegrationRef — the configured integration ref is missing or invalid"
+                $fixes += 'git fetch origin main'
+            }
+            elseif ($BehindIntegration -gt 0) {
+                $statuses += 'WARN'
+                $details += "this branch is $BehindIntegration commit(s) behind ${IntegrationRef}$asOf — it predates work already integrated"
+                $fixes += "git fetch origin; git log --oneline HEAD..$IntegrationRef"
+            }
         }
     }
 

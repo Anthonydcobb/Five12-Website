@@ -830,7 +830,7 @@ Describe 'Test-Five12RepoIdentity - obsolete feature branches and unknown freshn
         $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
             -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
             -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
-            -IntegrationRef 'origin/main' -BehindIntegration 47
+            -IntegrationRef 'origin/main' -IntegrationRefAvailable $true -BehindIntegration 47
         $r.Status | Should Be 'WARN'
         ($r.Details -join ' ') | Should Match '47 commit\(s\) behind origin/main'
     }
@@ -839,15 +839,25 @@ Describe 'Test-Five12RepoIdentity - obsolete feature branches and unknown freshn
         $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
             -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
             -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
-            -IntegrationRef 'origin/main' -BehindIntegration 47
+            -IntegrationRef 'origin/main' -IntegrationRefAvailable $true -BehindIntegration 47
         ($r.Details -join ' ') | Should Match 'matches origin/feat/x'
+    }
+
+    It 'FAILS closed when the configured integration ref cannot be resolved' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/obsolete' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/obsolete' -Ahead 0 -Behind 0 -FetchAge '5 min' `
+            -IntegrationRef 'origin/main' -IntegrationRefAvailable $false -BehindIntegration 0
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'could not compare HEAD to origin/main'
+        ($r.Fix -join ' ') | Should Match 'git fetch origin main'
     }
 
     It 'is silent about the integration branch when the checkout is current' {
         $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
             -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
             -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
-            -IntegrationRef 'origin/main' -BehindIntegration 0
+            -IntegrationRef 'origin/main' -IntegrationRefAvailable $true -BehindIntegration 0
         $r.Status | Should Be 'OK'
         ($r.Details -join ' ') | Should Not Match 'behind origin/main'
     }

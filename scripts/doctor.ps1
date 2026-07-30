@@ -110,6 +110,7 @@ $behind = 0
 $ahead = 0
 $fetchAge = ''
 $behindIntegration = 0
+$integrationRefAvailable = $false
 if ($branch) {
     try {
         $headOut = @(& git -C $repoRoot rev-parse --short HEAD 2>$null)
@@ -157,8 +158,13 @@ if ($branch) {
         # pushed-but-abandoned feature branch matches its upstream exactly.
         if ($branch -ne 'main') {
             $intOut = @(& git -C $repoRoot rev-list --count "HEAD..$IntegrationRef" 2>$null)
-            if ($intOut.Count -gt 0 -and $intOut[0]) {
-                $behindIntegration = [int](([string]$intOut[0]).Trim())
+            $integrationExitCode = $LASTEXITCODE
+            if ($integrationExitCode -eq 0 -and $intOut.Count -gt 0 -and $intOut[0]) {
+                [int]$parsedBehindIntegration = 0
+                if ([int]::TryParse(([string]$intOut[0]).Trim(), [ref]$parsedBehindIntegration)) {
+                    $behindIntegration = $parsedBehindIntegration
+                    $integrationRefAvailable = $true
+                }
             }
         }
     }
@@ -168,7 +174,8 @@ if ($branch) {
 $checks += Test-Five12RepoIdentity -Root $repoRoot -ExpectedRoot $ExpectedRoot `
     -Branch $branch -Dirty $dirty -OriginUrl $originUrl `
     -LocalHead $localHead -UpstreamRef $upstreamRef -Behind $behind -Ahead $ahead `
-    -FetchAge $fetchAge -IntegrationRef $IntegrationRef -BehindIntegration $behindIntegration
+    -FetchAge $fetchAge -IntegrationRef $IntegrationRef `
+    -IntegrationRefAvailable $integrationRefAvailable -BehindIntegration $behindIntegration
 
 # ---------------------------------------------------------------------------
 # Faults 3 and 4, plus the database — all answered by the Python probe, run on
