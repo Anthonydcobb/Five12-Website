@@ -1,5 +1,5 @@
 // File: src/pages/Database.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 const MAX_VISIBLE_ROWS = 500;
 
@@ -37,6 +37,9 @@ export default function Database() {
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
   const [loadErrors, setLoadErrors] = useState({});
+  const [retryingLoads, setRetryingLoads] = useState(false);
+  const catalogGeneration = useRef(0);
+  const metadataGeneration = useRef(0);
 
   const clearLoadError = scope => {
     setLoadErrors(previous => {
@@ -57,62 +60,69 @@ export default function Database() {
     const params = new URLSearchParams({
       q: query.trim(), limit: String(MAX_VISIBLE_ROWS), offset: String(nextOffset),
     });
-    const page = await requestJson(
+    return requestJson(
       `/api/fixture-library/catalog?${params}`,
       { signal },
       'Fixture catalog'
     );
-    setRows(page.items);
-    setCatalogTotal(page.total);
-    clearLoadError('catalog');
   };
 
-  const loadMetadata = async () => {
-    const [status, savedBackups] = await Promise.all([
-      requestJson('/api/fixture-library/status', undefined, 'Fixture library status'),
-      requestJson('/api/fixture-library/backups', undefined, 'Fixture backup list'),
-    ]);
-    setLibraryStatus(status);
-    setBackups(savedBackups);
-    clearLoadError('metadata');
-  };
+  const loadMetadata = async () => Promise.all([
+    requestJson('/api/fixture-library/status', undefined, 'Fixture library status'),
+    requestJson('/api/fixture-library/backups', undefined, 'Fixture backup list'),
+  ]);
 
   const refreshMetadata = async () => {
+    const generation = ++metadataGeneration.current;
     try {
-      await loadMetadata();
+      const [status, savedBackups] = await loadMetadata();
+      if (generation !== metadataGeneration.current) return false;
+      setLibraryStatus(status);
+      setBackups(savedBackups);
+      clearLoadError('metadata');
       return true;
     } catch (error) {
+      if (generation !== metadataGeneration.current) return false;
       recordLoadError('metadata', error);
       return false;
     }
   };
 
   const refreshCatalog = async (query = search, nextOffset = offset, signal) => {
+    const generation = ++catalogGeneration.current;
+    setCatalogLoading(true);
     try {
-      await loadCatalog(query, nextOffset, signal);
+      const page = await loadCatalog(query, nextOffset, signal);
+      if (generation !== catalogGeneration.current) return false;
+      setRows(page.items);
+      setCatalogTotal(page.total);
+      clearLoadError('catalog');
       return true;
     } catch (error) {
+      if (generation !== catalogGeneration.current) return false;
       recordLoadError('catalog', error);
       return false;
+    } finally {
+      if (generation === catalogGeneration.current) setCatalogLoading(false);
     }
   };
 
   const reloadAll = async () => {
     setOffset(0);
-    setCatalogLoading(true);
     await Promise.all([refreshCatalog(search, 0), refreshMetadata()]);
-    setCatalogLoading(false);
   };
 
   const retryFixtureData = async () => {
+    if (retryingLoads) return;
+    setRetryingLoads(true);
     const retries = [];
-    if (loadErrors.catalog) {
-      setCatalogLoading(true);
-      retries.push(refreshCatalog(search, offset));
-    }
+    if (loadErrors.catalog) retries.push(refreshCatalog(search, offset));
     if (loadErrors.metadata) retries.push(refreshMetadata());
-    await Promise.all(retries);
-    setCatalogLoading(false);
+    try {
+      await Promise.all(retries);
+    } finally {
+      setRetryingLoads(false);
+    }
   };
 
   useEffect(() => {
@@ -122,11 +132,7 @@ export default function Database() {
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
-      setCatalogLoading(true);
-      refreshCatalog(search, offset, controller.signal)
-        .finally(() => {
-          if (!controller.signal.aborted) setCatalogLoading(false);
-        });
+      refreshCatalog(search, offset, controller.signal);
     }, 200);
     return () => {
       window.clearTimeout(timer);
@@ -345,9 +351,10 @@ export default function Database() {
           <button
             type="button"
             onClick={retryFixtureData}
-            className="mt-3 rounded bg-brand px-3 py-1.5 text-white hover:bg-brand-hi"
+            disabled={retryingLoads}
+            className="mt-3 rounded bg-brand px-3 py-1.5 text-white hover:bg-brand-hi disabled:cursor-wait disabled:opacity-60"
           >
-            Retry fixture data
+            {retryingLoads ? 'Retrying fixture data…' : 'Retry fixture data'}
           </button>
         </div>
       )}

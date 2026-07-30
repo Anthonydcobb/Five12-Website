@@ -29,6 +29,16 @@ function response(data, ok = true, status = 200) {
   return { ok, status, json: vi.fn().mockResolvedValue(data) }
 }
 
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function installFetch(importResult = null, restoreResult = null, updateResult = null) {
   global.fetch = vi.fn((url, options = {}) => {
     if (url.startsWith('/api/fixture-library/catalog?')) {
@@ -174,6 +184,27 @@ describe('Database fixture-library safety UI', () => {
     expect(screen.getByText('#7 · 4 fixtures')).toBeInTheDocument()
   })
 
+  it('labels an HTTP error without misreporting it as a transport failure', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        return Promise.resolve(response({ items: FIXTURES, total: 1, limit: 500, offset: 0 }))
+      }
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') {
+        return Promise.resolve(response({ error: 'Database temporarily unavailable' }, false, 503))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(
+      'Fixture backup list failed (503): Database temporarily unavailable'
+    )
+    expect(alert).not.toHaveTextContent('could not reach the Five12 backend')
+  })
+
   it('preserves a successful import message when the follow-up catalog refresh fails', async () => {
     let importCompleted = false
     global.fetch = vi.fn((url) => {
@@ -212,5 +243,70 @@ describe('Database fixture-library safety UI', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Fixture catalog could not reach the Five12 backend'
     )
+  })
+
+  it('preserves a successful restore message when the follow-up catalog refresh fails', async () => {
+    let restoreCompleted = false
+    global.fetch = vi.fn((url) => {
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        if (restoreCompleted) {
+          return Promise.reject(new TypeError('NetworkError when attempting to fetch resource.'))
+        }
+        return Promise.resolve(response({ items: FIXTURES, total: 1, limit: 500, offset: 0 }))
+      }
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') return Promise.resolve(response(BACKUPS))
+      if (url === '/api/fixture-library/backups/7/restore') {
+        restoreCompleted = true
+        return Promise.resolve(response({ restored: 4, rollbackBackup: { id: 9 } }))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+    await screen.findByText('#7 · 4 fixtures')
+    await userEvent.click(screen.getByRole('button', { name: /^restore$/i }))
+
+    expect(await screen.findByText(/Restored 4 fixtures/)).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Fixture catalog could not reach the Five12 backend'
+    )
+  })
+
+  it('does not let an older retry overwrite a newer search result', async () => {
+    const pendingRetry = deferred()
+    let emptyQueryCalls = 0
+    const newerFixture = { ...FIXTURES[0], id: 2, fixture: 'ARRI newer result' }
+    const olderFixture = { ...FIXTURES[0], id: 3, fixture: 'Older retry result' }
+
+    global.fetch = vi.fn((url) => {
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') return Promise.resolve(response(BACKUPS))
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        const query = new URL(url, 'http://localhost').searchParams.get('q')
+        if (query === 'ARRI') {
+          return Promise.resolve(response({ items: [newerFixture], total: 1, limit: 500, offset: 0 }))
+        }
+        emptyQueryCalls += 1
+        if (emptyQueryCalls === 1) {
+          return Promise.reject(new TypeError('NetworkError when attempting to fetch resource.'))
+        }
+        return pendingRetry.promise
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+    await screen.findByRole('alert')
+
+    await userEvent.click(screen.getByRole('button', { name: /retry fixture data/i }))
+    await userEvent.type(screen.getByRole('searchbox'), 'ARRI')
+
+    expect(await screen.findByDisplayValue('ARRI newer result')).toBeInTheDocument()
+    pendingRetry.resolve(response({ items: [olderFixture], total: 1, limit: 500, offset: 0 }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.getByDisplayValue('ARRI newer result')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue('Older retry result')).not.toBeInTheDocument()
   })
 })

@@ -50,14 +50,19 @@ Keep action results separate from background-load failures. Track catalog and me
 
 | Command | Result | Evidence level |
 |---|---|---|
-| `npm run test -- --run src/pages/Database.test.jsx` | **6 passed**; the two new tests were first observed failing against the old UI | software verification |
-| `npm run test` | **59 passed** | software verification |
+| `npm run test -- --run src/pages/Database.test.jsx` | **9 passed**; the original two recovery tests and the later stale-retry race test were each first observed failing against the prior implementation | software verification |
+| `npm run test` | **62 passed** | software verification |
 | `npm run build` | passed; pre-existing large-chunk warning only | software verification |
 | `git diff --check` | clean | software verification |
 
+## Independent review
+
+The first review of `d9df00a` found one Warning: overlapping retries or a search started during a retry could complete out of order and let stale data/error state overwrite a newer success. Addressed test-first with per-scope request generations, latest-request-only state commits, latest-request-only loading state, and a disabled/in-progress retry button. Added explicit regression coverage for a pending retry followed by a newer search, HTTP-vs-transport formatting, and restore-success preservation.
+
 ## Commits
 
-Pending review commit.
+- `d9df00a` — `fix: make fixture load errors actionable`
+- Follow-up race fix pending commit.
 
 ## Risks and skipped checks
 
