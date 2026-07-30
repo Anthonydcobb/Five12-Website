@@ -5,7 +5,7 @@
 - **Workspace:** local integration checkout `C:\dev\Five12-TheApp` (branch, not `main`)
 - **Base SHA:** `aa4b25b` (`main`)
 - **Head SHA:** `pending — see Commits`
-- **Status:** review
+- **Status (superseded, see the integration section below):** review
 - **Last updated:** 2026-07-29
 
 ## Goal
@@ -639,3 +639,39 @@ script derives its repo root from its own location, so pointing at the
 worktree's copy always checks the worktree; the plain-clone path is verified
 only at the `git rev-parse --git-path` level, not end to end. No Windows bench
 procedure and no actual-gear check.
+
+
+## Merged to `main` — 2026-07-30
+
+Merged, not rebased, so `a86b7cd` remains an ancestor and Hermes' pinned SHA
+still resolves. Current `main` (`b5ed23b`, Hermes' proxy-failure guidance) was
+merged in first; the two changesets are disjoint — Hermes touched
+`app/src/pages/Database.*` and a coordination archive, this branch touches
+`scripts/`, `backend/tests/`, and its own record.
+
+Re-verified on the merged tree, not just on the branch:
+
+| Check | Result |
+|---|---|
+| `pytest -q backend/tests` from the repository root | **452 passed** |
+| `Run-DoctorTests.ps1` (Pester) | **91 passed**, 0 failed |
+| `doctor.ps1` parsed by Windows PowerShell 5.1 | clean |
+
+**Merged without Hermes re-reviewing the fixes**, at Anthony's direction — the
+fourth time today, and the one that most deserves flagging, because Hermes'
+verdict on this branch was explicitly *not ready as-is*. All three of its
+findings are addressed and evidenced above, but "addressed" is my assessment,
+not an independent one. A post-hoc review is wanted, and the severity question
+below is still open.
+
+**Frontend not re-run.** The merge is disjoint from Hermes' frontend change,
+so the merged tree's frontend is byte-identical to `main`'s, which Hermes
+verified at `b5ed23b`. Not re-running it is a deliberate call, recorded rather
+than left silent.
+
+### Still open after this merge
+
+The FAIL-vs-WARN severity question, unchanged since the first review round.
+Behind-upstream is a WARN, diverged is a FAIL, and behind-integration is now
+also a WARN. Hermes asked for stale state to block. One line either way, and it
+is Hermes' call.
