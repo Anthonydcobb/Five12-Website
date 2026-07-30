@@ -1,8 +1,15 @@
 """add Hog fixture metadata and restorable catalog backups
 
 Revision ID: f12hoglib001
-Revises: c5f1a2b3d4e6
+Revises: d7c3a9f21b04
 Create Date: 2026-07-29
+
+Re-parented from c5f1a2b3d4e6 to d7c3a9f21b04 on 2026-07-30. Both revisions
+were authored against c5f1a2b3d4e6 on separate branches, so the graph had two
+heads and `flask db upgrade` had nothing to aim at. d7c3a9f21b04 is the one
+already applied to the live database, so it keeps its position and this one
+moves behind it. The two touch disjoint tables — fixtures and
+fixture_library_backups here, network_subnets there — so the order is free.
 """
 
 from alembic import op
@@ -10,7 +17,7 @@ import sqlalchemy as sa
 
 
 revision = "f12hoglib001"
-down_revision = "c5f1a2b3d4e6"
+down_revision = "d7c3a9f21b04"
 branch_labels = None
 depends_on = None
 
