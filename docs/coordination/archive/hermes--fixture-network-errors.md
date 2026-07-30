@@ -4,7 +4,7 @@
 - **Branch:** `fix/hermes/fixture-network-errors`
 - **Workspace:** `/root/five12-worktrees/hermes-fixture-network-errors`
 - **Base SHA:** `e6ef309827b558bf1ffb03ab3984ea8235ba3477` (`origin/main`)
-- **Status:** review
+- **Status:** complete
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -59,6 +59,8 @@ Keep action results separate from background-load failures. Track catalog and me
 
 The first review of `d9df00a` found one Warning: overlapping retries or a search started during a retry could complete out of order and let stale data/error state overwrite a newer success. Addressed test-first with per-scope request generations, latest-request-only state commits, latest-request-only loading state, and a disabled/in-progress retry button. Added explicit regression coverage for a pending retry followed by a newer search, HTTP-vs-transport formatting, and restore-success preservation.
 
+Final independent re-review at `24181f4` found no Critical or Warning issues. The reviewer repeated the race test 10 times (10/10 passed), ran the focused suite (9/9), full frontend suite (62/62), production build, and diff check successfully.
+
 ## Commits
 
 - `d9df00a` — `fix: make fixture load errors actionable`
@@ -66,8 +68,8 @@ The first review of `d9df00a` found one Warning: overlapping retries or a search
 
 ## Risks and skipped checks
 
-Browser recovery will be test-driven in jsdom and built locally. Anthony's live Windows browser remains the final bench check.
+Anthony's live Windows browser remains the final bench check after pulling `main`; automated recovery/race behavior is covered in jsdom and the production bundle builds successfully.
 
 ## Handoff / next action
 
-Implement test-first, run focused/full frontend checks, then request independent review before integration.
+Integrated after two independent reviews. Pull `main`, allow Vite to rebuild, and use the Database page normally; if Flask is unavailable, use the request-specific warning and **Retry fixture data** after restarting Flask.

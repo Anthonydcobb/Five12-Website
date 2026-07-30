@@ -4,7 +4,7 @@
 - **Branch:** `feat/hermes/hog-fixture-import`
 - **Workspace:** persistent worktree at `/root/five12-worktrees/hermes-hog-fixture-import`
 - **Base SHA:** `aa4b25b9d2411ec9565ebcb918b3e302f9883701`
-- **Status:** implementation complete; pushed for review/integration
+- **Status:** complete; integrated and live-verified
 - **Last updated:** 2026-07-29
 
 ## Goal
@@ -101,4 +101,4 @@ Use the existing flat `fixtures` table with additive Hog metadata rather than in
 
 ## Handoff / next action
 
-Review and integrate the pushed feature branch. Do not run the import against a real user database until its path and external backup are confirmed.
+Integrated into `main`. Anthony externally backed up the development MySQL database, applied the repaired migration chain, imported Hog 5.0.766, and live-verified 29,936 fixtures, internal backup #1 containing the prior 202 fixtures, Database search, and Patch picker search.
