@@ -4,7 +4,7 @@
 - **Branch:** `fix/hermes/doctor-ref-failclosed`
 - **Workspace:** `/root/five12-worktrees/hermes-doctor-ref-failclosed`
 - **Base SHA:** `4112383` (`origin/main`, including reviewed scanner/interface integration)
-- **Status:** review
+- **Status:** complete
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -20,7 +20,7 @@ Claude's preflight integration was merged to `main` at `1c86d1d` while Hermes' f
 - [x] A valid integration comparison preserves the existing current/behind behavior.
 - [x] A missing or invalid integration ref is never indistinguishable from zero-behind.
 - [x] The repo-identity check fails closed with an actionable fetch/ref message when comparison is unavailable.
-- [x] Windows PowerShell 5.1 compatibility and UTF-8 BOM are preserved in the candidate files; native 5.1 bench remains the integration gate.
+- [x] Windows PowerShell 5.1 compatibility and UTF-8 BOM are preserved; native 5.1 bench passed.
 - [x] Pester passes in a clean PowerShell 7 Linux container and canonical backend checks pass on Linux.
 
 ## Reserved paths
@@ -44,6 +44,8 @@ Exact-head review of merged candidate `4378b98` reproduced `git rev-list --count
 - Manual PowerShell module scenarios in `mcr.microsoft.com/powershell:lts-ubuntu-22.04`: missing ref **FAIL**, valid current **OK**, valid behind **WARN**.
 - Full Pester 4.10.1 suite in the same clean container: **92 passed, 0 failed** (rerun after review correction and rebase).
 - Canonical root backend suite on current `main` plus candidate: **505 passed, 19 warnings**.
+- Native Windows PowerShell 5.1 / Pester 3.4.0 on Anthony's exact candidate worktree: **92 passed, 0 failed, 0 skipped**.
+- Native collector scenario with `origin/definitely-missing`: Repo identity **FAIL**, actionable configured-ref verification shown, doctor exit code **1**.
 - UTF-8 BOM (`EF BB BF`) verified on all three changed PowerShell files after editing.
 - `git diff --check` — clean.
 
@@ -53,4 +55,4 @@ Exact commit `91cee0a` had no Critical finding. The reviewer confirmed the fail-
 
 ## Handoff / next action
 
-Run Pester and the missing-ref doctor scenario under native Windows PowerShell 5.1 on Anthony's rig. If both pass, archive this record and integrate; no additional code review is needed for the narrow reviewed remediation-string correction.
+All review and native Windows gates passed. Archive this record and fast-forward the exact candidate onto unchanged `main`; Anthony can then pull with per-command auto-GC disabled and remove the disposable review worktree.
