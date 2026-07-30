@@ -3,10 +3,27 @@ import React, { useEffect, useState } from 'react';
 
 const MAX_VISIBLE_ROWS = 500;
 
-async function readJson(response) {
+async function readJson(response, label = 'Request') {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    throw new Error(`${label} failed (${response.status}): ${data.error || 'No error details returned.'}`);
+  }
   return data;
+}
+
+async function requestJson(url, options, label) {
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    const detail = error.message ? ` (${error.message})` : '';
+    throw new Error(
+      `${label} could not reach the Five12 backend. ` +
+      `Check that Flask is running on http://127.0.0.1:5000, then retry.${detail}`
+    );
+  }
+  return readJson(response, label);
 }
 
 export default function Database() {
@@ -19,42 +36,94 @@ export default function Database() {
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState(null);
+  const [loadErrors, setLoadErrors] = useState({});
+
+  const clearLoadError = scope => {
+    setLoadErrors(previous => {
+      if (!previous[scope]) return previous;
+      const next = { ...previous };
+      delete next[scope];
+      return next;
+    });
+  };
+
+  const recordLoadError = (scope, error) => {
+    if (error.name !== 'AbortError') {
+      setLoadErrors(previous => ({ ...previous, [scope]: error.message }));
+    }
+  };
 
   const loadCatalog = async (query = search, nextOffset = offset, signal) => {
     const params = new URLSearchParams({
       q: query.trim(), limit: String(MAX_VISIBLE_ROWS), offset: String(nextOffset),
     });
-    const page = await fetch(`/api/fixture-library/catalog?${params}`, { signal }).then(readJson);
+    const page = await requestJson(
+      `/api/fixture-library/catalog?${params}`,
+      { signal },
+      'Fixture catalog'
+    );
     setRows(page.items);
     setCatalogTotal(page.total);
+    clearLoadError('catalog');
   };
 
   const loadMetadata = async () => {
     const [status, savedBackups] = await Promise.all([
-      fetch('/api/fixture-library/status').then(readJson),
-      fetch('/api/fixture-library/backups').then(readJson),
+      requestJson('/api/fixture-library/status', undefined, 'Fixture library status'),
+      requestJson('/api/fixture-library/backups', undefined, 'Fixture backup list'),
     ]);
     setLibraryStatus(status);
     setBackups(savedBackups);
+    clearLoadError('metadata');
+  };
+
+  const refreshMetadata = async () => {
+    try {
+      await loadMetadata();
+      return true;
+    } catch (error) {
+      recordLoadError('metadata', error);
+      return false;
+    }
+  };
+
+  const refreshCatalog = async (query = search, nextOffset = offset, signal) => {
+    try {
+      await loadCatalog(query, nextOffset, signal);
+      return true;
+    } catch (error) {
+      recordLoadError('catalog', error);
+      return false;
+    }
   };
 
   const reloadAll = async () => {
     setOffset(0);
-    await Promise.all([loadCatalog(search, 0), loadMetadata()]);
+    setCatalogLoading(true);
+    await Promise.all([refreshCatalog(search, 0), refreshMetadata()]);
+    setCatalogLoading(false);
+  };
+
+  const retryFixtureData = async () => {
+    const retries = [];
+    if (loadErrors.catalog) {
+      setCatalogLoading(true);
+      retries.push(refreshCatalog(search, offset));
+    }
+    if (loadErrors.metadata) retries.push(refreshMetadata());
+    await Promise.all(retries);
+    setCatalogLoading(false);
   };
 
   useEffect(() => {
-    loadMetadata().catch(error => setMessage({ type: 'error', text: error.message }));
+    refreshMetadata();
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setCatalogLoading(true);
-      loadCatalog(search, offset, controller.signal)
-        .catch(error => {
-          if (error.name !== 'AbortError') setMessage({ type: 'error', text: error.message });
-        })
+      refreshCatalog(search, offset, controller.signal)
         .finally(() => {
           if (!controller.signal.aborted) setCatalogLoading(false);
         });
@@ -67,13 +136,13 @@ export default function Database() {
 
   const addRow = async () => {
     try {
-      const newRow = await fetch('/api/fixtures', {
+      const newRow = await requestJson('/api/fixtures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           fixture: '', notes: '', channelCount: 0, wattage: 0, weight: 0, firmware: '',
         }),
-      }).then(readJson);
+      }, 'Add fixture');
       setRows(previous => [...previous, newRow]);
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -82,8 +151,7 @@ export default function Database() {
 
   const deleteRow = async (id) => {
     try {
-      const response = await fetch(`/api/fixtures/${id}`, { method: 'DELETE' });
-      if (!response.ok) throw new Error(`Delete failed (${response.status})`);
+      await requestJson(`/api/fixtures/${id}`, { method: 'DELETE' }, 'Delete fixture');
       setRows(previous => previous.filter(row => row.id !== id));
     } catch (error) {
       setMessage({ type: 'error', text: error.message });
@@ -100,7 +168,7 @@ export default function Database() {
     const updated = rows.find(row => row.id === id);
     if (!updated) return;
     try {
-      const saved = await fetch(`/api/fixtures/${id}`, {
+      const saved = await requestJson(`/api/fixtures/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -111,12 +179,12 @@ export default function Database() {
           weight: updated.weight === '' || updated.weight == null ? null : Number(updated.weight),
           firmware: updated.firmware || '',
         }),
-      }).then(readJson);
+      }, 'Update fixture');
       setRows(previous => previous.map(row => row.id === id ? saved : row));
-      await loadMetadata();
+      await refreshMetadata();
     } catch (error) {
       setMessage({ type: 'error', text: `Fixture update failed: ${error.message}` });
-      await loadCatalog(search, offset).catch(() => {});
+      await refreshCatalog(search, offset);
     }
   };
 
@@ -129,9 +197,9 @@ export default function Database() {
 
     try {
       setBusy('excel');
-      const data = await fetch('/api/fixtures/import-excel', {
+      const data = await requestJson('/api/fixtures/import-excel', {
         method: 'POST', body: formData,
-      }).then(readJson);
+      }, 'Excel fixture import');
       setMessage({
         type: 'success',
         text: `Imported ${data.inserted} fixtures. ${data.duplicates?.length || 0} duplicates were skipped.`,
@@ -154,9 +222,9 @@ export default function Database() {
       setMessage({ type: 'info', text: 'Validating the Hog fixture library…' });
       const previewForm = new FormData();
       previewForm.append('file', file);
-      const preview = await fetch('/api/fixture-library/hog/preview', {
+      const preview = await requestJson('/api/fixture-library/hog/preview', {
         method: 'POST', body: previewForm,
-      }).then(readJson);
+      }, 'Hog library preview');
 
       const confirmed = window.confirm(
         `Import Hog ${preview.version}?\n\n` +
@@ -176,9 +244,9 @@ export default function Database() {
       importForm.append('file', file);
       importForm.append('confirmReplace', 'true');
       importForm.append('previewToken', preview.previewToken);
-      const data = await fetch('/api/fixture-library/hog/import', {
+      const data = await requestJson('/api/fixture-library/hog/import', {
         method: 'POST', body: importForm,
-      }).then(readJson);
+      }, 'Hog library import');
       setMessage({
         type: 'success',
         text: (
@@ -204,14 +272,14 @@ export default function Database() {
 
     try {
       setBusy(`restore-${backup.id}`);
-      const data = await fetch(`/api/fixture-library/backups/${backup.id}/restore`, {
+      const data = await requestJson(`/api/fixture-library/backups/${backup.id}/restore`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           confirmReplace: true,
           expectedCatalogChecksum: libraryStatus?.catalogChecksum,
         }),
-      }).then(readJson);
+      }, 'Fixture backup restore');
       setMessage({
         type: 'success',
         text: (
@@ -265,6 +333,22 @@ export default function Database() {
               : 'border-border bg-surface text-text'
         }`}>
           {message.text}
+        </div>
+      )}
+
+      {Object.keys(loadErrors).length > 0 && (
+        <div role="alert" className="mb-4 rounded border border-brand bg-brand-dim/40 p-3 text-sm text-brand-hi">
+          <div className="font-semibold">Some fixture data could not be refreshed.</div>
+          <ul className="mt-1 list-disc pl-5">
+            {Object.values(loadErrors).map(error => <li key={error}>{error}</li>)}
+          </ul>
+          <button
+            type="button"
+            onClick={retryFixtureData}
+            className="mt-3 rounded bg-brand px-3 py-1.5 text-white hover:bg-brand-hi"
+          >
+            Retry fixture data
+          </button>
         </div>
       )}
 

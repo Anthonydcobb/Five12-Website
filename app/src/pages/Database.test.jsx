@@ -144,4 +144,73 @@ describe('Database fixture-library safety UI', () => {
     })
     expect(await screen.findByDisplayValue('Custom SkyPanel')).toBeInTheDocument()
   })
+
+  it('identifies a metadata transport failure and clears it after retry succeeds', async () => {
+    let backupAttempts = 0
+    global.fetch = vi.fn((url) => {
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        return Promise.resolve(response({ items: FIXTURES, total: 1, limit: 500, offset: 0 }))
+      }
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') {
+        backupAttempts += 1
+        if (backupAttempts === 1) {
+          return Promise.reject(new TypeError('NetworkError when attempting to fetch resource.'))
+        }
+        return Promise.resolve(response(BACKUPS))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Fixture backup list could not reach the Five12 backend')
+    expect(alert).toHaveTextContent('NetworkError when attempting to fetch resource.')
+
+    await userEvent.click(screen.getByRole('button', { name: /retry fixture data/i }))
+
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(screen.getByText('#7 · 4 fixtures')).toBeInTheDocument()
+  })
+
+  it('preserves a successful import message when the follow-up catalog refresh fails', async () => {
+    let importCompleted = false
+    global.fetch = vi.fn((url) => {
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        if (importCompleted) {
+          return Promise.reject(new TypeError('NetworkError when attempting to fetch resource.'))
+        }
+        return Promise.resolve(response({ items: FIXTURES, total: 1, limit: 500, offset: 0 }))
+      }
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') return Promise.resolve(response(BACKUPS))
+      if (url === '/api/fixture-library/hog/preview') {
+        return Promise.resolve(response({
+          version: '5.0.766', fixtureCount: 29936, manufacturers: 519,
+          patchable: 21625, unsupported: 8311, currentCount: 1,
+          previewToken: 'signed-preview',
+        }))
+      }
+      if (url === '/api/fixture-library/hog/import') {
+        importCompleted = true
+        return Promise.resolve(response({
+          imported: 29936, manufacturers: 519, version: '5.0.766',
+          backup: { id: 8, fixtureCount: 1 },
+        }, true, 201))
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+    await screen.findByText(/Hog 5 5\.0\.766/)
+
+    const file = new File(['<library/>'], 'summary.xml', { type: 'application/xml' })
+    await userEvent.upload(screen.getByLabelText(/replace with hog summary\.xml/i), file)
+
+    expect(await screen.findByText(/Imported 29,936 Hog 5\.0\.766 profiles/)).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Fixture catalog could not reach the Five12 backend'
+    )
+  })
 })
