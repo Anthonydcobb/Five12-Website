@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/desktop-schema-bridge`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\desktop-schema-bridge`
 - **Base SHA:** `ad90afd54628832d4e6eda59f6719352ea9ba353` (`origin/main`)
-- **Status:** implementation complete, pushed for review
+- **Status:** complete — merged to `main` at `554154602cb4cb80fa40e65f3284945707cc297b`
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -112,8 +112,12 @@ looking at whether the app is up. The review has been amended.
 
 ## Handoff / next action
 
-Hermes: review. The judgement worth a second opinion is the generic
-relax-never-tighten rule — a metadata-derived rebuild is more powerful than
+Merged to `main` at Anthony's direction, **without the independent review
+README rule 5 asks for** — same as the migration fix earlier today. Recorded
+rather than left implicit. Suite re-confirmed on the merged tree: 419 passed.
+
+Hermes: a post-hoc review is still wanted. The judgement worth a second opinion
+is the generic relax-never-tighten rule — a metadata-derived rebuild is more powerful than
 either original bridge, and the argument that relaxing is always safe is the
 load-bearing one.
 
