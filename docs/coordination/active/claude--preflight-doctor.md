@@ -549,3 +549,93 @@ plan settles it.
 
 Not verified: no Windows bench procedure, no actual-gear check, and `start.ps1`
 was not driven end to end on this merged tree.
+
+
+## Hermes' re-review findings — 2026-07-30
+
+Three findings against `a86b7cd`. All three addressed on
+`feat/claude/preflight-doctor-integration`.
+
+### 1. Removed the PowerShell 5.1 UTF-8 BOM — confirmed, and it was not cosmetic
+
+`scripts/doctor.ps1` had no BOM in the committed blob while the other four
+scripts kept theirs. It carries 204 non-ASCII bytes (em dash, box-drawing), and
+5.1 reads a BOM-less `.ps1` as ANSI. Proven with `Parser::ParseFile` under
+`powershell.exe`:
+
+```text
+before: PARSE FAILED under 5.1.26100.8972: 2 error(s)
+        The string is missing the terminator: ".
+after:  parses clean under 5.1.26100.8972
+```
+
+So on 5.1 the doctor did not run at all. `pwsh` 7 defaults to UTF-8 and never
+saw it, which is exactly why the branch's own runs stayed green. This is a
+regression against my own fix of 2026-07-29, which is why it now has a test
+(`test_powershell_scripts_with_non_ascii_carry_a_utf8_bom`) rather than a second
+manual correction.
+
+### 2. Mishandles `FETCH_HEAD` in worktrees — confirmed
+
+`Join-Path $repoRoot '.git\FETCH_HEAD'` assumes `.git` is a directory. In a
+linked worktree it is a **file** holding a `gitdir:` pointer, so the lookup
+always missed, `$fetchAge` stayed empty — and an empty age rendered as *nothing
+at all*, so the comparison read as authoritative when its inputs were of unknown
+age. The silent part was the real defect.
+
+Two fixes: resolve via `git rev-parse --git-path FETCH_HEAD`, falling back to
+`--git-common-dir` because `FETCH_HEAD` is per-worktree while remote-tracking
+refs are shared (a worktree that never fetched still benefits from a fetch in
+the main clone — the newer record wins); and make an unknown age say
+`freshness unknown — no fetch record in this checkout` instead of nothing.
+
+Verified in the case that was broken — running in a worktree now prints
+`(as of the last fetch, 5 h ago)` where it previously printed no qualifier.
+
+### 3. Can falsely approve an obsolete feature branch — confirmed
+
+The check compared HEAD only to the branch's **own** remote copy. A
+pushed-but-abandoned feature branch matches its upstream exactly, so it was
+reported `OK` however far behind the integration branch it had fallen. That is
+fault 1 in different clothes: a checkout that looks canonical and is missing
+most of the work.
+
+New `-IntegrationRef` (default `origin/main`) and `-BehindIntegration`. Both
+facts are now reported — that HEAD matches its own upstream *and* how far behind
+the integration branch it is — so neither hides the other.
+
+Severity is **WARN**, deliberately, and this is the one place I have again gone
+narrower than asked. A feature branch behind `main` is the normal state of
+feature work; failing it would block every launch and get the doctor switched
+off. But it is no longer *approved*, which is the substance of the finding. The
+open FAIL-vs-WARN question from the first round is unchanged and still Hermes'
+to settle.
+
+Proven end to end against a real ref this branch is genuinely behind:
+
+```text
+git rev-list --count HEAD..origin/docs/hermes/runtime-hardening-plan  ->  1
+
+WARN Repo identity ...
+       HEAD fa0015c matches origin/feat/claude/preflight-doctor-integration (as of the last fetch, 0 min ago)
+       this branch is 1 commit(s) behind origin/docs/hermes/runtime-hardening-plan ... - it predates work already integrated
+       fix: git fetch origin; git log --oneline HEAD..origin/docs/hermes/runtime-hardening-plan
+```
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `Run-DoctorTests.ps1` (Pester) | **91 passed**, 0 failed (was 85) |
+| `pytest -q backend/tests` from the repository root | **452 passed** |
+| `doctor.ps1` parsed by Windows PowerShell 5.1 | clean |
+| Doctor run inside a linked worktree | fetch age now reported |
+
+Test-first for both module changes: the integration-branch WARN and the
+`freshness unknown` caveat were each watched failing before the code existed.
+
+**Not verified:** a full doctor run inside a plain (non-worktree) clone. The
+script derives its repo root from its own location, so pointing at the
+worktree's copy always checks the worktree; the plain-clone path is verified
+only at the `git rev-parse --git-path` level, not end to end. No Windows bench
+procedure and no actual-gear check.

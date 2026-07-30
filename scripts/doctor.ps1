@@ -56,6 +56,10 @@ param(
     [int]$Port = 5000,
     [string]$PythonExe = 'C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe',
     [string]$ExpectedRoot = 'C:\dev\Five12-TheApp',
+    # The branch everything integrates through. HEAD is compared against this as
+    # well as against its own upstream, because a pushed-but-abandoned feature
+    # branch matches its upstream exactly and tells you nothing.
+    [string]$IntegrationRef = 'origin/main',
     # Set by start.ps1. About to launch a backend, so an EXISTING backend is a
     # conflict rather than a healthy state — the launch would create a second
     # process and the two would race for the Bluetooth adapter's single-owner
@@ -105,6 +109,7 @@ $upstreamRef = ''
 $behind = 0
 $ahead = 0
 $fetchAge = ''
+$behindIntegration = 0
 if ($branch) {
     try {
         $headOut = @(& git -C $repoRoot rev-parse --short HEAD 2>$null)
@@ -124,12 +129,37 @@ if ($branch) {
             }
         }
 
-        $fetchHead = Join-Path $repoRoot '.git\FETCH_HEAD'
-        if (Test-Path $fetchHead) {
-            $span = (Get-Date) - (Get-Item $fetchHead).LastWriteTime
+        # In a linked worktree `.git` is a FILE holding a gitdir: pointer, so
+        # "$repoRoot\.git\FETCH_HEAD" never resolves and the age silently went
+        # missing. Ask git for the path instead. FETCH_HEAD is also per-worktree
+        # while remote-tracking refs are shared, so a worktree that has never
+        # fetched still benefits from a fetch done in the main clone — take
+        # whichever record is newer.
+        $fetchCandidates = @()
+        foreach ($arg in @('--git-path', '--git-common-dir')) {
+            $out = @(& git -C $repoRoot rev-parse $arg $(if ($arg -eq '--git-path') { 'FETCH_HEAD' }) 2>$null)
+            if ($out.Count -gt 0 -and $out[0]) {
+                $p = ([string]$out[0]).Trim()
+                if ($arg -eq '--git-common-dir') { $p = Join-Path $p 'FETCH_HEAD' }
+                if (-not [System.IO.Path]::IsPathRooted($p)) { $p = Join-Path $repoRoot $p }
+                if (Test-Path $p) { $fetchCandidates += (Get-Item $p).LastWriteTime }
+            }
+        }
+        if ($fetchCandidates.Count -gt 0) {
+            $newest = ($fetchCandidates | Sort-Object -Descending)[0]
+            $span = (Get-Date) - $newest
             if ($span.TotalHours -lt 1) { $fetchAge = "$([math]::Round($span.TotalMinutes)) min" }
             elseif ($span.TotalDays -lt 1) { $fetchAge = "$([math]::Round($span.TotalHours)) h" }
             else { $fetchAge = "$([math]::Round($span.TotalDays)) days" }
+        }
+
+        # Matching your own remote copy is not the same as being current. A
+        # pushed-but-abandoned feature branch matches its upstream exactly.
+        if ($branch -ne 'main') {
+            $intOut = @(& git -C $repoRoot rev-list --count "HEAD..$IntegrationRef" 2>$null)
+            if ($intOut.Count -gt 0 -and $intOut[0]) {
+                $behindIntegration = [int](([string]$intOut[0]).Trim())
+            }
         }
     }
     catch { }
@@ -138,7 +168,7 @@ if ($branch) {
 $checks += Test-Five12RepoIdentity -Root $repoRoot -ExpectedRoot $ExpectedRoot `
     -Branch $branch -Dirty $dirty -OriginUrl $originUrl `
     -LocalHead $localHead -UpstreamRef $upstreamRef -Behind $behind -Ahead $ahead `
-    -FetchAge $fetchAge
+    -FetchAge $fetchAge -IntegrationRef $IntegrationRef -BehindIntegration $behindIntegration
 
 # ---------------------------------------------------------------------------
 # Faults 3 and 4, plus the database — all answered by the Python probe, run on

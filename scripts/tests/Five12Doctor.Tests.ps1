@@ -817,3 +817,64 @@ Describe 'Exit code' {
         Get-Five12ExitCode -Checks $checks | Should Be 0
     }
 }
+
+Describe 'Test-Five12RepoIdentity - obsolete feature branches and unknown freshness' {
+
+    # Hermes' re-review, 2026-07-30: the check compared HEAD only to the
+    # branch's OWN remote copy, so an obsolete feature branch that had been
+    # pushed matched its upstream and was approved -- however far behind the
+    # integration branch it had fallen. That is fault 1 wearing a different hat:
+    # a checkout that looks canonical and is missing most of the work.
+
+    It 'does not approve a feature branch that is far behind the integration branch' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
+            -IntegrationRef 'origin/main' -BehindIntegration 47
+        $r.Status | Should Be 'WARN'
+        ($r.Details -join ' ') | Should Match '47 commit\(s\) behind origin/main'
+    }
+
+    It 'still reports matching its own upstream, so both facts are visible' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
+            -IntegrationRef 'origin/main' -BehindIntegration 47
+        ($r.Details -join ' ') | Should Match 'matches origin/feat/x'
+    }
+
+    It 'is silent about the integration branch when the checkout is current' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min' `
+            -IntegrationRef 'origin/main' -BehindIntegration 0
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Not Match 'behind origin/main'
+    }
+
+    It 'does not nag about being behind main when the branch IS main' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'main' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/main' -Ahead 0 -Behind 0 -FetchAge '5 min' `
+            -IntegrationRef 'origin/main' -BehindIntegration 0
+        ($r.Details -join ' ') | Should Not Match 'behind origin/main'
+    }
+
+    # The second half: in a linked worktree .git is a FILE, so the old
+    # FETCH_HEAD lookup missed and the "as of the last fetch" qualifier vanished
+    # in silence -- leaving a stale comparison reading as authoritative.
+
+    It 'says the freshness is unknown rather than dropping the caveat' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge ''
+        ($r.Details -join ' ') | Should Match 'freshness unknown'
+    }
+
+    It 'never claims a fetch age it does not have' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 4 -FetchAge ''
+        ($r.Details -join ' ') | Should Not Match 'as of the last fetch'
+    }
+}

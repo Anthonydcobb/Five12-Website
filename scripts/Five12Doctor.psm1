@@ -180,7 +180,12 @@ function Test-Five12RepoIdentity {
         [string]$UpstreamRef = '',
         [int]$Behind = 0,
         [int]$Ahead = 0,
-        [string]$FetchAge = ''
+        [string]$FetchAge = '',
+        # Comparing HEAD only to the branch's OWN remote copy approves any
+        # obsolete feature branch that happens to have been pushed. The second
+        # comparison is against the branch everything integrates through.
+        [string]$IntegrationRef = '',
+        [int]$BehindIntegration = 0
     )
 
     $details = @()
@@ -239,7 +244,11 @@ function Test-Five12RepoIdentity {
 
     # Staleness — the half of fault 1 the original check never looked at.
     if ($Branch) {
-        $asOf = ''
+        # Never let the caveat vanish. An empty FetchAge used to render as
+        # nothing at all, which made a comparison against refs of unknown age
+        # read as authoritative — worst in a linked worktree, where .git is a
+        # file and the old FETCH_HEAD lookup always missed.
+        $asOf = ' (freshness unknown — no fetch record in this checkout)'
         if ($FetchAge) { $asOf = " (as of the last fetch, $FetchAge ago)" }
 
         if (-not $UpstreamRef) {
@@ -260,6 +269,16 @@ function Test-Five12RepoIdentity {
         }
         else {
             $details += "HEAD $LocalHead matches $UpstreamRef$asOf"
+        }
+
+        # Matching your own remote copy says nothing about whether the branch
+        # still reflects the project. A pushed-but-abandoned feature branch
+        # matches its upstream exactly and can be months behind the work
+        # everyone else has integrated — fault 1 in different clothes.
+        if ($IntegrationRef -and $Branch -ne 'main' -and $BehindIntegration -gt 0) {
+            $statuses += 'WARN'
+            $details += "this branch is $BehindIntegration commit(s) behind ${IntegrationRef}$asOf — it predates work already integrated"
+            $fixes += "git fetch origin; git log --oneline HEAD..$IntegrationRef"
         }
     }
 
