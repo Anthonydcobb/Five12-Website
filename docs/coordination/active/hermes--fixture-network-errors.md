@@ -62,7 +62,7 @@ The first review of `d9df00a` found one Warning: overlapping retries or a search
 ## Commits
 
 - `d9df00a` — `fix: make fixture load errors actionable`
-- Follow-up race fix pending commit.
+- `51d970a` — `fix: ignore stale fixture refresh results`
 
 ## Risks and skipped checks
 
