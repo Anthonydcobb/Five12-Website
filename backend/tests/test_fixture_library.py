@@ -7,10 +7,12 @@ from pathlib import Path
 import pytest
 from flask_migrate import downgrade, upgrade
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 
 from app import create_app, db as app_db
 from app.fixture_library import (
     MAX_SUMMARY_XML_BYTES,
+    FixtureLibraryBusyError,
     FixtureLibraryError,
     fixture_catalog_mutation_lock,
     parse_hog_summary,
@@ -138,6 +140,44 @@ def restore(client, backup_id, checksum=None):
             "expectedCatalogChecksum": checksum,
         },
     )
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["database is locked", "database table is locked", "database schema is locked"],
+)
+def test_sqlite_lock_contention_is_reported_as_fixture_library_busy(app, monkeypatch, message):
+    failure = OperationalError(
+        "BEGIN IMMEDIATE", {}, sqlite3.OperationalError(message)
+    )
+
+    class FailingConnection:
+        def exec_driver_sql(self, _statement):
+            raise failure
+
+    with app.app_context():
+        monkeypatch.setattr(app_db.session, "connection", lambda: FailingConnection())
+        with pytest.raises(FixtureLibraryBusyError, match="already running"):
+            with fixture_catalog_mutation_lock():
+                pass
+
+
+def test_unrelated_sqlite_operational_error_is_not_mislabeled_as_busy(app, monkeypatch):
+    failure = OperationalError(
+        "BEGIN IMMEDIATE",
+        {},
+        sqlite3.OperationalError("cannot start a transaction within a transaction"),
+    )
+
+    class FailingConnection:
+        def exec_driver_sql(self, _statement):
+            raise failure
+
+    with app.app_context():
+        monkeypatch.setattr(app_db.session, "connection", lambda: FailingConnection())
+        with pytest.raises(OperationalError, match="cannot start a transaction"):
+            with fixture_catalog_mutation_lock():
+                pass
 
 
 def test_parser_preserves_official_summary_fields_and_marks_patchable_profiles():
