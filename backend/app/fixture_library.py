@@ -49,6 +49,20 @@ class FixtureLibraryBusyError(RuntimeError):
     """Raised when another process is already replacing the catalog."""
 
 
+_SQLITE_LOCK_ERRORS = (
+    "database is locked",
+    "database table is locked",
+    "database schema is locked",
+)
+
+
+def _is_sqlite_lock_contention(error: OperationalError) -> bool:
+    """Return true only for SQLite errors that actually mean writer contention."""
+
+    message = str(getattr(error, "orig", error)).lower()
+    return any(lock_error in message for lock_error in _SQLITE_LOCK_ERRORS)
+
+
 @dataclass(frozen=True)
 class ParsedFixtureLibrary:
     records: list[dict]
@@ -90,6 +104,8 @@ def fixture_catalog_mutation_lock():
             try:
                 session_connection.exec_driver_sql("BEGIN IMMEDIATE")
             except OperationalError as exc:
+                if not _is_sqlite_lock_contention(exc):
+                    raise
                 raise FixtureLibraryBusyError(
                     "Another fixture-library operation is already running"
                 ) from exc
