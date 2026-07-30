@@ -3,7 +3,7 @@
 - **Owner:** Hermes
 - **Branch:** `fix/hermes/doctor-ref-failclosed`
 - **Workspace:** `/root/five12-worktrees/hermes-doctor-ref-failclosed`
-- **Base SHA:** `1c86d1d` (`origin/main`)
+- **Base SHA:** `4112383` (`origin/main`, including reviewed scanner/interface integration)
 - **Status:** review
 - **Last updated:** 2026-07-30
 
@@ -42,11 +42,15 @@ Exact-head review of merged candidate `4378b98` reproduced `git rev-list --count
 
 - Discriminating Pester case added for an unavailable integration ref; prior module had no availability input and could only see numeric zero.
 - Manual PowerShell module scenarios in `mcr.microsoft.com/powershell:lts-ubuntu-22.04`: missing ref **FAIL**, valid current **OK**, valid behind **WARN**.
-- Full Pester 4.10.1 suite in the same clean container: **92 passed, 0 failed**.
-- Canonical root backend suite: **452 passed, 19 warnings**.
+- Full Pester 4.10.1 suite in the same clean container: **92 passed, 0 failed** (rerun after review correction and rebase).
+- Canonical root backend suite on current `main` plus candidate: **505 passed, 19 warnings**.
 - UTF-8 BOM (`EF BB BF`) verified on all three changed PowerShell files after editing.
 - `git diff --check` — clean.
 
+## Independent review
+
+Exact commit `91cee0a` had no Critical finding. The reviewer confirmed the fail-closed state, immediate `$LASTEXITCODE` capture, `TryParse`, default behavior, `main` behavior, and BOM. One Warning was accepted: remediation hardcoded `git fetch origin main`, which was wrong for an overridden integration ref. The candidate now prints `git fetch origin; git rev-parse --verify <configured-ref>` and the Pester assertion covers the configured `origin/main` value.
+
 ## Handoff / next action
 
-Request independent exact-head review. If approved, run Pester and the missing-ref doctor scenario under native Windows PowerShell 5.1 on Anthony's rig before integration.
+Run Pester and the missing-ref doctor scenario under native Windows PowerShell 5.1 on Anthony's rig. If both pass, archive this record and integrate; no additional code review is needed for the narrow reviewed remediation-string correction.

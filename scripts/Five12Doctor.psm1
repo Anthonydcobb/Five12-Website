@@ -282,7 +282,7 @@ function Test-Five12RepoIdentity {
             if (-not $IntegrationRefAvailable) {
                 $statuses += 'FAIL'
                 $details += "could not compare HEAD to $IntegrationRef — the configured integration ref is missing or invalid"
-                $fixes += 'git fetch origin main'
+                $fixes += "git fetch origin; git rev-parse --verify $IntegrationRef"
             }
             elseif ($BehindIntegration -gt 0) {
                 $statuses += 'WARN'

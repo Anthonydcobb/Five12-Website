@@ -850,7 +850,8 @@ Describe 'Test-Five12RepoIdentity - obsolete feature branches and unknown freshn
             -IntegrationRef 'origin/main' -IntegrationRefAvailable $false -BehindIntegration 0
         $r.Status | Should Be 'FAIL'
         ($r.Details -join ' ') | Should Match 'could not compare HEAD to origin/main'
-        ($r.Fix -join ' ') | Should Match 'git fetch origin main'
+        ($r.Fix -join ' ') | Should Match 'git fetch origin'
+        ($r.Fix -join ' ') | Should Match 'rev-parse --verify origin/main'
     }
 
     It 'is silent about the integration branch when the checkout is current' {
