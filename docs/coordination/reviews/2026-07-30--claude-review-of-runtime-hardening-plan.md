@@ -228,8 +228,21 @@ depending on an unstated machine condition, and then every later comparison is
 measured against a coin flip. Worse, the natural reading of a red suite is "the
 refactor broke BLE."
 
-**Required:** Task 0.2 must state the app-stopped precondition and record it in
-the baseline document. **Suggested alongside:** make the lock tests report the
+**Correction, 2026-07-30, later the same day.** The precondition above is
+wrong, and the amendment matters for the remedy. While reconciling the desktop
+schema bridge I ran the same suite with the backend *running* and all 18 lock
+tests passed — that instance had BLE tools off, so `/api/ble/capabilities` was
+absent and it never took the adapter lock. The failures need a process
+**holding the BLE adapter lock**, which means the app running with
+`FIVE12_BLE_TOOLS=1`, not merely the app running.
+
+The finding's substance is unchanged and, if anything, stronger: the state that
+determines the result is invisible in the failure message *and* invisible from
+checking whether the app is up, so a baseline captured without stating it looks
+deterministic while not being it.
+
+**Required:** Task 0.2 must state the precondition — no process holding the BLE
+adapter lock — and record it in the baseline document. **Suggested alongside:** make the lock tests report the
 holding process so the failure says "the Five12 app is running (PID n)" instead
 of `assert '' == 'HELD'`. That is a small fix and it is already on my open list
 from the 2026-07-30 handoff. Evidence level: software verification (Windows rig).
