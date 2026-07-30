@@ -86,6 +86,13 @@ def create_app(test_config=None):
         if str(app.config.get('SQLALCHEMY_DATABASE_URI', '')).startswith('sqlite'):
             with app.app_context():
                 db.create_all()
+                # create_all() creates missing TABLES and never touches an
+                # existing one, so a column added to a model after a desktop
+                # database exists simply is not there and the first query dies
+                # with "no such column". Additive and nullability-relaxing
+                # only, SQLite only; anything else is a real migration.
+                from .sqlite_schema import upgrade_sqlite_schema
+                upgrade_sqlite_schema(db.engine, db.metadata)
         # start_scanner spawns a background thread per process — under gunicorn
         # every worker runs its own scanner.
         from .scanner import start_scanner

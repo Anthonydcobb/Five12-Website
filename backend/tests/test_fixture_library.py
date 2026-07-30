@@ -12,10 +12,10 @@ from app import create_app, db as app_db
 from app.fixture_library import (
     MAX_SUMMARY_XML_BYTES,
     FixtureLibraryError,
-    ensure_desktop_fixture_library_schema,
     fixture_catalog_mutation_lock,
     parse_hog_summary,
 )
+from app.sqlite_schema import upgrade_sqlite_schema
 from app.models import Fixture, FixtureLibraryBackup, PatchSheet, Show
 
 
@@ -487,8 +487,12 @@ def test_legacy_desktop_sqlite_schema_is_upgraded_idempotently(tmp_path):
         }
     )
     with legacy_app.app_context():
-        ensure_desktop_fixture_library_schema()
-        ensure_desktop_fixture_library_schema()
+        # The real desktop startup sequence: create_all() makes the missing
+        # tables, then the bridge reconciles the ones that already existed.
+        # Run twice to pin idempotency.
+        app_db.create_all()
+        upgrade_sqlite_schema(app_db.engine, app_db.metadata)
+        upgrade_sqlite_schema(app_db.engine, app_db.metadata)
 
         columns = {
             row[1]

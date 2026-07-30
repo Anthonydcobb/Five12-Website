@@ -16,15 +16,17 @@ if static_dir:
 from app import create_app, db
 from app.models import Fixture
 from app.fixture_seed import seed_fixtures
-from app.fixture_library import ensure_desktop_fixture_library_schema
+from app.sqlite_schema import upgrade_sqlite_schema
 
 app = create_app()
 
-# Create tables, add fixture-library columns to legacy create_all databases,
-# and seed the starter catalog only when the fixture table is empty.
+# Create missing tables, then reconcile the ones that already exist with the
+# models: create_all() never alters an existing table, so a desktop database
+# built by an older version is missing every column added since. Then seed the
+# starter catalog, only when the fixture table is empty.
 with app.app_context():
     db.create_all()
-    ensure_desktop_fixture_library_schema()
+    upgrade_sqlite_schema(db.engine, db.metadata)
     seed_fixtures(db, Fixture)
 
 port = int(os.environ.get('FIVE12_PORT', 5050))

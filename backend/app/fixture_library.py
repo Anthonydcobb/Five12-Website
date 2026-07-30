@@ -11,7 +11,7 @@ from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from sqlalchemy import inspect, text
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from . import db
@@ -39,15 +39,6 @@ _SNAPSHOT_FIELDS = (
     "library_source",
     "library_version",
 )
-_SQLITE_FIXTURE_COLUMNS = {
-    "manufacturer": "VARCHAR(120)",
-    "hog_uuid": "VARCHAR(36)",
-    "revision_id": "INTEGER",
-    "library_type": "VARCHAR(20)",
-    "library_origin": "VARCHAR(120)",
-    "library_source": "VARCHAR(50)",
-    "library_version": "VARCHAR(32)",
-}
 
 
 class FixtureLibraryError(ValueError):
@@ -69,68 +60,6 @@ class ParsedFixtureLibrary:
     part_count: int
     compound_count: int
     genesis: str
-
-
-def ensure_desktop_fixture_library_schema() -> None:
-    """Idempotently upgrade a legacy create_all-based desktop SQLite catalog.
-
-    Older desktop databases do not carry Alembic state. SQLite also cannot
-    change a NOT NULL column in place, so legacy fixture tables are rebuilt in
-    one transaction. Unknown vendor wattage/weight can then remain NULL rather
-    than being fabricated as zero.
-    """
-
-    if db.engine.dialect.name != "sqlite":
-        return
-
-    inspector = inspect(db.engine)
-    if "fixtures" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"]: column for column in inspector.get_columns("fixtures")}
-    needs_rebuild = (
-        any(name not in columns for name in _SQLITE_FIXTURE_COLUMNS)
-        or not columns["wattage"]["nullable"]
-        or not columns["weight"]["nullable"]
-    )
-
-    if needs_rebuild:
-        target_columns = [
-            "id", "fixture", "channel_count", "wattage", "weight",
-            "firmware", "notes", *_SQLITE_FIXTURE_COLUMNS,
-        ]
-        select_columns = [name if name in columns else "NULL" for name in target_columns]
-        with db.engine.begin() as connection:
-            connection.execute(text("""
-                CREATE TABLE fixtures_five12_upgrade (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fixture VARCHAR(120) NOT NULL,
-                    channel_count INTEGER NOT NULL,
-                    wattage INTEGER,
-                    weight INTEGER,
-                    firmware VARCHAR(120),
-                    notes TEXT,
-                    manufacturer VARCHAR(120),
-                    hog_uuid VARCHAR(36),
-                    revision_id INTEGER,
-                    library_type VARCHAR(20),
-                    library_origin VARCHAR(120),
-                    library_source VARCHAR(50),
-                    library_version VARCHAR(32)
-                )
-            """))
-            connection.execute(text(
-                f"INSERT INTO fixtures_five12_upgrade ({', '.join(target_columns)}) "
-                f"SELECT {', '.join(select_columns)} FROM fixtures"
-            ))
-            connection.execute(text("DROP TABLE fixtures"))
-            connection.execute(text(
-                "ALTER TABLE fixtures_five12_upgrade RENAME TO fixtures"
-            ))
-
-    FixtureLibraryBackup.__table__.create(bind=db.engine, checkfirst=True)
-    for index in Fixture.__table__.indexes:
-        index.create(bind=db.engine, checkfirst=True)
 
 
 @contextmanager
