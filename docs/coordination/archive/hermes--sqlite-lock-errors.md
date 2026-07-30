@@ -3,8 +3,8 @@
 - **Owner:** Hermes
 - **Branch:** `fix/hermes/sqlite-lock-errors`
 - **Workspace:** `/root/five12-worktrees/hermes-sqlite-lock-errors`
-- **Base SHA:** `b5ed23b` (`origin/main`)
-- **Status:** review
+- **Base SHA:** `6cceb38` (`origin/main`, after reviewed dead-migration cleanup)
+- **Status:** complete
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -42,6 +42,10 @@ Claude's post-merge Hog review reproduced idle/nested SQLite transaction errors 
 - Canonical root-form suite on this base — **420 passed, 3 failed**, all three pre-existing BLE child-import failures fixed on the separately reviewed preflight-doctor integration branch.
 - `git diff --check` — clean.
 
+## Independent review
+
+Exact commit `45289c0` received **Looks Good** with no Critical or Warning findings. The reviewer independently confirmed real SQLAlchemy/SQLite contention maps to 409, unrelated nested-transaction errors reach 500, focused tests passed 25/25, and the diff was clean. The implementation was then rebased without conflict onto current `main` `6cceb38`; the combined canonical suite passed **462 tests** with 19 warnings.
+
 ## Handoff / next action
 
-Request independent review, then integrate after rebasing onto the latest `main` if the preflight branch lands first.
+Integrated candidate is ready to fast-forward into `main`. No database migration, catalog import, or live fixture-data write is required.
