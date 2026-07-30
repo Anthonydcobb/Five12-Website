@@ -4,7 +4,8 @@
 - **Branch:** `fix/claude/migration-single-head`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\migration-single-head`
 - **Base SHA:** `3312a98627ecd6d14f801a2542868cba978c658d` (`origin/main`)
-- **Status:** implementation complete, pushed for review
+- **Status:** complete — merged to `main` at `2569a4816646be0e7ac1a749fcd07b4ab6ac2143`,
+  and applied to the live database
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -69,10 +70,62 @@ the machine-wide Bluetooth lock. Unrelated to this change — with the app stopp
 the same suite reports 404 passed on this branch's parent. This is finding W2 of
 the runtime-hardening plan review, observed for the third time today.
 
-**Not verified:** MySQL. All four migration scenarios ran on SQLite. The live
-database is MySQL, and `f12hoglib001` uses `batch_alter_table`, which behaves
-differently there. Anthony should back up before upgrading, and the MySQL path
-is the obvious target for independent verification.
+## Applied to the live database — 2026-07-30
+
+Anthony authorised the backup and upgrade. Both are done. MySQL 9.7.0, app
+stopped (0 listeners on port 5000), `FIVE12_NETWORK_TOOLS=0` and
+`FIVE12_BLE_TOOLS=0` so creating the app for the migration started no scanner,
+no sACN listener, and no radio.
+
+**Backup, and the part worth reading.** The first `mysqldump` passed every
+structural check — 12/12 `CREATE TABLE`, alembic value present, `INSERT`s
+present, completion footer — and would not have restored. It carried
+`SET @@GLOBAL.GTID_PURGED`, which MySQL refuses to replay onto the server it came
+from (`ERROR 3546 (HY000) at line 24`). That was only discovered by restoring it
+rather than inspecting it; `mysqldump` had warned about GTIDs and the warning had
+been treated as noise. **Any backup step in a plan or runbook needs
+`--set-gtid-purged=OFF`** — a structurally perfect dump that cannot be replayed
+onto its own server is a false green of exactly the shape this project keeps
+finding.
+
+Retaken and proven by restore:
+
+```text
+file   : C:\dev\five12-backups\five12_website_2026-07-30_131550_pre-f12hoglib001.sql
+size   : 597,643 bytes
+sha256 : fabdc8ded1901d30477783fd192be1497f594732616f6eebad8d917bbfeeb318
+restore: mysql -u root -p < "<that file>"
+```
+
+Proof method: dumped again *without* `--databases` (so the stream carries no
+`CREATE DATABASE`/`USE` and cannot redirect itself at the live schema), restored
+into a scratch database, compared `CHECKSUM TABLE` for all 12 tables — every
+checksum identical — then dropped the scratch database. The unrestorable first
+dump was deleted so it cannot be picked up in an emergency.
+
+**Upgrade result.** Exactly one revision ran, `d7c3a9f21b04 -> f12hoglib001`.
+
+| | before | after |
+|---|---|---|
+| `alembic_version` | `d7c3a9f21b04` | `f12hoglib001` (one row) |
+| `fixtures` columns | 7 | 14 |
+| `wattage` / `weight` | `NOT NULL` | nullable |
+| `fixture_library_backups` | absent | created |
+| `network_subnets.sweep_hints` | present | preserved |
+
+Row counts unchanged: fixtures 202, patch_rows 138, patch_sheets 1, shows 1,
+network_subnets 4, network_devices 122, label_templates 2. All four new indexes
+present.
+
+Verified through the application rather than `information_schema`: created the
+app against the live database and read through the ORM — 202 fixtures,
+`to_dict()` returning all 17 keys, existing values intact (Skypanel S60 M6 still
+420 W / 28 kg), `FixtureLibraryBackup` queryable, `fixture_catalog_checksum()`
+computing.
+
+**Still not verified on MySQL:** the downgrade, and the import/restore/lock
+behaviour. Hermes' MariaDB 11.4 container run remains the only evidence for
+those. The `f12hoglib001` *upgrade* path is now verified on real MySQL data.
 
 ## Risks
 
@@ -88,11 +141,12 @@ is the obvious target for independent verification.
 
 ## Handoff / next action
 
-Hermes: review and integrate. After this merges,
-`fix/claude/scanner-sweep-interface` rebases onto `main` and should drop nothing
-— its migration file is already there and identical. That rebase still carries
-the unresolved `backend/run_desktop.py` bridge decision (W3 of the Hog review),
-which is separate from this change.
+Merged to `main` and applied to the live database, **without the independent
+review README rule 5 calls for** — Anthony directed both the merge and the
+upgrade. Flagged here rather than left implicit. Hermes: a post-hoc review of
+`2569a481` is still worth having, and the MySQL downgrade is the obvious gap.
 
-Anthony: do not run `flask db upgrade` against the real database until this is
-merged, and back it up first.
+`fix/claude/scanner-sweep-interface` can now rebase onto `main` and should drop
+nothing — its migration file is already there and byte-identical. That rebase
+still carries the unresolved `backend/run_desktop.py` bridge decision (W3 of the
+Hog review), which is separate from this change and unaffected by it.
