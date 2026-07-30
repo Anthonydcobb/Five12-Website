@@ -4,7 +4,7 @@
 - **Branch:** `feat/claude/preflight-doctor`
 - **Workspace:** local integration checkout `C:\dev\Five12-TheApp` (branch, not `main`)
 - **Base SHA:** `aa4b25b` (`main`)
-- **Head SHA:** `7ac118f`
+- **Head SHA:** `pending — see Commits`
 - **Status:** review
 - **Last updated:** 2026-07-29
 
@@ -80,10 +80,12 @@ to prevent. Hence the **Packet capture** check:
 - [x] No secret values printed — presence and length only.
 - [x] Read-only: no firewall, network-category, `.env`, or package changes.
 - [x] Under ~3 s in default mode (1.9 s measured); `-Full` is 3.6 s.
-- [x] Pester tests prove each check FAILS when its invariant is violated — 44 passed.
-- [x] pytest tests for the Python probe helper — 20, in the canonical suite.
-- [x] `start.ps1` dev mode runs the doctor first.
-- [ ] Independent review (Hermes).
+- [x] Pester tests prove each check FAILS when its invariant is violated — **85 passed**.
+- [x] pytest tests for the Python probe helper — **30**, in the canonical suite.
+- [x] `start.ps1` dev mode runs the doctor first, and fails closed if it cannot.
+- [x] Independent review received (Hermes, *request changes*) — all five warnings
+      and four suggestions addressed; see "Response to Hermes' review".
+- [ ] Re-review at the head below.
 
 ## Reserved paths
 
@@ -160,6 +162,15 @@ Spec is the task brief; this note is the plan. No separate
 `docs/superpowers/plans/` entry — the scope is one script and its tests.
 
 ## Checks run
+
+**Evidence labels, corrected after review.** An earlier version of this note
+marked filesystem, PowerShell and database checks as `verified on actual gear`.
+That label exists for **hardware** behaviour (README rule 8) and applying it to
+software checks devalues it for the claims that need it. Everything below is
+`software — no hardware claim` unless a row says otherwise. The one genuine
+hardware observation in this branch's history is the sACN listener receiving
+live universes from the console at `10.0.0.5` during the dependency-sync smoke
+test — that row is labelled accordingly.
 
 | Command | Result | Evidence level |
 |---|---|---|
@@ -355,6 +366,75 @@ learns it is a default rather than an accident.
 outlives the branch. It probably belongs in `docs/coordination/decisions/`
 rather than an active note that gets archived. I have left it here rather than
 writing into `decisions/` unilaterally, since that is shared surface.
+
+## Response to Hermes' review (2026-07-29)
+
+Review: `docs/coordination/reviews/2026-07-29--hermes-preflight-doctor-review.md`
+on `docs/hermes/claude-branch-reviews`. Verdict was *request changes*. All five
+warnings were real; one remedy is implemented narrower than asked, with reasons.
+
+| Item | Response |
+|---|---|
+| **W1** repo identity never detected a stale checkout | Fixed, **narrower than requested**. See the deviation below. |
+| **W2** probe did not use Flask's env semantics | Fixed. `read_env_file` now parses with python-dotenv itself; `effective_env` models process-over-file precedence; `env_report` gains `overridden` (lengths only, `values_differ` flag) and WARNs when the two disagree. The inline-comment mismatch is gone with the hand-rolled parser. |
+| **W3** process hygiene allowed the launch to create a conflict | Fixed. New `-PreLaunch` (set by `start.ps1`): an existing backend is a FAIL, not a healthy state. A port owner that is not one of our Flask PIDs is a FAIL and named as foreign. `$backendUp` now requires the port owner to be one of ours, so the gate check can no longer interrogate an unrelated service and believe its 404. |
+| **W4** launcher did not fail closed if the doctor crashed | Fixed. `start.ps1` wraps the call, and treats an exception, a `$null` status, and a non-zero status all as failure. Verified with two stubs — one that throws before `exit`, one that returns no status — both abort before launching. |
+| **W5** documented root-level command was broken | Fixed. `test_ble_scanner.py` computed `backend/app` where it needed `backend`; it takes three `dirname`s from `scanner.py`, not two. Proven directly: old path → `ModuleNotFoundError: No module named 'app.five12_ble'`, new path → `child import OK`, with cwd at the repository root. |
+| **S1** escape quotes in fix commands | Fixed. `Format-Five12PSLiteral` doubles embedded quotes; tested with an alias that tries to close the string and append a statement. |
+| **S2** explain the `requests` bump | Below. It is unrelated scope that should not have been on this branch. |
+| **S3** active record names a stale head | Fixed throughout this note. |
+| **S4** keep the policy-breadth warning prominent | Unchanged — still stated in the check output and in this note. |
+
+### Deviation on W1, stated plainly
+
+The finding is accepted: the check never compared `HEAD` to anything, so a
+clean canonical checkout on an old commit passed. Two parts of the remedy are
+implemented differently:
+
+1. **No fetch.** The review allowed either "a bounded fetch or … a clearly
+   labeled last-known remote ref"; this takes the second. A network call on
+   every dev launch, on a rig that is routinely offline at a venue, inside a
+   sub-3-second budget, is the wrong trade. The comparison uses refs already on
+   disk and reports their age (`as of the last fetch, 3 days ago`) so the
+   operator knows what the answer is worth.
+2. **Behind is a WARN; diverged is a FAIL.** The review asked for stale state to
+   "fail or require explicit override". Being behind upstream on a feature
+   branch is routine, and a preflight that blocks every launch for it gets
+   switched off — the exact failure mode this script is designed against.
+   Diverged means both sides moved, which is genuinely broken, so that blocks.
+
+If Hermes still wants behind-upstream to block, that is a one-line change and I
+will make it; I would rather argue it once here than quietly ignore it.
+
+### On the `requests` pin (S2)
+
+The pin moved 2.32.3 → 2.34.2 because the installed version was already
+**newer** than the pin, and downgrading an HTTP/TLS library to satisfy a stale
+pin is a regression risk with no upside. The wider point stands, though: the
+whole dependency sync was unrelated to a preflight script and should have been
+its own branch. Recorded rather than excused.
+
+### Two bugs found while verifying the review items
+
+Neither is in the review; both were found by running the doctor rather than
+reading it, and both affect whether a launch is blocked.
+
+1. **The subnets API path crashed the whole network check.**
+   `Invoke-RestMethod` does not reliably yield one object per JSON array
+   element — the array can arrive as a single nested collection, `foreach`
+   iterates it once, and every field is then an array of all four values.
+   `$subnet.ignoreCidrs.Split(',')` threw. Live output was
+   `label = Hognet sACN Bolero Management`. It had been silently falling back to
+   the database probe, so the API path looked fine while never being used.
+   `ConvertTo-Five12SubnetList` now flattens and shape-checks.
+2. **A coincidental address match blocked the launch.** Off-site the operator's
+   Wi-Fi took `192.168.1.226/24` — inside the Bolero subnet `192.168.1.0/24` at
+   the exact prefix — so the check called it a show NIC, saw `Public` (normal
+   for Wi-Fi) and FAILed. `192.168.1.0/24` is the commonest home-router range
+   there is, so this would fire in every hotel room. Show NICs have **no
+   default gateway**; gateway-less matches now win, a gatewayed match is
+   reported as coincidental, and `Public` on it is a WARN. `interface_hint` is
+   honoured as authoritative when set.
 
 ## Commits
 

@@ -55,7 +55,12 @@ param(
     [switch]$Detailed,
     [int]$Port = 5000,
     [string]$PythonExe = 'C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe',
-    [string]$ExpectedRoot = 'C:\dev\Five12-TheApp'
+    [string]$ExpectedRoot = 'C:\dev\Five12-TheApp',
+    # Set by start.ps1. About to launch a backend, so an EXISTING backend is a
+    # conflict rather than a healthy state — the launch would create a second
+    # process and the two would race for the Bluetooth adapter's single-owner
+    # lock. Without this the doctor blesses the state that then breaks.
+    [switch]$PreLaunch
 )
 
 Set-StrictMode -Version 2.0
@@ -92,8 +97,48 @@ catch {
     $branch = ''
 }
 
+# Staleness from refs already on disk — no fetch. A network call on every launch
+# would be wrong on an offline show rig and would blow the time budget, so the
+# answer is reported with its own age instead.
+$localHead = ''
+$upstreamRef = ''
+$behind = 0
+$ahead = 0
+$fetchAge = ''
+if ($branch) {
+    try {
+        $headOut = @(& git -C $repoRoot rev-parse --short HEAD 2>$null)
+        if ($headOut.Count -gt 0) { $localHead = ([string]$headOut[0]).Trim() }
+
+        $upOut = @(& git -C $repoRoot rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>$null)
+        if ($upOut.Count -gt 0 -and $upOut[0]) { $upstreamRef = ([string]$upOut[0]).Trim() }
+
+        if ($upstreamRef) {
+            $countOut = @(& git -C $repoRoot rev-list --left-right --count "$upstreamRef...HEAD" 2>$null)
+            if ($countOut.Count -gt 0 -and $countOut[0]) {
+                $parts = ([string]$countOut[0]).Trim() -split '\s+'
+                if ($parts.Count -ge 2) {
+                    $behind = [int]$parts[0]
+                    $ahead = [int]$parts[1]
+                }
+            }
+        }
+
+        $fetchHead = Join-Path $repoRoot '.git\FETCH_HEAD'
+        if (Test-Path $fetchHead) {
+            $span = (Get-Date) - (Get-Item $fetchHead).LastWriteTime
+            if ($span.TotalHours -lt 1) { $fetchAge = "$([math]::Round($span.TotalMinutes)) min" }
+            elseif ($span.TotalDays -lt 1) { $fetchAge = "$([math]::Round($span.TotalHours)) h" }
+            else { $fetchAge = "$([math]::Round($span.TotalDays)) days" }
+        }
+    }
+    catch { }
+}
+
 $checks += Test-Five12RepoIdentity -Root $repoRoot -ExpectedRoot $ExpectedRoot `
-    -Branch $branch -Dirty $dirty -OriginUrl $originUrl
+    -Branch $branch -Dirty $dirty -OriginUrl $originUrl `
+    -LocalHead $localHead -UpstreamRef $upstreamRef -Behind $behind -Ahead $ahead `
+    -FetchAge $fetchAge
 
 # ---------------------------------------------------------------------------
 # Faults 3 and 4, plus the database — all answered by the Python probe, run on
@@ -186,14 +231,19 @@ try {
 }
 catch { $flaskProcs = @() }
 
-$checks += Test-Five12FlaskProcesses -PortOwners $portOwners -FlaskProcesses $flaskProcs -Port $Port
+$checks += Test-Five12FlaskProcesses -PortOwners $portOwners -FlaskProcesses $flaskProcs -Port $Port -PreLaunch:$PreLaunch
 
 # ---------------------------------------------------------------------------
 # Fault 5 — feature gates. Never guess: ask the running backend, and otherwise
 # report what the launcher will set and say which source the value came from.
 # ---------------------------------------------------------------------------
 
-$backendUp = ($portOwners.Count -gt 0)
+# "Something is listening" is not "our backend is up". Only treat the port as
+# ours when its owner is one of the Flask processes we identified, or the
+# feature-gate check will interrogate an unrelated service and believe its
+# answer — a 404 from someone else's app would read as "Bluetooth is off".
+$flaskPidSet = @($flaskProcs | ForEach-Object { $_.ProcessId })
+$backendUp = @($portOwners | Where-Object { $flaskPidSet -contains $_ }).Count -gt 0
 $baseUrl = "http://127.0.0.1:$Port"
 
 $backendGates = $null

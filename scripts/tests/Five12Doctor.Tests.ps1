@@ -91,6 +91,57 @@ Describe 'Fault 1 - repo identity' {
         $r.Status | Should Be 'WARN'
     }
 
+    It 'FAILS when the checkout has diverged from its upstream' {
+        # The half of fault 1 the check never looked at: a clean checkout in the
+        # right directory can still be the wrong code.
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 2 -Behind 3 -FetchAge '10 min'
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'DIVERGED'
+    }
+
+    It 'WARNs, not FAILs, when merely behind upstream' {
+        # Routine on a feature branch. Blocking every launch for it would get
+        # the doctor switched off, which is the failure this all guards against.
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 12 -FetchAge '3 days'
+        $r.Status | Should Be 'WARN'
+        ($r.Details -join ' ') | Should Match '12 commit\(s\) behind'
+    }
+
+    It 'says how old the comparison is, because it does not fetch' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 4 -FetchAge '3 days'
+        ($r.Details -join ' ') | Should Match 'as of the last fetch, 3 days ago'
+    }
+
+    It 'is content when HEAD matches upstream' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 0 -Behind 0 -FetchAge '5 min'
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match 'matches origin/feat/x'
+    }
+
+    It 'says so rather than guessing when there is no upstream' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/local-only' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef ''
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match 'no upstream is configured'
+    }
+
+    It 'ahead-only is normal feature work, not a finding' {
+        $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
+            -Branch 'feat/x' -Dirty $false -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git' `
+            -LocalHead 'abc1234' -UpstreamRef 'origin/feat/x' -Ahead 3 -Behind 0
+        $r.Status | Should Be 'OK'
+        ($r.Details -join ' ') | Should Match '3 commit\(s\) ahead'
+    }
+
     It 'reports the branch and whether the tree is clean' {
         $r = Test-Five12RepoIdentity -Root 'C:\dev\Five12-TheApp' -ExpectedRoot 'C:\dev\Five12-TheApp' `
             -Branch 'feat/x' -Dirty $true -OriginUrl 'https://github.com/Anthonydcobb/Five12-Website.git'
@@ -341,6 +392,47 @@ Describe 'Fault 2 - flask process hygiene' {
         ($r.Details -join ' ') | Should Match 'without --no-reload'
     }
 
+    It 'FAILS in pre-launch mode when a backend is already running' {
+        # The doctor runs immediately before start.ps1 launches one, so a single
+        # healthy backend is not a healthy PRE-LAUNCH state: launching would
+        # make it two, racing for the adapter lock. Fault 2 from the other side.
+        $procs = @([pscustomobject]@{
+                ProcessId = 111; ParentProcessId = 9
+                CommandLine = 'python.exe -m flask run --port 5000 --no-reload'
+            })
+        $r = Test-Five12FlaskProcesses -PortOwners @(111) -FlaskProcesses $procs -PreLaunch
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'already running'
+        ($r.Fix -join ' ') | Should Match 'Stop-Process -Id 111'
+    }
+
+    It 'still passes for the same state when NOT pre-launch' {
+        $procs = @([pscustomobject]@{
+                ProcessId = 111; ParentProcessId = 9
+                CommandLine = 'python.exe -m flask run --port 5000 --no-reload'
+            })
+        $r = Test-Five12FlaskProcesses -PortOwners @(111) -FlaskProcesses $procs
+        $r.Status | Should Be 'OK'
+    }
+
+    It 'FAILS when a foreign process owns the port and no Flask process does' {
+        # Previously healthy, which then let the feature-gate check interrogate
+        # an unrelated service and believe its answer.
+        $r = Test-Five12FlaskProcesses -PortOwners @(4242) -FlaskProcesses @()
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'not a Five12 backend'
+        ($r.Fix -join ' ') | Should Match 'Get-Process -Id 4242'
+    }
+
+    It 'does not call a legitimate Flask port owner foreign' {
+        $procs = @([pscustomobject]@{
+                ProcessId = 222; ParentProcessId = 9
+                CommandLine = 'python.exe -m flask run --port 5000 --no-reload'
+            })
+        $r = Test-Five12FlaskProcesses -PortOwners @(222) -FlaskProcesses $procs
+        ($r.Details -join ' ') | Should Not Match 'not a Five12 backend'
+    }
+
     It 'FAILS when two unrelated processes hold port 5000' {
         $r = Test-Five12FlaskProcesses -PortOwners @(111, 222) -FlaskProcesses @()
         $r.Status | Should Be 'FAIL'
@@ -382,6 +474,29 @@ Describe 'Fault 5 - bluetooth feature gates' {
             -LauncherGates @{ FIVE12_BLE_TOOLS = '1'; FIVE12_BLE_WRITE = '0' } -ProcessEnv @{}
         $r.Status | Should Be 'WARN'
         ($r.Details -join ' ') | Should Match 'FIVE12_BLE_WRITE = OFF'
+    }
+}
+
+Describe 'Fix commands are safe to paste' {
+
+    It 'escapes a single quote in an interface alias' {
+        (Format-Five12PSLiteral "Bob's NIC") | Should Be "'Bob''s NIC'"
+    }
+
+    It 'quotes an ordinary alias unchanged' {
+        (Format-Five12PSLiteral 'sACN') | Should Be "'sACN'"
+    }
+
+    It 'does not let an alias break out of the remediation command' {
+        # The output of this script is meant to be pasted into an elevated
+        # shell. An alias must not be able to become code.
+        $nics = @([pscustomobject]@{ InterfaceAlias = "evil'; Write-Host pwned; #" })
+        $profiles = @([pscustomobject]@{ InterfaceAlias = "evil'; Write-Host pwned; #"; NetworkCategory = 'Public' })
+        $r = Test-Five12NetworkCategories -ShowNics $nics -Profiles $profiles -UnidentifiedPolicy 'NotSet'
+        $fix = ($r.Fix -join ' ')
+        $fix | Should Match "evil''"
+        # The injected statement must be inside the quoted literal, not after it.
+        $fix | Should Not Match "InterfaceAlias 'evil'; Write-Host"
     }
 }
 

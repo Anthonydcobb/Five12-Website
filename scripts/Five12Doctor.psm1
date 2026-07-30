@@ -149,6 +149,23 @@ function Test-Five12RepoIdentity {
         $true when the working tree has uncommitted changes.
     .PARAMETER OriginUrl
         `git remote get-url origin`, may be empty.
+    .NOTES
+        Staleness was missing entirely until review: the check reported branch,
+        dirtiness, origin and path, but never compared HEAD to anything, so a
+        clean canonical checkout sitting on an old commit — the core stale-
+        checkout failure of fault 1 — passed with at most a WARN about `main`.
+
+        Two deliberate choices, both narrower than the review asked for:
+
+        * **No fetch.** A network call on every dev launch, on a rig that is
+          routinely offline at a venue, inside a sub-3-second budget, is the
+          wrong trade. The comparison uses refs already on disk and reports how
+          old they are, so the operator knows what the answer is worth.
+        * **Behind is a WARN; diverged is a FAIL.** Being behind upstream on a
+          feature branch is routine, and a preflight that blocks every launch
+          for it gets switched off — which is the failure mode this whole script
+          is designed against. Diverged means local and remote have both moved,
+          which is genuinely broken state, so that blocks.
     #>
     param(
         [string]$Root,
@@ -156,7 +173,14 @@ function Test-Five12RepoIdentity {
         [string]$Branch,
         [bool]$Dirty = $false,
         [string]$OriginUrl = '',
-        [string]$ExpectedOriginPattern = 'Five12-Website'
+        [string]$ExpectedOriginPattern = 'Five12-Website',
+        # Staleness, from refs already on disk. See the .NOTES on why there is
+        # no fetch here.
+        [string]$LocalHead = '',
+        [string]$UpstreamRef = '',
+        [int]$Behind = 0,
+        [int]$Ahead = 0,
+        [string]$FetchAge = ''
     )
 
     $details = @()
@@ -211,6 +235,32 @@ function Test-Five12RepoIdentity {
         $statuses += 'WARN'
         $details += 'on main; docs/coordination/README.md rule 1 makes main integration-only'
         $fixes += 'git checkout -b <type>/<agent>/<slug>'
+    }
+
+    # Staleness — the half of fault 1 the original check never looked at.
+    if ($Branch) {
+        $asOf = ''
+        if ($FetchAge) { $asOf = " (as of the last fetch, $FetchAge ago)" }
+
+        if (-not $UpstreamRef) {
+            $details += "HEAD $LocalHead; no upstream is configured for this branch, so staleness cannot be judged"
+        }
+        elseif ($Behind -gt 0 -and $Ahead -gt 0) {
+            $statuses += 'FAIL'
+            $details += "HEAD $LocalHead has DIVERGED from ${UpstreamRef}: $Ahead ahead, $Behind behind$asOf"
+            $fixes += "git fetch origin; git log --oneline --left-right $UpstreamRef...HEAD"
+        }
+        elseif ($Behind -gt 0) {
+            $statuses += 'WARN'
+            $details += "HEAD $LocalHead is $Behind commit(s) behind $UpstreamRef$asOf — this checkout may be missing work"
+            $fixes += "git fetch origin; git status -sb"
+        }
+        elseif ($Ahead -gt 0) {
+            $details += "HEAD $LocalHead is $Ahead commit(s) ahead of $UpstreamRef, up to date otherwise$asOf"
+        }
+        else {
+            $details += "HEAD $LocalHead matches $UpstreamRef$asOf"
+        }
     }
 
     $status = Get-Five12WorstStatus -Statuses $statuses
@@ -497,7 +547,8 @@ function Test-Five12FlaskProcesses {
     param(
         $PortOwners = @(),
         $FlaskProcesses = @(),
-        [int]$Port = 5000
+        [int]$Port = 5000,
+        [switch]$PreLaunch
     )
     $details = @()
     $fixes = @()
@@ -505,6 +556,31 @@ function Test-Five12FlaskProcesses {
 
     $owners = @($PortOwners | Where-Object { $null -ne $_ } | Select-Object -Unique)
     $procs = @($FlaskProcesses)
+    $flaskPids = @($procs | ForEach-Object { $_.ProcessId })
+
+    # A port owner that is not one of our Flask processes is something else
+    # holding the port. The backend will not bind, and whatever answers /api
+    # is not ours — which matters because the feature-gate check interrogates
+    # whatever is on this port and believes the reply.
+    $foreign = @($owners | Where-Object { $flaskPids -notcontains $_ })
+    if ($foreign.Count -gt 0) {
+        $statuses += 'FAIL'
+        $details += "port $Port is held by PID $($foreign -join ', '), which is not a Five12 backend"
+        foreach ($f in $foreign) {
+            $fixes += "Get-Process -Id $f | Select-Object Id,ProcessName,Path   # identify it before stopping anything"
+        }
+    }
+
+    # The doctor runs immediately BEFORE start.ps1 launches a backend, so one
+    # healthy existing backend is not a healthy pre-launch state: the launch
+    # would create a second process, and the two race for the Bluetooth
+    # adapter's single-owner lock. That is fault 2, arrived at from the other
+    # direction.
+    if ($PreLaunch -and $procs.Count -ge 1) {
+        $statuses += 'FAIL'
+        $details += "a Five12 backend is already running (PID $($flaskPids -join ', ')); launching another would fight it for the Bluetooth adapter lock and for port $Port"
+        foreach ($p in $procs) { $fixes += "Stop-Process -Id $($p.ProcessId)   # then launch, or just use the backend already running" }
+    }
 
     if ($owners.Count -gt 1) {
         $statuses += 'FAIL'
@@ -632,6 +708,23 @@ function Test-Five12FeatureGates {
 # Fault 6 — all four show NICs drifted to the Windows "Public" category, which
 # blocks inbound traffic and broke Hog console show networking
 # ---------------------------------------------------------------------------
+
+function Format-Five12PSLiteral {
+    <#
+    .SYNOPSIS
+        Quote a value for safe inclusion in a copyable PowerShell command.
+    .NOTES
+        Interface aliases are operator-supplied text. An alias containing a
+        single quote would break a copied remediation command, and remediation
+        text that can be turned into different code by its own data is a
+        footgun in a script whose entire output is meant to be pasted into an
+        elevated shell. Single-quoted PowerShell strings escape a quote by
+        doubling it, and nothing else is special inside them.
+    #>
+    param([string]$Value)
+    if ($null -eq $Value) { return "''" }
+    return "'" + ($Value -replace "'", "''") + "'"
+}
 
 function Get-Five12HasGateway {
     <#
@@ -805,7 +898,7 @@ function Test-Five12SubnetCoverage {
             # WARN. A doctor that blocks every at-home launch gets switched off.
             $statuses += 'WARN'
             $details += "$($subnet.label) $($subnet.cidr) -> no local interface"
-            $fixes += "Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -eq '$($subnet.label)'   # is the NIC up and addressed?"
+            $fixes += "Get-NetIPAddress -AddressFamily IPv4 | Where-Object InterfaceAlias -eq $(Format-Five12PSLiteral ([string]$subnet.label))   # is the NIC up and addressed?"
         }
     }
 
@@ -975,7 +1068,7 @@ function Test-Five12NetworkCategories {
         if ($category -eq 'Public') {
             $statuses += 'FAIL'
             $details += "$alias : Public — inbound traffic is blocked, show networking will fail silently"
-            $fixes += "Set-NetConnectionProfile -InterfaceAlias '$alias' -NetworkCategory Private   # run as Administrator — fixes NOW, lost on next resume from sleep"
+            $fixes += "Set-NetConnectionProfile -InterfaceAlias $(Format-Five12PSLiteral $alias) -NetworkCategory Private   # run as Administrator — fixes NOW, lost on next resume from sleep"
         }
         else {
             $details += "$alias : $category"
@@ -1035,6 +1128,7 @@ Export-ModuleMember -Function @(
     'Test-Five12Database',
     'Test-Five12FlaskProcesses',
     'Test-Five12FeatureGates',
+    'Format-Five12PSLiteral',
     'Get-Five12HasGateway',
     'ConvertTo-Five12SubnetList',
     'Test-Five12SubnetCoverage',

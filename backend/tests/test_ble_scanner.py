@@ -18,7 +18,15 @@ from app.five12_ble import constants as c
 from app.five12_ble import scanner as scanner_mod
 from app.five12_ble.scanner import BleScanService
 
-BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(scanner_mod.__file__)))
+# scanner_mod.__file__ is backend/app/five12_ble/scanner.py, so it takes THREE
+# dirnames to reach backend/ — the directory that has to be on sys.path for
+# `import app.five12_ble.scanner` to resolve. Two got you backend/app, and the
+# children only worked because the cwd supplied backend/ when the suite was run
+# from there. From the repository root the documented command failed here, in
+# the child, for reasons that had nothing to do with the code under test.
+BACKEND_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(scanner_mod.__file__)))
+)
 
 # Prelude every lock child shares: import the module under test from this
 # checkout rather than whatever happens to be installed.
