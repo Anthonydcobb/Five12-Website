@@ -2,6 +2,7 @@ from flask import Blueprint, jsonify, request
 from datetime import datetime
 from . import db
 from .models import NetworkSubnet, NetworkDevice, LocationSnapshot, LocationDevice
+from .scanner import validate_sweep_hints
 
 net = Blueprint('network', __name__, url_prefix='/api/network')
 
@@ -12,19 +13,87 @@ def list_subnets():
     return jsonify([s.to_dict() for s in subnets])
 
 
+def _reject_bad_hints(raw, subnet_cidr):
+    """400 payload for invalid sweep hints, or None when they are acceptable.
+
+    Validated here rather than only at scan time. Storing a hint the scanner
+    will ignore, and echoing it back as configuration, is the API claiming a
+    setting was applied while the code does something else.
+    """
+    _accepted, errors = validate_sweep_hints(raw, subnet_cidr)
+    if not errors:
+        return None
+    return jsonify({'error': 'invalid sweepHints', 'details': errors}), 400
+
+
 @net.post('/subnets')
 def create_subnet():
     data = request.get_json()
+    if 'sweepHints' in data:
+        bad = _reject_bad_hints(data.get('sweepHints'), data.get('cidr'))
+        if bad:
+            return bad
     subnet = NetworkSubnet(
         label=data['label'],
         cidr=data['cidr'],
         interface_hint=data.get('interfaceHint'),
         color=data.get('color', '#7dd3fc'),
         ignore_cidrs=data.get('ignoreCidrs') or None,
+        sweep_hints=data.get('sweepHints') or None,
     )
     db.session.add(subnet)
     db.session.commit()
     return jsonify(subnet.to_dict()), 201
+
+
+#: Fields this route will change. Deliberately just the one it was built for.
+#: A general subnet PATCH could rewrite `cidr`, which leaves every attached
+#: device's `subnet_id` semantically stale, or `active`, which silently stops a
+#: subnet being scanned — neither should ride in on a convenience route added to
+#: set sweep hints. Widen this only alongside validation and tests for each
+#: field added.
+_PATCHABLE = {'sweepHints': 'sweep_hints'}
+
+
+@net.patch('/subnets/<int:subnet_id>')
+def update_subnet(subnet_id):
+    """Partial update, restricted to `sweepHints`.
+
+    Exists because sweep hints are most needed on the subnets that already
+    exist, and without this the only way to add them was to delete and
+    recreate a subnet — which nulls `subnet_id` on every device attached to
+    it, losing the grouping the operator built up.
+
+    An unsupported field is a 400 rather than a silent no-op: a caller that
+    thinks it changed `cidr` and got a 200 has been misled.
+    """
+    subnet = db.session.get(NetworkSubnet, subnet_id)
+    if subnet is None:
+        return jsonify({'error': 'not found'}), 404
+
+    data = request.get_json() or {}
+    unsupported = sorted(set(data) - set(_PATCHABLE))
+    if unsupported:
+        return jsonify({
+            'error': 'unsupported field(s)',
+            'details': unsupported,
+            'supported': sorted(_PATCHABLE),
+        }), 400
+
+    if 'sweepHints' in data:
+        bad = _reject_bad_hints(data.get('sweepHints'), subnet.cidr)
+        if bad:
+            return bad
+
+    for key, attr in _PATCHABLE.items():
+        if key not in data:
+            continue
+        value = data[key]
+        # Empty string clears the column rather than storing ''.
+        setattr(subnet, attr, value if value else None)
+
+    db.session.commit()
+    return jsonify(subnet.to_dict())
 
 
 @net.delete('/subnets/<int:subnet_id>')

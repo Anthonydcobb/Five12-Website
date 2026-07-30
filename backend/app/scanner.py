@@ -101,12 +101,126 @@ def _arp_fallback(cidr: str) -> list[tuple[str, str]]:
     return results
 
 
+def _probe_address(cidr: str) -> str | None:
+    """One usable address inside `cidr`, for asking the routing table which
+    interface reaches it. None when `cidr` is not a network."""
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
+    for host in net.hosts():
+        return str(host)
+    # /32 (and /31) have no "hosts" — the network address is the address.
+    return str(net.network_address)
+
+
+def _sweep_ifaces(conf, cidr: str) -> list:
+    """Every interface worth sweeping `cidr` from.
+
+    The routing table's answer comes first, then any interface whose own
+    address falls inside the range. Both matter, for different reasons:
+
+    * Without the first, `srp` sends on the GLOBAL `conf.iface`, which on a
+      multi-homed host is not necessarily a show NIC. That is the fault this
+      function exists for — see the CHANGE note in `_scapy_scan`.
+    * Without the second, a device that answers on only one of several
+      overlapping interfaces stays invisible. `local_ifaces.py` records that
+      exact behaviour on this host for Art-Net and sACN: "the devices are
+      reachable ONLY from one of them, so a single socket on the default route
+      finds zero nodes. Fanning out across every interface is what makes
+      discovery work."
+    """
+    ifaces = []
+    seen = set()
+
+    probe = _probe_address(cidr)
+    if probe:
+        try:
+            device = conf.route.route(probe)[0]
+        except Exception as e:  # routing table unavailable; fan-out may still work
+            log.debug('no route lookup for %s: %s', probe, e)
+            device = None
+        if device:
+            ifaces.append(device)
+            seen.add(str(device))
+
+    try:
+        net = ipaddress.ip_network(cidr, strict=False)
+        candidates = list(conf.ifaces.data.values())
+    except (ValueError, AttributeError):
+        return ifaces
+
+    for iface in candidates:
+        ip = getattr(iface, 'ip', None)
+        if not ip:
+            continue
+        try:
+            if ipaddress.ip_address(ip) not in net:
+                continue
+        except ValueError:
+            continue
+        key = str(getattr(iface, 'network_name', None) or getattr(iface, 'name', iface))
+        if key in seen:
+            continue
+        seen.add(key)
+        ifaces.append(iface)
+
+    return ifaces
+
+
 def _scapy_scan(cidr: str) -> list[tuple[str, str]]:
-    """Active ARP sweep via scapy. Raises if scapy is unusable."""
-    from scapy.all import ARP, Ether, srp
-    ans, _ = srp(Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=cidr),
-                 timeout=2, verbose=False)
-    return [(rcv.psrc, rcv.hwsrc.upper()) for _, rcv in ans]
+    """Active ARP sweep via scapy. Raises if scapy is unusable.
+
+    CHANGE: the sweep is now sent on explicitly named interfaces. `srp` is a
+    layer-2 send, so without `iface` it uses scapy's GLOBAL `conf.iface` rather
+    than routing per destination. On this multi-homed host that default is not
+    any show NIC, so every sweep left by the wrong adapter, matched nothing,
+    and returned [] WITHOUT RAISING — `_arp_scan` logged it at debug and fell
+    through to the ARP cache, leaving active discovery dead in silence.
+
+    Measured on the rig 2026-07-29, against a SideCar node that answered ping
+    in 1ms:
+
+        srp(...)                 -> 0 answers
+        srp(..., iface='sACN')   -> [('10.9.15.111', '04:11:19:90:04:be')]
+
+    Empty is still not proof of an empty network (see `_arp_scan`), so the
+    cache path stays as it is.
+    """
+    from scapy.all import ARP, Ether, srp, conf
+
+    found: dict[str, str] = {}
+    failures: list[Exception] = []
+    attempted = 0
+
+    # `[None]` keeps the old behaviour when no interface can be resolved at
+    # all: better to sweep on scapy's default than not to sweep.
+    for iface in _sweep_ifaces(conf, cidr) or [None]:
+        attempted += 1
+        packet = Ether(dst='ff:ff:ff:ff:ff:ff') / ARP(pdst=cidr)
+        try:
+            if iface is None:
+                ans, _ = srp(packet, timeout=2, verbose=False)
+            else:
+                ans, _ = srp(packet, timeout=2, verbose=False, iface=iface)
+        except Exception as exc:  # noqa: BLE001
+            # Isolate the failure. One unusable interface — a VPN adapter that
+            # cannot send, a NIC that went away mid-sweep — must not stop the
+            # remaining candidates, or a single bad adapter reproduces the
+            # original fault: a sweep that finds nothing and says nothing.
+            log.debug('ARP sweep failed on %s: %s', iface, exc)
+            failures.append(exc)
+            continue
+        for _, rcv in ans:
+            found[rcv.psrc] = rcv.hwsrc.upper()
+
+    # Only when EVERY interface failed is scapy itself the problem. Re-raise so
+    # `_arp_scan` still learns the sweep was unusable and warms the ARP cache
+    # instead; swallowing it would silently disable the fallback.
+    if failures and len(failures) == attempted:
+        raise failures[-1]
+
+    return sorted(found.items())
 
 
 def _warm_arp_cache(cidr: str) -> None:
@@ -141,7 +255,88 @@ def _merge_pairs(primary: list[tuple[str, str]],
     return sorted(merged.items())
 
 
-def _sweep_targets(cidr: str, known_ips=()) -> list[str]:
+def validate_sweep_hints(raw, subnet_cidr: str) -> tuple[list[str], list[str]]:
+    """Split sweep hints into (accepted, errors).
+
+    One function so the API and the scanner cannot disagree about what a valid
+    hint is. The API rejects anything in `errors` with a 400; the scanner
+    ignores it defensively. Before this existed the API accepted any string,
+    stored it, echoed it back as configuration, and the scanner silently
+    ignored it — the API claiming a setting was applied while the code did
+    something else, which is the same disease as every other fault in this
+    file's history.
+
+    Four rules, each with a reason:
+
+    * unparseable is rejected rather than dropped, so a typo is visible;
+    * anything that is not IPv4 is rejected. The sweep sends ARP, and ARP is
+      IPv4-only — there is no ARP request for an IPv6 host. This rule was first
+      written as "the hint must match the subnet", which is the wrong invariant:
+      it caught an IPv6 hint on an IPv4 subnet (`subnet_of` raises TypeError
+      across families, and `_hint_networks('fd00::/120', '10.0.0.0/8')` used to
+      abort the whole subnet's scan) but an IPv6 subnet with IPv6 hints agreed
+      with itself and was accepted, then handed to a scanner that could not
+      speak to it. Found by Hermes' re-review, 2026-07-30;
+    * a hint outside its own subnet is rejected, so one bad row cannot aim the
+      sweep at a range that is not ours;
+    * a hint wider than MAX_SWEEP_ADDRESSES is rejected, or a /16 reinstates
+      the ~11min sweep that limit exists to prevent and a /8 the ~47h one.
+    """
+    if raw is None or not str(raw).strip():
+        return [], []
+    try:
+        subnet = ipaddress.ip_network(subnet_cidr, strict=False)
+    except (ValueError, TypeError):
+        return [], [f'the subnet CIDR {subnet_cidr!r} is not a network']
+    if subnet.version != 4:
+        # Reject at the subnet, not just per hint, so the reason names the real
+        # problem instead of blaming each hint in turn.
+        return [], [
+            f'{subnet} is IPv{subnet.version}; the sweep sends ARP, which is '
+            f'IPv4-only, so nothing inside it can be swept'
+        ]
+
+    accepted: list[str] = []
+    errors: list[str] = []
+    for piece in str(raw).split(','):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            hint = ipaddress.ip_network(piece, strict=False)
+        except ValueError:
+            errors.append(f'{piece!r} is not a CIDR block')
+            continue
+        if hint.version != 4:
+            errors.append(
+                f'{hint} is IPv{hint.version}; the sweep sends ARP, which is '
+                f'IPv4-only'
+            )
+            continue
+        if not hint.subnet_of(subnet):
+            errors.append(f'{hint} is outside {subnet}')
+            continue
+        if hint.num_addresses > MAX_SWEEP_ADDRESSES:
+            errors.append(
+                f'{hint} covers {hint.num_addresses} addresses; the limit is '
+                f'{MAX_SWEEP_ADDRESSES}'
+            )
+            continue
+        accepted.append(str(hint))
+    return accepted, errors
+
+
+def _hint_networks(raw: str | None, subnet_cidr: str) -> list[str]:
+    """The accepted hints only. Kept defensive on purpose: rows predating
+    API-side validation, or edited directly in the database, must not be able
+    to abort a scan."""
+    accepted, errors = validate_sweep_hints(raw, subnet_cidr)
+    for problem in errors:
+        log.debug('ignoring sweep hint: %s', problem)
+    return accepted
+
+
+def _sweep_targets(cidr: str, known_ips=(), sweep_hints=None) -> list[str]:
     """The ranges actually worth enumerating inside `cidr`.
 
     A prefix at or under MAX_SWEEP_ADDRESSES is swept whole. Anything wider is
@@ -150,10 +345,17 @@ def _sweep_targets(cidr: str, known_ips=()) -> list[str]:
     but real hardware clusters into a handful of /24s. That turns 16.7M probes
     into ~1k while still covering every address a device has ever been seen on.
 
-    Returns [] when a wide range has no known occupants — nothing to aim at.
-    The `arp -a` fallback in `_arp_scan` still covers the full CIDR, so this
-    narrows the ACTIVE probe only; it never narrows what can be discovered
-    from the cache.
+    Operator-supplied `sweep_hints` are added to whatever that finds. They are
+    what makes a FRESH database work: local NICs and known devices are both
+    circular sources — a device has to be found before it can be looked for —
+    so on a rig where the gear sits in a /24 with no local interface, nothing
+    ever aims there. Fifteen SideCar nodes were invisible for exactly that
+    reason while answering ping in 1ms.
+
+    Returns [] when a wide range has no known occupants and no hints — nothing
+    to aim at. The `arp -a` fallback in `_arp_scan` still covers the full CIDR,
+    so this narrows the ACTIVE probe only; it never narrows what can be
+    discovered from the cache.
     """
     try:
         net = ipaddress.ip_network(cidr, strict=False)
@@ -162,7 +364,7 @@ def _sweep_targets(cidr: str, known_ips=()) -> list[str]:
     if net.num_addresses <= MAX_SWEEP_ADDRESSES:
         return [str(net)]
 
-    targets = set()
+    targets = set(_hint_networks(sweep_hints, cidr))
     for ip in list(local_ipv4s()) + list(known_ips):
         try:
             addr = ipaddress.ip_address(ip)
@@ -173,7 +375,7 @@ def _sweep_targets(cidr: str, known_ips=()) -> list[str]:
     return sorted(targets)
 
 
-def _arp_scan(cidr: str, known_ips=()) -> list[tuple[str, str]]:
+def _arp_scan(cidr: str, known_ips=(), sweep_hints=None) -> list[tuple[str, str]]:
     """Discover (ip, mac) pairs using BOTH the active scapy sweep and the OS
     ARP cache.
 
@@ -192,7 +394,7 @@ def _arp_scan(cidr: str, known_ips=()) -> list[tuple[str, str]]:
     subnets at all.
     """
     scapy_pairs = []
-    for target in _sweep_targets(cidr, known_ips):
+    for target in _sweep_targets(cidr, known_ips, sweep_hints):
         try:
             found = _scapy_scan(target)
         except Exception as e:
@@ -354,7 +556,8 @@ def run_scan_now(app) -> None:
             # declared not-ours — the venue Wi-Fi /23 nested in the Management
             # /16. Same treatment randomized MACs get: filtered before persist,
             # so those rows never exist rather than being cleaned up later.
-            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr, known_ips)
+            pairs = [(ip, mac) for ip, mac in _arp_scan(cidr, known_ips,
+                                                        row.sweep_hints)
                      if ip not in excluded and _is_host_mac(mac)
                      and not is_randomized_mac(mac)
                      and not _is_ignored_ip(ip, ignored)]

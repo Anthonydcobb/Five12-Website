@@ -237,6 +237,14 @@ class NetworkSubnet(db.Model):
     # clients are consumer singletons no OUI table can catch — the subnet
     # boundary is the only thing that separates them from lighting gear.
     ignore_cidrs   = db.Column(db.String(255), nullable=True)
+    # Comma-separated CIDRs inside `cidr` that are worth actively sweeping when
+    # `cidr` itself is too wide to enumerate. The sACN /8 is reduced to the /24s
+    # holding a local NIC or a previously-seen device, which is the right
+    # instinct aimed at the wrong place: the show gear lives in 10.9.15.0/24
+    # while the host NIC is 10.220.220.220, and `known_ips` comes from devices
+    # already in the database — so a device has to be found before it can be
+    # looked for. Fifteen SideCar nodes were invisible to exactly that loop.
+    sweep_hints    = db.Column(db.String(255), nullable=True)
     created_at     = db.Column(db.DateTime, default=datetime.utcnow)
 
     def to_dict(self):
@@ -248,6 +256,7 @@ class NetworkSubnet(db.Model):
             'color': self.color,
             'active': self.active,
             'ignoreCidrs': self.ignore_cidrs,
+            'sweepHints': self.sweep_hints,
         }
 
 
