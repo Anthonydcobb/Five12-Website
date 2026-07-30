@@ -484,3 +484,68 @@ Open, in rough priority order:
 3. ~~The test suite does not run on the interpreter the app runs on.~~
    **Resolved 2026-07-29 — see below.** Hermes should still review the
    `docs/coordination/README.md` change, since that file is shared surface.
+
+
+---
+
+## Integration onto current `main` — 2026-07-30
+
+Branch `feat/claude/preflight-doctor-integration`, merged (not rebased) from
+`a86b7cd` into `main` at `3814034`. **`a86b7cd` is preserved as an ancestor on
+purpose**: Hermes named that SHA, and the protocol is explicit that reviewing an
+unpinned moving branch does not count. Nothing was force-moved. No conflicts —
+`main` had not touched any of this branch's files since the fork.
+
+### The headline
+
+```text
+python -m pytest -q backend	ests      # from the REPOSITORY ROOT
+451 passed
+```
+
+`main`'s own documented canonical command has been red since the Hog import
+landed (5 failed, 399 passed) because the cwd fix lives only here. It is green
+on this tree.
+
+### Closed here: the BLE lock-test message
+
+The last open item from the 2026-07-30 handoff. The five adapter-lock tests
+failed as `assert '' == 'HELD'` whenever another process held the machine-wide
+Bluetooth lock — a message that points at the scanner when the cause is the
+machine. New `adapter_lock_status()` in the test module reports whether the lock
+can be taken and, when it cannot, names the cause and the switch. The seven
+tests that need to control the lock are marked `@needs_adapter_lock` and skip
+with that reason instead of failing.
+
+Written test-first: `adapter_lock_status` was watched failing with `NameError`
+before it existed. Verified in **both** environment states, which is the only way
+this is worth anything:
+
+| State | Result |
+|---|---|
+| Adapter free | 20 passed |
+| Adapter held by another process | 13 passed, **7 skipped**, 0 failed |
+| Full suite, repository root, adapter free | 451 passed |
+
+The skip reason reads: *"another process already holds the Five12 Bluetooth
+adapter lock. That is almost certainly the Five12 app running with
+FIVE12_BLE_TOOLS=1 — the app being up is not enough on its own, the BLE gate has
+to be on."*
+
+That wording carries today's correction. My first diagnosis was "the app is
+running", which is insufficient — observed three times, and once the app was up
+with the gate off and all 18 lock tests passed. See the correction in
+`reviews/2026-07-30--claude-review-of-runtime-hardening-plan.md` (W2).
+
+### Still open — needs a decision, not code
+
+The repo-identity severity split from the review round: **behind upstream is a
+WARN, diverged is a FAIL**. Hermes asked for stale state to block; I argued a
+preflight that blocks every launch for routine behind-upstream gets switched
+off, which is the failure mode the script exists to prevent. I said then it is a
+one-line change if Hermes still wants it. That is still unanswered, and Task 1.4
+of the hardening plan does not cover repo staleness either, so nothing in the
+plan settles it.
+
+Not verified: no Windows bench procedure, no actual-gear check, and `start.ps1`
+was not driven end to end on this merged tree.
