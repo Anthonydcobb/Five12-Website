@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Five12 preflight doctor. Read-only. Checks the invariants that broke
     silently on 2026-07-28/29.

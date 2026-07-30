@@ -388,3 +388,44 @@ def test_database_probe_FAILS_on_an_unreachable_host_without_leaking_the_passwor
     assert result["ok"] is False
     assert result["database"] is None
     assert "hunter2-not-a-real-password" not in repr(result)
+
+
+# ── PowerShell 5.1 encoding ───────────────────────────────────────────────────
+#
+# Windows PowerShell 5.1 reads a .ps1 without a UTF-8 BOM as ANSI. Every
+# non-ASCII character then decodes wrongly and the parser dies on the first
+# string it can no longer terminate:
+#
+#     The string is missing the terminator: ".
+#
+# pwsh 7 defaults to UTF-8 and never sees it, so this breaks only on the shell
+# most likely to be used by someone double-clicking the script. It was fixed
+# once, on 2026-07-29, and scripts/doctor.ps1 regressed to no BOM — caught by
+# Hermes' re-review. Hence a test rather than a second manual fix.
+
+def _powershell_scripts():
+    root = Path(__file__).resolve().parents[2]
+    return sorted(
+        p for p in (root / "scripts").rglob("*.ps*1")
+    ) + sorted(root.glob("*.ps1"))
+
+
+def test_powershell_scripts_with_non_ascii_carry_a_utf8_bom():
+    offenders = []
+    checked = 0
+    for path in _powershell_scripts():
+        raw = path.read_bytes()
+        if not raw:
+            continue
+        checked += 1
+        has_non_ascii = any(byte > 127 for byte in raw)
+        has_bom = raw[:3] == b"\xef\xbb\xbf"
+        if has_non_ascii and not has_bom:
+            offenders.append(path.name)
+
+    assert checked, "premise: there are PowerShell scripts to check"
+    assert not offenders, (
+        "these .ps1 files contain non-ASCII characters but have no UTF-8 BOM, "
+        "so Windows PowerShell 5.1 will fail to parse them: "
+        f"{', '.join(offenders)}"
+    )
