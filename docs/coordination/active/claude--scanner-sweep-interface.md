@@ -433,4 +433,15 @@ have started an active sweep of the show subnets.
 
 ## Status
 
-Pushed for review. Not merged.
+Merged to `main`. Current `main` (`50ee294`, Hermes' SQLite lock-error
+classification — which is W1 of the Hog review being actioned) was merged in
+first; the two changesets are disjoint. Re-verified on the merged tree:
+**505 passed** from the repository root.
+
+Merged **without Hermes reviewing the fixes**, at Anthony's direction. Fifth
+time today, and this one had been explicitly handed over for pre-merge review
+rather than after. Both of Hermes' findings are addressed and evidenced above,
+but "addressed" remains my own assessment. A post-hoc review is wanted,
+particularly on the absolute IPv4 rule — it is now stricter than before, and an
+IPv6 subnet row that someone had entered deliberately will start being rejected
+rather than silently mis-swept.
