@@ -184,6 +184,25 @@ describe('Database fixture-library safety UI', () => {
     expect(screen.getByText('#7 · 4 fixtures')).toBeInTheDocument()
   })
 
+  it('explains that an empty proxy 500 may mean Flask is unavailable', async () => {
+    global.fetch = vi.fn((url) => {
+      if (url.startsWith('/api/fixture-library/catalog?')) {
+        return Promise.resolve(response({}, false, 500))
+      }
+      if (url === '/api/fixture-library/status') return Promise.resolve(response(STATUS))
+      if (url === '/api/fixture-library/backups') return Promise.resolve(response(BACKUPS))
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    render(<Database />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Fixture catalog failed (500)')
+    expect(alert).toHaveTextContent(
+      'The Five12 backend may be unavailable. Check that Flask is running on http://127.0.0.1:5000'
+    )
+  })
+
   it('labels an HTTP error without misreporting it as a transport failure', async () => {
     global.fetch = vi.fn((url) => {
       if (url.startsWith('/api/fixture-library/catalog?')) {
