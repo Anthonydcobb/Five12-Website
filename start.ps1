@@ -1,5 +1,13 @@
-param(
-    [string]$Mode = ""
+﻿param(
+    [string]$Mode = "",
+    # Skip the preflight doctor. Every check it runs exists because something
+    # broke silently on 2026-07-28/29 — see scripts/doctor.ps1 — so this is an
+    # escape hatch, not a shortcut.
+    [switch]$SkipDoctor,
+    # Which preflight to run. Exists so the fail-closed path can be exercised
+    # with a stub that throws — an untested "we fail closed" claim is just a
+    # claim.
+    [string]$DoctorScript = ''
 )
 
 $pythonExe    = "C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe"
@@ -22,6 +30,57 @@ if ($Mode -eq "app") {
     Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$root\electron'; npm start"
 } else {
     Write-Host "Starting Five12 in dev mode..." -ForegroundColor Yellow
+
+    # Preflight before anything launches. On 2026-07-28/29 six separate faults
+    # cost a session most of a day and not one of them printed a thing: a stale
+    # OneDrive clone, a doubled Flask process fighting over the Bluetooth
+    # adapter, a missing package swallowed by a blanket `except`, a renamed
+    # .env key, unset feature gates, and four show NICs on the Public network
+    # category. The doctor is read-only; it names the fix, it does not apply it.
+    if (-not $SkipDoctor) {
+        # Fail CLOSED. Checking $LASTEXITCODE alone is not enough: it keeps a
+        # previous value, and is $null before any native command has run in the
+        # session, so a terminating error inside the doctor could leave a stale
+        # 0 behind and read as a pass. A preflight that silently doesn't run is
+        # worse than no preflight — it is the green light with nothing behind
+        # it, which is the whole thing this exists to prevent. So an exception,
+        # a missing status, and a non-zero status are all treated as failure.
+        #
+        # -PreLaunch tells the doctor a backend is about to be started, which
+        # makes an EXISTING backend a conflict rather than a healthy state.
+        $doctor = $DoctorScript
+        if (-not $doctor) { $doctor = Join-Path $root 'scripts\doctor.ps1' }
+
+        $doctorExit = $null
+        $doctorError = ''
+        try {
+            & $doctor -PreLaunch
+            $doctorExit = $LASTEXITCODE
+        }
+        catch {
+            $doctorError = $_.Exception.Message
+            $doctorExit = 1001
+        }
+
+        if ($null -eq $doctorExit -or $doctorExit -ne 0) {
+            if ($doctorError) {
+                Write-Host "  Preflight could not complete: $doctorError" -ForegroundColor Red
+                Write-Host "  Treating that as a failure rather than a pass." -ForegroundColor Red
+            }
+            elseif ($null -eq $doctorExit) {
+                Write-Host "  Preflight produced no exit status. Treating that as a failure." -ForegroundColor Red
+            }
+            else {
+                Write-Host "  Preflight FAILED. Each fault above has silently broken this app before." -ForegroundColor Red
+            }
+            $answer = Read-Host "  Launch anyway? (y/N)"
+            if ($answer -ne 'y') {
+                Write-Host "  Aborted. Fix the FAIL lines, or re-run: .\start.ps1 -Mode dev -SkipDoctor" -ForegroundColor Yellow
+                exit 1
+            }
+        }
+    }
+
     $env:PATH = "$pythonScripts;" + $env:PATH
     # --no-reload is load-bearing, not a preference. Werkzeug's auto-reloader
     # runs the app in TWO processes; both start the Bluetooth service and race

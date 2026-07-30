@@ -74,9 +74,23 @@ The reviewer checks the diff independently, reruns canonical checks, and writes 
 
 Until CI provides a single command, use the applicable checks:
 
+**Run the backend suite with the interpreter the app itself runs on.** Not
+"a" Python — *that* Python. Until 2026-07-29 the Windows rig ran its tests on
+whatever `python` was on `PATH` (3.14) while the app ran on 3.12, and the two
+had different package sets: the test interpreter was missing six of the app's
+requirements, including `bleak`. A green suite therefore said nothing about
+whether the app's runtime was intact, which is precisely how a missing
+`websocket-client` cost most of a day on 2026-07-28 — that import sits inside
+a blanket `except Exception`, so a broken install is indistinguishable from
+unreachable hardware. Test-only dependencies live in
+`backend/requirements-dev.txt` and belong in the same interpreter.
+
 ```bash
-# Backend, from repository root
+# Backend, from repository root — Linux worktrees
 .venv/bin/python -m pytest -q backend/tests
+
+# Backend — Windows rig, using the interpreter start.ps1 launches the app with
+& 'C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe' -m pytest -q backend/tests
 
 # Frontend
 cd app

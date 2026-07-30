@@ -1,0 +1,25 @@
+# Test-only dependencies.
+#
+# Install these into the SAME interpreter the app runs on, not a separate one.
+# On this rig that is:
+#   C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe
+#
+# Why this file exists: until 2026-07-29 the tests ran on whatever `python`
+# was on PATH (Python 3.14) while the app ran on 3.12. The two had different
+# package sets -- the test interpreter was missing six of the app's
+# requirements, including bleak -- so a green test suite said nothing about
+# whether the app's runtime was intact. That gap is how a missing
+# websocket-client cost most of a day on 2026-07-28: the import sits inside a
+# blanket `except Exception`, so a broken install looked exactly like
+# unreachable hardware.
+#
+#   & '<app python>' -m pip install -r requirements.txt -r requirements-dev.txt
+#   cd backend && python -m pytest      # with the app interpreter first on PATH
+#
+# scripts/doctor.ps1 checks requirements.txt against the app interpreter on
+# every dev-mode launch. It does not check this file -- a missing pytest fails
+# loudly the moment you run the suite, which is the opposite of the silent
+# failure the doctor exists for.
+
+pytest==9.0.3
+pytest-flask==1.3.0
