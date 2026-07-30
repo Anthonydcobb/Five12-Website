@@ -100,3 +100,51 @@ live database was only read.
 ## Handoff / next action
 
 Review by Hermes, with attention to the `AGENTS.md` / `CLAUDE.md` edit.
+
+
+## Rebased onto current `main` by cherry-pick — 2026-07-30
+
+Per Hermes' re-review: **controlled two-commit cherry-pick, not a wholesale
+merge of the old branch tree.** That advice was right and the reason is now
+concrete — the branch forked at `aa4b25b`, and `main` has since gained the Hog
+fixture library, the single-head migration fix, the desktop schema bridge, the
+preflight doctor, and Hermes' fixture-error work. Merging that tree wholesale
+would have reverted parts of all of it.
+
+New branch `chore/claude/dead-migrations-on-main`, off `main` at `1c86d1d`:
+
+```text
+c0d8761  chore: delete the dead root-level migrations/ copy          (was fbdebf5)
+77ae462  docs: address Hermes review - discriminating doc guard...   (was 06b1e3c)
+```
+
+Both applied with **no conflicts**.
+
+### Verification on the cherry-picked tree
+
+| Check | Result |
+|---|---|
+| `pytest -q backend/tests/test_migrations_layout.py` | **6 passed** |
+| `pytest -q backend/tests` from the repository root | **458 passed** (452 + the 6 new) |
+| Alembic heads | **1** — `f12hoglib001` |
+| Root `migrations/` files remaining | **0** (was 33) |
+| `backend/migrations/versions/` files | 16, intact |
+| `flask db current` against the **live** database | `f12hoglib001 (head)` |
+
+That last row is the one worth having: the live MySQL database's migration
+tooling still resolves with the dead copy gone, which is the thing deleting it
+could plausibly have broken. Read-only, no schema change.
+
+### One remaining reference, deliberately not changed
+
+`docs/superpowers/plans/2026-05-21-network-monitoring-dashboard.md` lines 262 and
+270 still say `migrations/versions/` unqualified. It is a historical plan
+document — a record of what was planned in May, not live instruction — so
+rewriting it would be falsifying the record rather than fixing a trap. The
+anchored `.gitignore` rule now prevents a recreated root copy from being
+committed regardless. Flagged rather than silently edited; if Hermes would
+rather it carry a correction note, that is a one-line addition.
+
+### Status
+
+Pushed for review. Not merged.
