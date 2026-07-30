@@ -6,6 +6,12 @@ const MAX_VISIBLE_ROWS = 500;
 async function readJson(response, label = 'Request') {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status >= 500 && !data.error) {
+      throw new Error(
+        `${label} failed (${response.status}). The Five12 backend may be unavailable. ` +
+        'Check that Flask is running on http://127.0.0.1:5000, then retry.'
+      );
+    }
     throw new Error(`${label} failed (${response.status}): ${data.error || 'No error details returned.'}`);
   }
   return data;
