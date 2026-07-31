@@ -2,6 +2,7 @@
 alias matching, mapping and address derivation. No Flask/DB dependencies."""
 import math
 import re
+from difflib import SequenceMatcher
 from io import BytesIO
 import pandas as pd
 
@@ -128,6 +129,85 @@ def apply_mapping(headers, data_rows, mapping):
             continue
         results.append(canonical)
     return results
+
+
+def _normalize_fixture_text(value) -> str:
+    """Normalize punctuation and compact model tokens for fixture matching."""
+    normalized = normalize_header(value)
+    normalized = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def fixture_source_key(source_type, channel_count) -> str:
+    """Stable key shared by preview and commit for one imported profile shape."""
+    footprint = parse_int(channel_count)
+    return f"{_normalize_fixture_text(source_type)}|{footprint if footprint is not None else '?'}"
+
+
+def group_fixture_sources(rows) -> list[dict]:
+    """Group repeated imported rows so the operator makes one profile choice."""
+    grouped = {}
+    for row in rows:
+        source_type = clean_str(row.get("type"))
+        if not source_type:
+            continue
+        channel_count = parse_int(row.get("channelCount"))
+        key = fixture_source_key(source_type, channel_count)
+        if key not in grouped:
+            grouped[key] = {
+                "key": key,
+                "sourceType": source_type,
+                "channelCount": channel_count,
+                "rowCount": 0,
+            }
+        grouped[key]["rowCount"] += 1
+    return list(grouped.values())
+
+
+def _candidate_dict(candidate) -> dict:
+    if isinstance(candidate, dict):
+        return dict(candidate)
+    return {
+        "id": candidate.id,
+        "manufacturer": candidate.manufacturer,
+        "fixture": candidate.fixture,
+        "channelCount": candidate.channel_count,
+    }
+
+
+def rank_fixture_candidates(source_type, channel_count, candidates, limit=5) -> list[dict]:
+    """Rank fixture names only after enforcing footprint compatibility.
+
+    Mode is embedded in Hog profile names, so token overlap carries mode/model
+    numbers into the score. Similarity never overrides a supplied footprint.
+    """
+    source = _normalize_fixture_text(source_type)
+    if not source:
+        return []
+    source_tokens = set(source.split())
+    footprint = parse_int(channel_count)
+    ranked = []
+    for candidate in candidates:
+        item = _candidate_dict(candidate)
+        candidate_count = parse_int(item.get("channelCount"))
+        if footprint is not None and candidate_count != footprint:
+            continue
+        name = _normalize_fixture_text(item.get("fixture"))
+        manufacturer = _normalize_fixture_text(item.get("manufacturer"))
+        full_name = " ".join(piece for piece in (manufacturer, name) if piece)
+        exact = source in {name, full_name}
+        candidate_tokens = set(full_name.split())
+        union = source_tokens | candidate_tokens
+        token_score = len(source_tokens & candidate_tokens) / len(union) if union else 0.0
+        sequence_score = max(
+            SequenceMatcher(None, source, name).ratio(),
+            SequenceMatcher(None, source, full_name).ratio(),
+        )
+        score = 1.0 if exact else (0.6 * sequence_score + 0.4 * token_score)
+        item.update({"exact": exact, "score": round(score, 4)})
+        ranked.append(item)
+    ranked.sort(key=lambda item: (-int(item["exact"]), -item["score"], item.get("id", 0)))
+    return ranked[:limit]
 
 
 def read_table(data, filename):

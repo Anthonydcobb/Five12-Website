@@ -1,4 +1,8 @@
-from app.patch_import import normalize_header, guess_field, guess_mapping, detect_header_row, parse_int, derive_row, apply_mapping
+from app.patch_import import (
+    normalize_header, guess_field, guess_mapping, detect_header_row, parse_int,
+    derive_row, apply_mapping, fixture_source_key, group_fixture_sources,
+    rank_fixture_candidates,
+)
 
 def test_normalize_header_strips_punct_and_case():
     assert normalize_header("Fix #") == "fix"
@@ -87,6 +91,66 @@ def test_apply_mapping_ignore_keyword():
     headers = ["Add", "Junk"]
     out = apply_mapping(headers, [["5", "x"]], {"Add": "address", "Junk": "ignore"})
     assert out[0]["address"] == 5 and out[0]["type"] is None
+
+
+def test_fixture_source_key_normalizes_spelling_but_keeps_footprints_distinct():
+    assert fixture_source_key("ARRI  SkyPanel S60-C / Mode 6", 20) == \
+        fixture_source_key("arri skypanel s60 c mode 6", 20)
+    assert fixture_source_key("ARRI SkyPanel S60-C Mode 6", 20) != \
+        fixture_source_key("ARRI SkyPanel S60-C Mode 6", 18)
+
+
+def test_group_fixture_sources_collapses_repeated_fixture_rows():
+    groups = group_fixture_sources([
+        {"type": "Vortex8 16b RGBW", "channelCount": 18},
+        {"type": "vortex8 16B-RGBW", "channelCount": 18},
+        {"type": "Mystery Panel", "channelCount": 12},
+        {"type": None, "channelCount": 1},
+    ])
+    assert groups == [
+        {
+            "key": fixture_source_key("Vortex8 16b RGBW", 18),
+            "sourceType": "Vortex8 16b RGBW",
+            "channelCount": 18,
+            "rowCount": 2,
+        },
+        {
+            "key": fixture_source_key("Mystery Panel", 12),
+            "sourceType": "Mystery Panel",
+            "channelCount": 12,
+            "rowCount": 1,
+        },
+    ]
+
+
+def test_rank_fixture_candidates_requires_exact_channel_count():
+    candidates = [
+        {"id": 1, "manufacturer": "ARRI", "fixture": "SkyPanel S60-C Mode 6", "channelCount": 20},
+        {"id": 2, "manufacturer": "ARRI", "fixture": "SkyPanel S60-C Mode 6", "channelCount": 18},
+    ]
+    ranked = rank_fixture_candidates("ARRI SkyPanel S60 Mode 6", 20, candidates)
+    assert [item["id"] for item in ranked] == [1]
+
+
+def test_rank_fixture_candidates_marks_only_normalized_exact_names_exact():
+    candidates = [
+        {"id": 1, "manufacturer": "ARRI", "fixture": "SkyPanel S60-C Mode 6", "channelCount": 20},
+        {"id": 2, "manufacturer": "ARRI", "fixture": "SkyPanel S60-C Mode 8", "channelCount": 20},
+    ]
+    ranked = rank_fixture_candidates("ARRI — SkyPanel S60-C Mode 6", 20, candidates)
+    assert ranked[0]["id"] == 1
+    assert ranked[0]["exact"] is True
+    assert ranked[1]["exact"] is False
+
+
+def test_rank_fixture_candidates_uses_mode_tokens_to_rank_close_names():
+    candidates = [
+        {"id": 1, "manufacturer": "Creamsource", "fixture": "Vortex8 Mode 6 16-bit CCT RGBW", "channelCount": 18},
+        {"id": 2, "manufacturer": "Creamsource", "fixture": "Vortex8 Mode 8 HSI", "channelCount": 18},
+    ]
+    ranked = rank_fixture_candidates("Vortex 8 mode 6 16b RGBW", 18, candidates)
+    assert ranked[0]["id"] == 1
+    assert ranked[0]["score"] > ranked[1]["score"]
 
 
 import pandas as pd
