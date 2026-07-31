@@ -244,6 +244,11 @@ def create_fixture():
         if manufacturer and len(manufacturer) > 120:
             raise ValueError('Manufacturer exceeds 120 characters')
         raw_count = data.get('channelCount')
+        if (
+            isinstance(raw_count, bool)
+            or isinstance(raw_count, float) and not raw_count.is_integer()
+        ):
+            raise ValueError('Channel count must be an integer')
         try:
             channel_count = int(raw_count)
         except (TypeError, ValueError) as exc:

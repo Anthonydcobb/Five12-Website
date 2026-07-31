@@ -31,6 +31,8 @@ def test_create_custom_fixture_persists_manufacturer_and_manual_identity(client,
     ({'fixture': 'Bad Zero', 'channelCount': 0}, 'between 1 and 512'),
     ({'fixture': 'Bad Wide', 'channelCount': 513}, 'between 1 and 512'),
     ({'fixture': 'Bad Text', 'channelCount': 'twelve'}, 'integer'),
+    ({'fixture': 'Bad Fraction', 'channelCount': 12.5}, 'integer'),
+    ({'fixture': 'Bad Bool', 'channelCount': True}, 'integer'),
     ({'fixture': 'X' * 121, 'channelCount': 12}, '120'),
     ({'manufacturer': 'M' * 121, 'fixture': 'Bad Mfr', 'channelCount': 12}, '120'),
 ])

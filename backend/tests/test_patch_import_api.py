@@ -135,6 +135,38 @@ def test_commit_preserves_explicitly_unmatched_source_type(client, db):
     assert PatchRow.query.filter_by(patch_id=pid).one().type == "Mystery Panel"
 
 
+def test_commit_uses_selected_footprint_when_sheet_omits_channel_count(client, db):
+    pid = _make_patch(db, show_name="T-missing-footprint")
+    selected = _fixture(db, "Custom Profile", 7, "Test Vendor")
+    csv = b"Fixture Type,DMX Addr\nUnknown Profile,101\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address"}
+    key = fixture_source_key("Unknown Profile", None)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: selected.id}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    row = PatchRow.query.filter_by(patch_id=pid).one()
+    assert row.channel_count == 7
+    assert row.end_address == 107
+
+
+def test_commit_rejects_selected_profile_that_no_longer_exists(client, db):
+    pid = _make_patch(db, show_name="T-missing-profile")
+    csv = b"Fixture Type,DMX Addr,Ch\nUnknown Profile,1,7\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("Unknown Profile", 7)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: 999999}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert "no longer exists" in resp.get_json()["error"]
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
+
+
 def test_commit_inserts_rows_with_derivation(client, db):
     pid = _make_patch(db)
     csv = b"Fixture Type,DMX Addr,Ch,Dimmer\nPAR64,101,8,full\n"

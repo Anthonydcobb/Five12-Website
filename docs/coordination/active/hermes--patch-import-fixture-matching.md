@@ -34,6 +34,8 @@ Add a safe fixture-matching review to patch-sheet import: rank library profiles 
 - `app/src/components/ImportWizard.jsx`
 - `app/src/components/ImportWizard.test.jsx`
 - `app/src/components/PatchTab.jsx` — import completion message only
+- `app/src/pages/Database.jsx` — preserve the existing add-blank-draft workflow explicitly
+- `app/src/pages/Database.test.jsx` if focused regression coverage is needed
 - this active record and linked plan
 
 ## Must-not-touch paths
@@ -67,7 +69,12 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 | Command | Result | Evidence level |
 |---|---|---|
-| pending | pending | software verification |
+| `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `523 passed, 19 warnings` | software verification |
+| `npm test` | `66 passed` | software verification |
+| `npm run build` | passed; existing chunk-size warning only | software verification |
+| focused backend patch/custom tests | `43 passed` after hardening additions | software verification |
+| focused `ImportWizard.test.jsx` | `3 passed` | software verification |
+| `git diff --check` | clean before hardening commit | software verification |
 
 ## Commits
 

@@ -14,7 +14,11 @@ async function readJson(res) {
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* non-JSON body */ }
-  if (!res.ok) throw new Error((data && data.error) || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const error = new Error((data && data.error) || `Request failed (${res.status})`);
+    error.data = data;
+    throw error;
+  }
   return data || {};
 }
 
@@ -168,6 +172,17 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
 
   const createCustom = async (group) => {
     const form = customForms[group.key];
+    const customCount = Number(form.channelCount);
+    if (group.channelCount != null && customCount !== Number(group.channelCount)) {
+      setCustomForms(current => ({
+        ...current,
+        [group.key]: {
+          ...current[group.key],
+          error: `Channel count must stay at the imported ${group.channelCount}-channel footprint.`,
+        },
+      }));
+      return;
+    }
     setCustomForms(current => ({
       ...current, [group.key]: { ...current[group.key], busy: true, error: null },
     }));
@@ -178,7 +193,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
         body: JSON.stringify({
           manufacturer: form.manufacturer,
           fixture: form.fixture,
-          channelCount: Number(form.channelCount),
+          channelCount: customCount,
           notes: 'Created during patch-sheet import',
         }),
       });
@@ -186,6 +201,12 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
       chooseProfile(group, profile);
       setCustomForms(current => ({ ...current, [group.key]: null }));
     } catch (e) {
+      const existing = e.data?.existing;
+      if (existing && isCompatible(group, existing)) {
+        chooseProfile(group, existing);
+        setCustomForms(current => ({ ...current, [group.key]: null }));
+        return;
+      }
       setCustomForms(current => ({
         ...current, [group.key]: { ...current[group.key], busy: false, error: e.message },
       }));
