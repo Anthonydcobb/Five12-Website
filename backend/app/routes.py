@@ -9,6 +9,7 @@ import struct
 import time
 import requests as req
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from flask import Blueprint, request, jsonify, current_app, send_file, send_from_directory
 from .models import Show, PatchSheet, Fixture, PatchRow, LabelTemplate
 from . import db
@@ -583,6 +584,7 @@ def _fit(value, maxlen):
 
 @bp.route('/api/patch-sheets/<int:patch_id>/import/commit', methods=['POST'])
 def commit_patch_import(patch_id):
+    catalog_guard = ExitStack()
     try:
         if db.session.get(PatchSheet, patch_id) is None:
             return jsonify({'error': 'Patch sheet not found'}), 404
@@ -601,6 +603,10 @@ def commit_patch_import(patch_id):
                     'Fixture selections do not match the imported fixture groups; '
                     'review fixture matches again'
                 )
+
+        # Serialize fixture lookup/validation and patch-row commit against every
+        # cooperative catalog mutation, including MySQL multi-process workers.
+        catalog_guard.enter_context(fixture_catalog_mutation_lock())
 
         selected_ids = set()
         selection_bindings = {}
@@ -703,6 +709,9 @@ def commit_patch_import(patch_id):
             'matchedRows': matched_rows,
             'unmatchedRows': unmatched_rows,
         })
+    except FixtureLibraryBusyError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 409
     except ValueError as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
@@ -710,6 +719,8 @@ def commit_patch_import(patch_id):
         db.session.rollback()
         current_app.logger.exception("Patch import commit failed")
         return jsonify({'error': str(e)}), 500
+    finally:
+        catalog_guard.close()
 
 
 @bp.route('/api/fixtures/import-excel', methods=['POST'])

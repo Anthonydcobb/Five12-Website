@@ -1,5 +1,7 @@
 import io, json
+from contextlib import contextmanager
 import pytest
+import app.routes as routes_module
 from app import db
 from app.models import Show, PatchSheet, PatchRow, Fixture
 from app.patch_import import fixture_source_key
@@ -185,6 +187,53 @@ def test_commit_rejects_profile_that_changed_after_review(client, db):
     assert resp.status_code == 400
     assert "changed after review" in resp.get_json()["error"]
     assert PatchRow.query.filter_by(patch_id=pid).count() == 0
+
+
+def test_commit_holds_catalog_lock_through_token_check_and_row_commit(
+    client, db, monkeypatch,
+):
+    pid = _make_patch(db, show_name="T-selection-lock")
+    selected = _fixture(db, "Reviewed Profile", 18, "Vendor")
+    binding = _binding(selected)
+    state = {'held': False, 'entered': 0, 'committed': False}
+
+    @contextmanager
+    def fake_catalog_lock():
+        assert state['held'] is False
+        state['held'] = True
+        state['entered'] += 1
+        try:
+            yield
+        finally:
+            state['held'] = False
+
+    original_token = Fixture.selection_token
+    original_commit = db.session.commit
+
+    def guarded_token(fixture):
+        assert state['held'] is True
+        return original_token(fixture)
+
+    def guarded_commit():
+        assert state['held'] is True
+        state['committed'] = True
+        return original_commit()
+
+    monkeypatch.setattr(routes_module, 'fixture_catalog_mutation_lock', fake_catalog_lock)
+    monkeypatch.setattr(Fixture, 'selection_token', guarded_token)
+    monkeypatch.setattr(db.session, 'commit', guarded_commit)
+
+    csv = b"Fixture Type,DMX Addr,Ch\nSource Profile,101,18\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("Source Profile", 18)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: binding}),
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 200
+    assert state == {'held': False, 'entered': 1, 'committed': True}
 
 
 def test_commit_preserves_explicitly_unmatched_source_type(client, db):
