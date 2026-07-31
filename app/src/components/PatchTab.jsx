@@ -439,7 +439,14 @@ export default function PatchTab({
         <ImportWizard
           patchId={patchId}
           onClose={() => setShowImport(false)}
-          onImported={(n) => { setShowImport(false); alert(`Imported ${n} rows`); window.location.reload(); }}
+          onImported={(result) => {
+            setShowImport(false);
+            const inserted = typeof result === 'number' ? result : result.inserted;
+            const details = typeof result === 'number' ? ''
+              : ` (${result.matchedRows || 0} matched, ${result.unmatchedRows || 0} unmatched)`;
+            alert(`Imported ${inserted} rows${details}`);
+            window.location.reload();
+          }}
         />
       )}
       {showDymo && (

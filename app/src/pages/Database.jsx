@@ -151,9 +151,7 @@ export default function Database() {
       const newRow = await requestJson('/api/fixtures', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fixture: '', notes: '', channelCount: 0, wattage: 0, weight: 0, firmware: '',
-        }),
+        body: JSON.stringify({ draft: true }),
       }, 'Add fixture');
       setRows(previous => [...previous, newRow]);
     } catch (error) {

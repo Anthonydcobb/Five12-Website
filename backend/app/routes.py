@@ -227,6 +227,16 @@ def create_fixture():
             raise ValueError('Fixture payload must be an object')
         name = str(data.get('fixture') or '').strip()
         manufacturer = str(data.get('manufacturer') or '').strip() or None
+        draft = data.get('draft') is True
+        if draft:
+            with fixture_catalog_mutation_lock():
+                f = Fixture(
+                    fixture='', notes='', channel_count=0,
+                    wattage=0, weight=0, firmware='',
+                )
+                db.session.add(f)
+                db.session.commit()
+            return jsonify(f.to_dict()), 201
         if not name:
             raise ValueError('Fixture name is required')
         if len(name) > 120:

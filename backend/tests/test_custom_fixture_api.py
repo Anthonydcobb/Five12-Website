@@ -3,6 +3,13 @@ import pytest
 from app.models import Fixture
 
 
+def test_create_fixture_draft_preserves_database_add_row_workflow(client):
+    resp = client.post('/api/fixtures', json={'draft': True})
+    assert resp.status_code == 201
+    assert resp.get_json()['fixture'] == ''
+    assert resp.get_json()['channelCount'] == 0
+
+
 def test_create_custom_fixture_persists_manufacturer_and_manual_identity(client, db):
     resp = client.post('/api/fixtures', json={
         'manufacturer': 'Anthony Test Co',
