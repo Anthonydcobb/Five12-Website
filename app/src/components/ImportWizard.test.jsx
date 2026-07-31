@@ -107,6 +107,10 @@ describe('ImportWizard fixture matching', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /keep mystery panel unmatched/i }))
     expect(importButton).toBeEnabled()
+    const closeButton = screen.getByRole('button', { name: /close import/i })
+    closeButton.focus()
+    await userEvent.tab({ shift: true })
+    expect(importButton).toHaveFocus()
     await userEvent.click(importButton)
 
     await waitFor(() => expect(onImported).toHaveBeenCalledWith({
@@ -117,6 +121,28 @@ describe('ImportWizard fixture matching', () => {
       'arri skypanel s 60 c mode 6|20': 1,
       'mystery panel|12': null,
     })
+  })
+
+  it('does not allow dismissal while the patch import commit is in flight', async () => {
+    const pending = deferred()
+    const onClose = vi.fn()
+    const onImported = vi.fn()
+    installBaseFetch((url) => {
+      if (url === '/api/patch-sheets/7/import/commit') return pending.promise
+      return null
+    })
+    render(<ImportWizard patchId={7} onClose={onClose} onImported={onImported} />)
+    await uploadAndReview()
+
+    await userEvent.click(screen.getByRole('button', { name: /keep mystery panel unmatched/i }))
+    await userEvent.click(screen.getByRole('button', { name: /import 3 rows/i }))
+    expect(screen.getByRole('button', { name: /close import/i })).toBeDisabled()
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+
+    const result = { inserted: 3, matchedRows: 2, unmatchedRows: 1, skipped: 0 }
+    pending.resolve(response(result))
+    await waitFor(() => expect(onImported).toHaveBeenCalledWith(result))
   })
 
   it('searches the catalog and only allows a profile with the imported footprint', async () => {
@@ -240,6 +266,36 @@ describe('ImportWizard fixture matching', () => {
       manufacturer: 'Indie Light Co', fixture: 'Mystery Panel', channelCount: 12,
       notes: 'Created during patch-sheet import',
     })
+  })
+
+  it('does not allow dismissal or import while custom fixture creation is in flight', async () => {
+    const pending = deferred()
+    const onClose = vi.fn()
+    installBaseFetch((url, options) => {
+      if (url === '/api/fixtures' && options.method === 'POST') return pending.promise
+      return null
+    })
+    render(<ImportWizard patchId={7} onClose={onClose} onImported={vi.fn()} />)
+    await uploadAndReview()
+
+    await userEvent.click(screen.getByRole('button', { name: /keep mystery panel unmatched/i }))
+    const importButton = screen.getByRole('button', { name: /import 3 rows/i })
+    expect(importButton).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: /add mystery panel to fixture database/i }))
+    await userEvent.click(screen.getByRole('button', { name: /create and select fixture/i }))
+
+    expect(screen.getByRole('button', { name: /close import/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /keep mystery panel unmatched/i })).toBeDisabled()
+    expect(importButton).toBeDisabled()
+    await userEvent.keyboard('{Escape}')
+    expect(onClose).not.toHaveBeenCalled()
+
+    pending.resolve(response({
+      id: 46, fixture: 'Mystery Panel', displayName: 'Mystery Panel',
+      manufacturer: '', channelCount: 12, libraryType: null,
+    }, true, 201))
+    expect(await screen.findByText(/selected: mystery panel/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /close import/i })).toBeEnabled()
   })
 
   it('recovers duplicate custom creation by selecting the existing patchable profile', async () => {

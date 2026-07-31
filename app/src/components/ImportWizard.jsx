@@ -46,6 +46,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const searchGeneration = useRef({});
+  const dialogRef = useRef(null);
 
   const uploadForm = (includeSelections = false) => {
     const fd = new FormData();
@@ -231,18 +232,42 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
   const dupes = targets.filter((target, index) => targets.indexOf(target) !== index);
   const allGroupsReviewed = groups.every(group =>
     selections[group.key] != null || unmatchedAcknowledged[group.key]);
+  const customBusy = Object.values(customForms).some(form => form?.busy);
+  const interactionLocked = busy || customBusy;
+  const closeIfSafe = () => { if (!interactionLocked) onClose(); };
+  const handleDialogKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      closeIfSafe();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = [...(dialogRef.current?.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) || [])];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
-      onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="patch-import-title"
+      onKeyDown={handleDialogKeyDown}>
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="patch-import-title"
         className="bg-surface border border-border rounded-lg p-6 w-[min(94vw,980px)] max-h-[88vh] overflow-auto shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 id="patch-import-title" className="text-lg font-semibold">Import Patch Sheet</h3>
             {analysis && <p className="text-xs text-text-muted mt-1">Map columns → Match fixtures → Import</p>}
           </div>
-          <button autoFocus aria-label="Close import" onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
+          <button autoFocus aria-label="Close import" onClick={closeIfSafe} disabled={interactionLocked}
+            className="text-text-muted hover:text-text text-lg leading-none disabled:opacity-40">×</button>
         </div>
 
         {error && (
@@ -286,7 +311,8 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
               </tbody>
             </table>
             <div className="flex justify-end gap-3">
-              <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
+              <button onClick={closeIfSafe} disabled={interactionLocked}
+                className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">Cancel</button>
               <button onClick={reviewMatches} disabled={busy || dupes.length > 0}
                 className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
                 {busy ? 'Checking library…' : 'Review fixture matches'}
@@ -328,7 +354,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                         <div className="text-xs uppercase tracking-wide text-text-muted mb-1">Closest compatible profiles</div>
                         <div className="flex flex-wrap gap-2">
                           {group.suggestions.map(profile => (
-                            <button key={profile.id} onClick={() => chooseProfile(group, profile)}
+                            <button key={profile.id} onClick={() => chooseProfile(group, profile)} disabled={customBusy}
                               aria-label={`Choose ${profileLabel(profile)}`}
                               className="text-xs border border-border hover:border-online rounded px-2 py-1">
                               {profileLabel(profile)} · {profile.channelCount}ch · {Math.round((profile.score || 0) * 100)}%
@@ -339,12 +365,12 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                     )}
 
                     <div className="flex gap-2 mb-2">
-                      <input aria-label={`Search profile for ${group.sourceType}`} value={search.query || ''}
+                      <input aria-label={`Search profile for ${group.sourceType}`} value={search.query || ''} disabled={customBusy}
                         onChange={event => updateSearch(group.key, event.target.value)}
                         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); searchLibrary(group); } }}
                         className="flex-1 min-w-0 bg-surface border border-border rounded px-2 py-1 text-sm"
                         placeholder="Search manufacturer, fixture, or mode" />
-                      <button aria-label={`Search library for ${group.sourceType}`} onClick={() => searchLibrary(group)} disabled={search.busy}
+                      <button aria-label={`Search library for ${group.sourceType}`} onClick={() => searchLibrary(group)} disabled={search.busy || customBusy}
                         className="px-3 py-1 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">
                         {search.busy ? 'Searching…' : 'Search'}
                       </button>
@@ -359,7 +385,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                             ? 'imported footprint missing'
                             : `footprint mismatch (${group.channelCount}ch imported)`;
                           return (
-                            <button key={profile.id} disabled={!compatible} onClick={() => chooseProfile(group, profile)}
+                            <button key={profile.id} disabled={!compatible || customBusy} onClick={() => chooseProfile(group, profile)}
                               aria-label={compatible ? `Choose ${label}` : `${label} — ${incompatibility}`}
                               className="w-full text-left px-2 py-1.5 text-xs hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed">
                               {label} · {profile.channelCount}ch{compatible ? '' : ` — ${incompatibility}`}
@@ -370,31 +396,32 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                     )}
 
                     <div className="flex flex-wrap gap-2">
-                      <button onClick={() => toggleCustom(group)} disabled={group.channelCount == null}
+                      <button onClick={() => toggleCustom(group)} disabled={group.channelCount == null || customBusy}
                         aria-label={group.channelCount == null
                           ? `Cannot add ${group.sourceType}; imported channel count is missing`
                           : `Add ${group.sourceType} to fixture database`}
                         className="text-xs px-2 py-1 border border-border hover:border-online rounded disabled:opacity-40 disabled:cursor-not-allowed">
                         Add to fixture database
                       </button>
-                      <button onClick={() => keepUnmatched(group)} aria-label={`Keep ${group.sourceType} unmatched`}
-                        className="text-xs px-2 py-1 border border-warn/50 text-warn rounded">
+                      <button onClick={() => keepUnmatched(group)} disabled={customBusy}
+                        aria-label={`Keep ${group.sourceType} unmatched`}
+                        className="text-xs px-2 py-1 border border-warn/50 text-warn rounded disabled:opacity-40">
                         Import unmatched
                       </button>
                     </div>
 
                     {custom && (
                       <div className="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_2fr_90px_auto] gap-2 p-3 bg-surface rounded border border-border">
-                        <input aria-label="Custom manufacturer" placeholder="Manufacturer" value={custom.manufacturer}
+                        <input aria-label="Custom manufacturer" placeholder="Manufacturer" value={custom.manufacturer} disabled={customBusy}
                           onChange={event => updateCustom(group.key, 'manufacturer', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <input aria-label="Custom fixture profile name" value={custom.fixture}
+                        <input aria-label="Custom fixture profile name" value={custom.fixture} disabled={customBusy}
                           onChange={event => updateCustom(group.key, 'fixture', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <input aria-label="Custom fixture channel count" type="number" min="1" max="512" value={custom.channelCount}
+                        <input aria-label="Custom fixture channel count" type="number" min="1" max="512" value={custom.channelCount} disabled={customBusy}
                           onChange={event => updateCustom(group.key, 'channelCount', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <button onClick={() => createCustom(group)} disabled={custom.busy}
+                        <button onClick={() => createCustom(group)} disabled={customBusy}
                           className="px-3 py-1 bg-online text-bg rounded text-sm disabled:opacity-40">
                           {custom.busy ? 'Creating…' : 'Create and select fixture'}
                         </button>
@@ -406,10 +433,12 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
               })}
             </div>
             <div className="flex justify-between gap-3">
-              <button onClick={() => setStep('mapping')} disabled={busy} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Back to mapping</button>
+              <button onClick={() => setStep('mapping')} disabled={interactionLocked}
+                className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">Back to mapping</button>
               <div className="flex gap-3">
-                <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
-                <button onClick={commit} disabled={busy || !allGroupsReviewed}
+                <button onClick={closeIfSafe} disabled={interactionLocked}
+                  className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">Cancel</button>
+                <button onClick={commit} disabled={interactionLocked || !allGroupsReviewed}
                   className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
                   {busy ? 'Importing…' : `Import ${analysis.rowCount} rows`}
                 </button>

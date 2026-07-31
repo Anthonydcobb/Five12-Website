@@ -657,9 +657,7 @@ def commit_patch_import(patch_id):
                 end_address=row.get('endAddress'),
                 type=_fit(row.get('type'), _PATCHROW_MAXLEN['type']),
                 channel_count=row.get('channelCount'),
-                imported_fixture_type=_fit(
-                    row.get('importedFixtureType'), _PATCHROW_MAXLEN['type']
-                ),
+                imported_fixture_type=row.get('importedFixtureType'),
                 imported_channel_count=row.get('importedChannelCount'),
                 location=_fit(row.get('location'), _PATCHROW_MAXLEN['location']),
                 wattage=_fit(row.get('wattage'), _PATCHROW_MAXLEN['wattage']),

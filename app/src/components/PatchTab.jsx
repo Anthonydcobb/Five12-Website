@@ -44,6 +44,12 @@ export default function PatchTab({
 
   const commandRef = useRef(null);
   const tableRef = useRef(null);
+  const importButtonRef = useRef(null);
+
+  const closeImport = () => {
+    setShowImport(false);
+    setTimeout(() => importButtonRef.current?.focus(), 0);
+  };
 
   const selectedRowIds = useMemo(() =>
     Array.from(new Set([...selectedCells].map(k => Number(k.split('::')[0])))),
@@ -279,6 +285,7 @@ export default function PatchTab({
           </label>
 
           <button
+            ref={importButtonRef}
             onClick={() => setShowImport(true)}
             className="px-3 py-1.5 bg-surface-2 hover:bg-border border border-border text-text text-sm rounded"
           >
@@ -446,7 +453,7 @@ export default function PatchTab({
       {showImport && (
         <ImportWizard
           patchId={patchId}
-          onClose={() => setShowImport(false)}
+          onClose={closeImport}
           onImported={(result) => {
             setShowImport(false);
             const inserted = typeof result === 'number' ? result : result.inserted;

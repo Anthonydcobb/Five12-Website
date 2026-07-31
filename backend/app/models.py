@@ -121,7 +121,7 @@ class PatchRow(db.Model):
     end_address   = db.Column(db.Integer, nullable=True)
     type          = db.Column(db.String(120), nullable=True)
     channel_count = db.Column(db.Integer, nullable=True)
-    imported_fixture_type = db.Column(db.String(120), nullable=True)
+    imported_fixture_type = db.Column(db.Text, nullable=True)
     imported_channel_count = db.Column(db.Integer, nullable=True)
     location      = db.Column(db.String(120), nullable=True)
     wattage       = db.Column(db.String(50), nullable=True)

@@ -17,7 +17,7 @@ depends_on = None
 def upgrade():
     with op.batch_alter_table('patch_rows') as batch_op:
         batch_op.add_column(sa.Column(
-            'imported_fixture_type', sa.String(length=120), nullable=True
+            'imported_fixture_type', sa.Text(), nullable=True
         ))
         batch_op.add_column(sa.Column(
             'imported_channel_count', sa.Integer(), nullable=True

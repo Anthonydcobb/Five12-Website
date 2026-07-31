@@ -237,7 +237,7 @@ def test_commit_inserts_rows_with_derivation(client, db):
     assert row.channel_count == 8
 
 
-def test_commit_truncates_overlong_string_fields(client, db):
+def test_commit_truncates_patch_type_but_preserves_full_imported_identity(client, db):
     pid = _make_patch(db, show_name="T-truncate")
     long_type = "X" * 200
     csv = ("Fixture Type,DMX Addr,Ch\n" + long_type + ",101,8\n").encode()
@@ -254,3 +254,5 @@ def test_commit_truncates_overlong_string_fields(client, db):
     row = PatchRow.query.filter_by(patch_id=pid).one()
     assert len(row.type) == 120
     assert row.type == long_type[:120]
+    assert row.imported_fixture_type == long_type
+    assert row.imported_channel_count == 8
