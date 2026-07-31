@@ -1,6 +1,7 @@
 import io, json
 from app import db
-from app.models import Show, PatchSheet, PatchRow
+from app.models import Show, PatchSheet, PatchRow, Fixture
+from app.patch_import import fixture_source_key
 
 def test_analyze_returns_mapping_and_preview(client):
     csv = b"Fixture Type,DMX Addr,Ch,Dimmer\nPAR64,101,8,full\nMac,110,16,\n"
@@ -23,6 +24,115 @@ def _make_patch(db, show_name="T"):
     sheet = PatchSheet(name="U", show_id=show.id)
     db.session.add(sheet); db.session.commit()
     return sheet.id
+
+def _import_data(csv, mapping, selections=None):
+    data = {
+        "file": (io.BytesIO(csv), "foreign.csv"),
+        "mapping": json.dumps(mapping),
+        "headerRowIndex": "0",
+    }
+    if selections is not None:
+        data["fixtureSelections"] = json.dumps(selections)
+    return data
+
+
+def _fixture(db, name, count, manufacturer=None):
+    fixture = Fixture(
+        fixture=name,
+        channel_count=count,
+        manufacturer=manufacturer,
+        library_type="type",
+        library_source="Hog 5",
+        library_version="5.0.766",
+    )
+    db.session.add(fixture)
+    db.session.commit()
+    return fixture
+
+
+def test_match_preview_groups_rows_and_preselects_only_exact_match(client, db):
+    pid = _make_patch(db, show_name="T-match-preview")
+    exact = _fixture(db, "SkyPanel S60-C Mode 6", 20, "ARRI")
+    fuzzy = _fixture(db, "SkyPanel S60-C Mode 8", 20, "ARRI")
+    _fixture(db, "SkyPanel S60-C Mode 6", 18, "ARRI")
+    csv = (
+        b"Fixture Type,DMX Addr,Ch\n"
+        b"ARRI SkyPanel S60-C Mode 6,1,20\n"
+        b"arri skypanel s60 c mode 6,21,20\n"
+        b"Mystery Panel,100,12\n"
+    )
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/matches",
+        data=_import_data(csv, mapping),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    groups = resp.get_json()["groups"]
+    assert len(groups) == 2
+    sky = groups[0]
+    assert sky["rowCount"] == 2
+    assert sky["selectedFixtureId"] == exact.id
+    assert [item["id"] for item in sky["suggestions"]] == [exact.id, fuzzy.id]
+    mystery = groups[1]
+    assert mystery["selectedFixtureId"] is None
+    assert mystery["suggestions"] == []
+
+
+def test_commit_rejects_incompatible_selected_footprint_before_writing(client, db):
+    pid = _make_patch(db, show_name="T-bad-selection")
+    wrong = _fixture(db, "SkyPanel S60-C Mode 6", 18, "ARRI")
+    csv = b"Fixture Type,DMX Addr,Ch\nARRI S60 Mode 6,1,20\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("ARRI S60 Mode 6", 20)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: wrong.id}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert "20" in resp.get_json()["error"] and "18" in resp.get_json()["error"]
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
+
+
+def test_commit_applies_compatible_selection_and_recomputes_end_address(client, db):
+    pid = _make_patch(db, show_name="T-good-selection")
+    selected = _fixture(db, "Vortex8 Mode 6 16-bit CCT RGBW", 18, "Creamsource")
+    csv = b"Fixture Type,DMX Addr,End Addr,Ch\nVortex8 16b RGBW,101,999,18\n"
+    mapping = {
+        "Fixture Type": "type", "DMX Addr": "address",
+        "End Addr": "endAddress", "Ch": "channelCount",
+    }
+    key = fixture_source_key("Vortex8 16b RGBW", 18)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: selected.id}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "inserted": 1, "skipped": 0, "matchedRows": 1, "unmatchedRows": 0,
+    }
+    row = PatchRow.query.filter_by(patch_id=pid).one()
+    assert row.type == selected.fixture
+    assert row.channel_count == 18
+    assert row.end_address == 118
+
+
+def test_commit_preserves_explicitly_unmatched_source_type(client, db):
+    pid = _make_patch(db, show_name="T-unmatched")
+    csv = b"Fixture Type,DMX Addr,Ch\nMystery Panel,1,12\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("Mystery Panel", 12)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: None}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["unmatchedRows"] == 1
+    assert PatchRow.query.filter_by(patch_id=pid).one().type == "Mystery Panel"
+
 
 def test_commit_inserts_rows_with_derivation(client, db):
     pid = _make_patch(db)

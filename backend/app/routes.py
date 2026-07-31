@@ -13,8 +13,10 @@ from flask import Blueprint, request, jsonify, current_app, send_file, send_from
 from .models import Show, PatchSheet, Fixture, PatchRow, LabelTemplate
 from . import db
 from .fixture_library import FixtureLibraryBusyError, fixture_catalog_mutation_lock
-from .patch_import import (read_table, detect_header_row, guess_mapping,
-                           apply_mapping)
+from .patch_import import (
+    read_table, detect_header_row, guess_mapping, apply_mapping,
+    fixture_source_key, group_fixture_sources, rank_fixture_candidates,
+)
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
@@ -414,6 +416,92 @@ def analyze_patch_import(patch_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _canonical_patch_upload():
+    """Parse the shared patch-import multipart fields into canonical rows."""
+    if 'file' not in request.files:
+        raise ValueError('No file uploaded')
+    f = request.files['file']
+    try:
+        mapping = json.loads(request.form.get('mapping', '{}'))
+    except json.JSONDecodeError as exc:
+        raise ValueError('Invalid column mapping') from exc
+    if not isinstance(mapping, dict):
+        raise ValueError('Invalid column mapping')
+    try:
+        header_idx = int(request.form.get('headerRowIndex', 0))
+    except ValueError as exc:
+        raise ValueError('Invalid header row') from exc
+    grid = read_table(f.read(), f.filename)
+    if not grid:
+        raise ValueError('The file appears to be empty.')
+    if header_idx < 0 or header_idx >= len(grid):
+        raise ValueError('Header row is outside the uploaded file')
+    headers = [('' if c is None else str(c)).strip() for c in grid[header_idx]]
+    data_rows = grid[header_idx + 1:]
+    return apply_mapping(headers, data_rows, mapping), data_rows
+
+
+def _fixture_match_payload(fixture):
+    return {
+        'id': fixture.id,
+        'fixture': fixture.fixture,
+        'displayName': (
+            f'{fixture.manufacturer} — {fixture.fixture}'
+            if fixture.manufacturer else fixture.fixture
+        ),
+        'manufacturer': fixture.manufacturer,
+        'channelCount': fixture.channel_count,
+    }
+
+
+@bp.route('/api/patch-sheets/<int:patch_id>/import/matches', methods=['POST'])
+def preview_patch_fixture_matches(patch_id):
+    """Group imported fixture types and rank exact-footprint catalog profiles."""
+    if db.session.get(PatchSheet, patch_id) is None:
+        return jsonify({'error': 'Patch sheet not found'}), 404
+    try:
+        canonical_rows, _ = _canonical_patch_upload()
+        groups = group_fixture_sources(canonical_rows)
+        footprints = sorted({
+            group['channelCount'] for group in groups
+            if group['channelCount'] is not None
+        })
+        by_footprint = {}
+        if footprints:
+            candidates = Fixture.query.filter(
+                Fixture.channel_count.in_(footprints),
+                Fixture.channel_count.between(1, 512),
+                db.or_(Fixture.library_type.is_(None), Fixture.library_type != 'part'),
+            ).all()
+            for fixture in candidates:
+                by_footprint.setdefault(fixture.channel_count, []).append(fixture)
+
+        response_groups = []
+        for group in groups:
+            ranked = rank_fixture_candidates(
+                group['sourceType'], group['channelCount'],
+                by_footprint.get(group['channelCount'], []),
+            )
+            suggestions = []
+            for item in ranked:
+                fixture = db.session.get(Fixture, item['id'])
+                payload = _fixture_match_payload(fixture)
+                payload.update({'exact': item['exact'], 'score': item['score']})
+                suggestions.append(payload)
+            exact_ids = [item['id'] for item in suggestions if item['exact']]
+            response_groups.append({
+                **group,
+                'suggestions': suggestions,
+                'selectedFixtureId': exact_ids[0] if len(exact_ids) == 1 else None,
+            })
+        return jsonify({'groups': response_groups})
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        current_app.logger.exception('Patch fixture matching failed')
+        return jsonify({'error': str(exc)}), 500
+
+
 # Max lengths for PatchRow's bounded string columns (see backend/app/models.py).
 # `notes` is TEXT (unbounded) and int fields (universe/address/end_address/
 # channel_count) are excluded — only string columns can overflow.
@@ -438,19 +526,65 @@ def _fit(value, maxlen):
 @bp.route('/api/patch-sheets/<int:patch_id>/import/commit', methods=['POST'])
 def commit_patch_import(patch_id):
     try:
-        if 'file' not in request.files:
-            return {'error': 'No file uploaded'}, 400
-        f = request.files['file']
-        mapping = json.loads(request.form.get('mapping', '{}'))
-        header_idx = int(request.form.get('headerRowIndex', 0))
-        grid = read_table(f.read(), f.filename)
-        if not grid:
-            return {'error': 'The file appears to be empty.'}, 400
-        headers = [('' if c is None else str(c)).strip()
-                   for c in grid[header_idx]]
-        data_rows = grid[header_idx + 1:]
-        canonical_rows = apply_mapping(headers, data_rows, mapping)
-        for row in canonical_rows:
+        if db.session.get(PatchSheet, patch_id) is None:
+            return jsonify({'error': 'Patch sheet not found'}), 404
+        canonical_rows, data_rows = _canonical_patch_upload()
+        raw_selections = request.form.get('fixtureSelections')
+        selections = json.loads(raw_selections) if raw_selections else {}
+        if not isinstance(selections, dict):
+            raise ValueError('Invalid fixture selections')
+
+        selected_ids = set()
+        for value in selections.values():
+            if value is None:
+                continue
+            try:
+                selected_ids.add(int(value))
+            except (TypeError, ValueError) as exc:
+                raise ValueError('Invalid selected fixture ID') from exc
+        selected_fixtures = {
+            fixture.id: fixture
+            for fixture in Fixture.query.filter(Fixture.id.in_(selected_ids)).all()
+        } if selected_ids else {}
+        if len(selected_fixtures) != len(selected_ids):
+            raise ValueError('A selected fixture profile no longer exists')
+
+        prepared = []
+        matched_rows = 0
+        unmatched_rows = 0
+        for source_row in canonical_rows:
+            row = dict(source_row)
+            source_type = row.get('type')
+            key = fixture_source_key(source_type, row.get('channelCount'))
+            selected_value = selections.get(key)
+            if selected_value is not None:
+                selected = selected_fixtures[int(selected_value)]
+                if (
+                    selected.library_type == 'part'
+                    or not selected.channel_count
+                    or not 1 <= selected.channel_count <= 512
+                ):
+                    raise ValueError(
+                        f'Selected fixture {selected.fixture} is not patchable'
+                    )
+                imported_count = row.get('channelCount')
+                if imported_count is not None and imported_count != selected.channel_count:
+                    raise ValueError(
+                        f'Imported footprint {imported_count} does not match '
+                        f'selected fixture footprint {selected.channel_count}'
+                    )
+                row['type'] = selected.fixture
+                row['channelCount'] = selected.channel_count
+                if row.get('address') is not None:
+                    row['endAddress'] = row['address'] + selected.channel_count - 1
+                matched_rows += 1
+            elif source_type:
+                unmatched_rows += 1
+            prepared.append(row)
+
+        # Validate every selection before adding any row to the session. A bad
+        # profile must not produce a partial import.
+        for row in prepared:
             db.session.add(PatchRow(
                 patch_id=patch_id,
                 set_name=_fit(row.get('set'), _PATCHROW_MAXLEN['set']),
@@ -469,9 +603,16 @@ def commit_patch_import(patch_id):
         db.session.commit()
         non_blank = sum(1 for cells in data_rows
                         if any(c not in (None, '') for c in cells))
-        inserted = len(canonical_rows)
-        return jsonify({'inserted': inserted,
-                        'skipped': max(0, non_blank - inserted)})
+        inserted = len(prepared)
+        return jsonify({
+            'inserted': inserted,
+            'skipped': max(0, non_blank - inserted),
+            'matchedRows': matched_rows,
+            'unmatchedRows': unmatched_rows,
+        })
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
         current_app.logger.exception("Patch import commit failed")
