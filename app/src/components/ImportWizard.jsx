@@ -367,7 +367,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                         <div className="text-xs uppercase tracking-wide text-text-muted mb-1">Closest compatible profiles</div>
                         <div className="flex flex-wrap gap-2">
                           {group.suggestions.map(profile => (
-                            <button key={profile.id} onClick={() => chooseProfile(group, profile)} disabled={customBusy}
+                            <button key={profile.id} onClick={() => chooseProfile(group, profile)} disabled={interactionLocked}
                               aria-label={`Choose ${profileLabel(profile)}`}
                               className="text-xs border border-border hover:border-online rounded px-2 py-1">
                               {profileLabel(profile)} · {profile.channelCount}ch · {Math.round((profile.score || 0) * 100)}%
@@ -378,12 +378,12 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                     )}
 
                     <div className="flex gap-2 mb-2">
-                      <input aria-label={`Search profile for ${group.sourceType}`} value={search.query || ''} disabled={customBusy}
+                      <input aria-label={`Search profile for ${group.sourceType}`} value={search.query || ''} disabled={interactionLocked}
                         onChange={event => updateSearch(group.key, event.target.value)}
                         onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); searchLibrary(group); } }}
                         className="flex-1 min-w-0 bg-surface border border-border rounded px-2 py-1 text-sm"
                         placeholder="Search manufacturer, fixture, or mode" />
-                      <button aria-label={`Search library for ${group.sourceType}`} onClick={() => searchLibrary(group)} disabled={search.busy || customBusy}
+                      <button aria-label={`Search library for ${group.sourceType}`} onClick={() => searchLibrary(group)} disabled={search.busy || interactionLocked}
                         className="px-3 py-1 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">
                         {search.busy ? 'Searching…' : 'Search'}
                       </button>
@@ -398,7 +398,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                             ? 'imported footprint missing'
                             : `footprint mismatch (${group.channelCount}ch imported)`;
                           return (
-                            <button key={profile.id} disabled={!compatible || customBusy} onClick={() => chooseProfile(group, profile)}
+                            <button key={profile.id} disabled={!compatible || interactionLocked} onClick={() => chooseProfile(group, profile)}
                               aria-label={compatible ? `Choose ${label}` : `${label} — ${incompatibility}`}
                               className="w-full text-left px-2 py-1.5 text-xs hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed">
                               {label} · {profile.channelCount}ch{compatible ? '' : ` — ${incompatibility}`}
@@ -409,14 +409,14 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                     )}
 
                     <div className="flex flex-wrap gap-2">
-                      <button onClick={() => toggleCustom(group)} disabled={group.channelCount == null || customBusy}
+                      <button onClick={() => toggleCustom(group)} disabled={group.channelCount == null || interactionLocked}
                         aria-label={group.channelCount == null
                           ? `Cannot add ${group.sourceType}; imported channel count is missing`
                           : `Add ${group.sourceType} to fixture database`}
                         className="text-xs px-2 py-1 border border-border hover:border-online rounded disabled:opacity-40 disabled:cursor-not-allowed">
                         Add to fixture database
                       </button>
-                      <button onClick={() => keepUnmatched(group)} disabled={customBusy}
+                      <button onClick={() => keepUnmatched(group)} disabled={interactionLocked}
                         aria-label={`Keep ${group.sourceType} unmatched`}
                         className="text-xs px-2 py-1 border border-warn/50 text-warn rounded disabled:opacity-40">
                         Import unmatched
@@ -425,16 +425,16 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
 
                     {custom && (
                       <div className="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_2fr_90px_auto] gap-2 p-3 bg-surface rounded border border-border">
-                        <input aria-label="Custom manufacturer" placeholder="Manufacturer" value={custom.manufacturer} disabled={customBusy}
+                        <input aria-label="Custom manufacturer" placeholder="Manufacturer" value={custom.manufacturer} disabled={interactionLocked}
                           onChange={event => updateCustom(group.key, 'manufacturer', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <input aria-label="Custom fixture profile name" value={custom.fixture} disabled={customBusy}
+                        <input aria-label="Custom fixture profile name" value={custom.fixture} disabled={interactionLocked}
                           onChange={event => updateCustom(group.key, 'fixture', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <input aria-label="Custom fixture channel count" type="number" min="1" max="512" value={custom.channelCount} disabled={customBusy}
+                        <input aria-label="Custom fixture channel count" type="number" min="1" max="512" value={custom.channelCount} disabled={interactionLocked}
                           onChange={event => updateCustom(group.key, 'channelCount', event.target.value)}
                           className="bg-bg border border-border rounded px-2 py-1 text-sm" />
-                        <button onClick={() => createCustom(group)} disabled={customBusy}
+                        <button onClick={() => createCustom(group)} disabled={interactionLocked}
                           className="px-3 py-1 bg-online text-bg rounded text-sm disabled:opacity-40">
                           {custom.busy ? 'Creating…' : 'Create and select fixture'}
                         </button>

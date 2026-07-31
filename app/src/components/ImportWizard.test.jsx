@@ -159,8 +159,13 @@ describe('ImportWizard fixture matching', () => {
     await uploadAndReview()
 
     await userEvent.click(screen.getByRole('button', { name: /keep mystery panel unmatched/i }))
+    await userEvent.click(screen.getByRole('button', { name: /add mystery panel to fixture database/i }))
+    const createButton = screen.getByRole('button', { name: /create and select fixture/i })
+    expect(createButton).toBeEnabled()
     await userEvent.click(screen.getByRole('button', { name: /import 3 rows/i }))
     expect(screen.getByRole('button', { name: /close import/i })).toBeDisabled()
+    expect(createButton).toBeDisabled()
+    expect(screen.getByRole('button', { name: /keep mystery panel unmatched/i })).toBeDisabled()
     await userEvent.keyboard('{Escape}')
     expect(onClose).not.toHaveBeenCalled()
 
