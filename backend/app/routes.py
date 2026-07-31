@@ -223,18 +223,59 @@ def list_fixtures():
 def create_fixture():
     try:
         data = request.get_json(force=True)
+        if not isinstance(data, dict):
+            raise ValueError('Fixture payload must be an object')
+        name = str(data.get('fixture') or '').strip()
+        manufacturer = str(data.get('manufacturer') or '').strip() or None
+        if not name:
+            raise ValueError('Fixture name is required')
+        if len(name) > 120:
+            raise ValueError('Fixture name exceeds 120 characters')
+        if manufacturer and len(manufacturer) > 120:
+            raise ValueError('Manufacturer exceeds 120 characters')
+        raw_count = data.get('channelCount')
+        try:
+            channel_count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError('Channel count must be an integer') from exc
+        if not 1 <= channel_count <= 512:
+            raise ValueError('Channel count must be between 1 and 512')
+
         with fixture_catalog_mutation_lock():
+            duplicate_query = Fixture.query.filter(
+                db.func.lower(Fixture.fixture) == name.lower(),
+                Fixture.channel_count == channel_count,
+            )
+            if manufacturer:
+                duplicate_query = duplicate_query.filter(
+                    db.func.lower(Fixture.manufacturer) == manufacturer.lower()
+                )
+            else:
+                duplicate_query = duplicate_query.filter(db.or_(
+                    Fixture.manufacturer.is_(None), Fixture.manufacturer == ''
+                ))
+            duplicate = duplicate_query.first()
+            if duplicate:
+                return jsonify({
+                    'error': 'That fixture profile already exists',
+                    'existing': duplicate.to_dict(),
+                }), 409
+
             f = Fixture(
-                fixture=data.get('fixture', '').strip(),
-                notes=data.get('notes', '').strip(),
-                channel_count=data.get('channelCount', 0),
-                wattage=data.get('wattage', 0),
-                weight=data.get('weight', 0),
-                firmware=data.get('firmware', '').strip()
+                fixture=name,
+                manufacturer=manufacturer,
+                notes=str(data.get('notes') or '').strip(),
+                channel_count=channel_count,
+                wattage=data.get('wattage'),
+                weight=data.get('weight'),
+                firmware=str(data.get('firmware') or '').strip(),
             )
             db.session.add(f)
             db.session.commit()
         return jsonify(f.to_dict()), 201
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except FixtureLibraryBusyError as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 409

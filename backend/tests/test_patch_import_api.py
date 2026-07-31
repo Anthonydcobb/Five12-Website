@@ -76,7 +76,8 @@ def test_match_preview_groups_rows_and_preselects_only_exact_match(client, db):
     assert [item["id"] for item in sky["suggestions"]] == [exact.id, fuzzy.id]
     mystery = groups[1]
     assert mystery["selectedFixtureId"] is None
-    assert mystery["suggestions"] == []
+    assert all(item["channelCount"] == 12 for item in mystery["suggestions"])
+    assert all(item["exact"] is False for item in mystery["suggestions"])
 
 
 def test_commit_rejects_incompatible_selected_footprint_before_writing(client, db):
