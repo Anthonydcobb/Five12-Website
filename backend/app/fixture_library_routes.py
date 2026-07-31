@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import re
 from io import BytesIO
 from urllib.parse import urlsplit
 
@@ -56,7 +57,7 @@ def _bounded_query_args():
     return query, limit, offset
 
 
-def _filtered_fixture_query(patchable=False):
+def _filtered_fixture_query(patchable=False, tokenized=False):
     query_text, limit, offset = _bounded_query_args()
     query = Fixture.query
     if patchable:
@@ -64,14 +65,26 @@ def _filtered_fixture_query(patchable=False):
             or_(Fixture.library_type.is_(None), Fixture.library_type != "part")
         )
     if query_text:
-        escaped = (
-            query_text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        search_terms = (
+            re.findall(r"[a-z0-9]+", query_text.lower())
+            if tokenized else [query_text]
         )
-        pattern = f"%{escaped}%"
-        query = query.filter(or_(
-            Fixture.fixture.ilike(pattern, escape="\\"),
-            Fixture.manufacturer.ilike(pattern, escape="\\"),
-        ))
+        if tokenized and not search_terms:
+            query = query.filter(Fixture.id.is_(None))
+        for term in search_terms:
+            escaped = (
+                term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            pattern = f"%{escaped}%"
+            query = query.filter(or_(
+                Fixture.fixture.ilike(pattern, escape="\\"),
+                Fixture.manufacturer.ilike(pattern, escape="\\"),
+            ))
+        if tokenized:
+            for index, term in enumerate(search_terms[:-1]):
+                if term in {"mode", "personality"}:
+                    mode_pattern = f"%{term}%{search_terms[index + 1]}%"
+                    query = query.filter(Fixture.fixture.ilike(mode_pattern))
     total = query.count()
     fixtures = query.order_by(
         Fixture.manufacturer, Fixture.fixture, Fixture.id
@@ -91,7 +104,9 @@ def list_patchable_fixture_profiles():
     """Search patchable profiles without sending the whole Hog catalog."""
 
     try:
-        fixtures, total, limit, offset = _filtered_fixture_query(patchable=True)
+        fixtures, total, limit, offset = _filtered_fixture_query(
+            patchable=True, tokenized=True
+        )
     except FixtureLibraryError as exc:
         return jsonify({"error": str(exc)}), 400
     items = [

@@ -1,4 +1,5 @@
 import io, json
+import pytest
 from app import db
 from app.models import Show, PatchSheet, PatchRow, Fixture
 from app.patch_import import fixture_source_key
@@ -16,6 +17,20 @@ def test_analyze_returns_mapping_and_preview(client):
         "DMX Addr": "address", "Ch": "channelCount", "Dimmer": None}
     assert body["rowCount"] == 2
     assert body["previewRows"][0]["Fixture Type"] == "PAR64"
+
+
+def test_match_preview_rejects_fractional_channel_count(client, db):
+    pid = _make_patch(db, show_name="T-fractional-count")
+    csv = b"Fixture Type,DMX Addr,Ch\nUnsafe Profile,1,12.5\n"
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/matches",
+        data=_import_data(csv, {
+            "Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount",
+        }),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert "whole number" in resp.get_json()["error"]
 
 
 def _make_patch(db, show_name="T"):
@@ -182,6 +197,22 @@ def test_commit_rejects_selected_profile_that_no_longer_exists(client, db):
     )
     assert resp.status_code == 400
     assert "no longer exists" in resp.get_json()["error"]
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
+
+
+@pytest.mark.parametrize("invalid_id", [True, 1.9, "1"])
+def test_commit_rejects_non_integer_selected_fixture_ids(client, db, invalid_id):
+    pid = _make_patch(db, show_name=f"T-invalid-id-{invalid_id}")
+    csv = b"Fixture Type,DMX Addr,Ch\nUnknown Profile,101,7\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("Unknown Profile", 7)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: invalid_id}),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "Invalid selected fixture ID"
     assert PatchRow.query.filter_by(patch_id=pid).count() == 0
 
 

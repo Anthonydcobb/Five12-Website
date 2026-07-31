@@ -260,6 +260,7 @@ def create_fixture():
             duplicate_query = Fixture.query.filter(
                 db.func.lower(Fixture.fixture) == name.lower(),
                 Fixture.channel_count == channel_count,
+                db.or_(Fixture.library_type.is_(None), Fixture.library_type != 'part'),
             )
             if manufacturer:
                 duplicate_query = duplicate_query.filter(
@@ -594,10 +595,9 @@ def commit_patch_import(patch_id):
         for value in selections.values():
             if value is None:
                 continue
-            try:
-                selected_ids.add(int(value))
-            except (TypeError, ValueError) as exc:
-                raise ValueError('Invalid selected fixture ID') from exc
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError('Invalid selected fixture ID')
+            selected_ids.add(value)
         selected_fixtures = {
             fixture.id: fixture
             for fixture in Fixture.query.filter(Fixture.id.in_(selected_ids)).all()
@@ -616,7 +616,7 @@ def commit_patch_import(patch_id):
             key = fixture_source_key(source_type, row.get('channelCount'))
             selected_value = selections.get(key)
             if selected_value is not None:
-                selected = selected_fixtures[int(selected_value)]
+                selected = selected_fixtures[selected_value]
                 if (
                     selected.library_type == 'part'
                     or not selected.channel_count

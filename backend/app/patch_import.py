@@ -79,7 +79,10 @@ def parse_int(value):
     if s == "" or s.lower() == "nan":
         return None
     try:
-        return int(float(s))
+        number = float(s)
+        if not math.isfinite(number) or not number.is_integer():
+            return None
+        return int(number)
     except (ValueError, TypeError):
         return None
 
@@ -100,6 +103,12 @@ def derive_row(row):
     out = {}
     for k in INT_FIELDS:
         out[k] = parse_int(row.get(k))
+        if (
+            k == "channelCount"
+            and clean_str(row.get(k)) is not None
+            and out[k] is None
+        ):
+            raise ValueError("Channel count must be a whole number")
     for k in STR_FIELDS:
         out[k] = clean_str(row.get(k))
     a, e, c = out.get("address"), out.get("endAddress"), out.get("channelCount")
@@ -138,10 +147,20 @@ def _normalize_fixture_text(value) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def _normalize_fixture_identity(value) -> str:
+    """Normalize benign formatting while preserving numeric mode punctuation."""
+    text = str(value or "").strip().lower()
+    for punctuation, word in ((".", "dot"), ("/", "slash"), ("-", "dash")):
+        text = re.sub(
+            rf"(?<=\d){re.escape(punctuation)}(?=\d)", f" {word} ", text
+        )
+    return normalize_header(text)
+
+
 def fixture_source_key(source_type, channel_count) -> str:
     """Stable key shared by preview and commit for one imported profile shape."""
     footprint = parse_int(channel_count)
-    return f"{_normalize_fixture_text(source_type)}|{footprint if footprint is not None else '?'}"
+    return f"{_normalize_fixture_identity(source_type)}|{footprint if footprint is not None else '?'}"
 
 
 def group_fixture_sources(rows) -> list[dict]:
@@ -182,6 +201,7 @@ def rank_fixture_candidates(source_type, channel_count, candidates, limit=5) -> 
     numbers into the score. Similarity never overrides a supplied footprint.
     """
     source = _normalize_fixture_text(source_type)
+    source_identity = _normalize_fixture_identity(source_type)
     if not source:
         return []
     source_tokens = set(source.split())
@@ -195,7 +215,14 @@ def rank_fixture_candidates(source_type, channel_count, candidates, limit=5) -> 
         name = _normalize_fixture_text(item.get("fixture"))
         manufacturer = _normalize_fixture_text(item.get("manufacturer"))
         full_name = " ".join(piece for piece in (manufacturer, name) if piece)
-        exact = source in {name, full_name}
+        exact = source_identity in {
+            _normalize_fixture_identity(item.get("fixture")),
+            _normalize_fixture_identity(" ".join(
+                piece for piece in (
+                    item.get("manufacturer"), item.get("fixture")
+                ) if piece
+            )),
+        }
         candidate_tokens = set(full_name.split())
         union = source_tokens | candidate_tokens
         token_score = len(source_tokens & candidate_tokens) / len(union) if union else 0.0

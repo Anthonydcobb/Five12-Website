@@ -241,4 +241,32 @@ describe('ImportWizard fixture matching', () => {
       notes: 'Created during patch-sheet import',
     })
   })
+
+  it('recovers duplicate custom creation by selecting the existing patchable profile', async () => {
+    const existing = {
+      id: 45,
+      fixture: 'Mystery Panel',
+      displayName: 'Indie Light Co — Mystery Panel',
+      manufacturer: 'Indie Light Co',
+      channelCount: 12,
+      libraryType: null,
+    }
+    installBaseFetch((url, options) => {
+      if (url === '/api/fixtures' && options.method === 'POST') {
+        return Promise.resolve(response({
+          error: 'That fixture profile already exists', existing,
+        }, false, 409))
+      }
+      return null
+    })
+    render(<ImportWizard patchId={7} onClose={vi.fn()} onImported={vi.fn()} />)
+    await uploadAndReview()
+
+    await userEvent.click(screen.getByRole('button', { name: /add mystery panel to fixture database/i }))
+    await userEvent.type(screen.getByLabelText(/custom manufacturer/i), 'Indie Light Co')
+    await userEvent.click(screen.getByRole('button', { name: /create and select fixture/i }))
+
+    expect(await screen.findByText(/selected: indie light co .* mystery panel/i)).toBeInTheDocument()
+    expect(screen.queryByText(/already exists/i)).not.toBeInTheDocument()
+  })
 })

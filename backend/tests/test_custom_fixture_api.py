@@ -57,3 +57,22 @@ def test_create_custom_fixture_rejects_exact_duplicate(client, db):
     })
     assert resp.status_code == 409
     assert resp.get_json()['existing']['id'] == existing.id
+
+
+def test_create_custom_fixture_does_not_treat_internal_part_as_duplicate(client, db):
+    part = Fixture(
+        manufacturer='Part Test Co',
+        fixture='Emitter Cell',
+        channel_count=6,
+        library_type='part',
+    )
+    db.session.add(part)
+    db.session.commit()
+    resp = client.post('/api/fixtures', json={
+        'manufacturer': 'Part Test Co',
+        'fixture': 'Emitter Cell',
+        'channelCount': 6,
+    })
+    assert resp.status_code == 201
+    assert resp.get_json()['id'] != part.id
+    assert resp.get_json()['libraryType'] is None

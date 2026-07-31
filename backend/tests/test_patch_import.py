@@ -1,3 +1,5 @@
+import pytest
+
 from app.patch_import import (
     normalize_header, guess_field, guess_mapping, detect_header_row, parse_int,
     derive_row, apply_mapping, fixture_source_key, group_fixture_sources,
@@ -48,9 +50,15 @@ def test_detect_header_row_fallback_zero():
 def test_parse_int_handles_floats_and_junk():
     assert parse_int("101") == 101
     assert parse_int(101.0) == 101       # pandas gives floats
+    assert parse_int("12.5") is None
     assert parse_int("") is None
     assert parse_int("n/a") is None
     assert parse_int(None) is None
+
+
+def test_derive_rejects_fractional_channel_count():
+    with pytest.raises(ValueError, match="whole number"):
+        derive_row({"address": "1", "channelCount": "12.5"})
 
 def test_derive_end_from_count():
     r = derive_row({"address": "101", "channelCount": "8"})
@@ -100,6 +108,13 @@ def test_fixture_source_key_normalizes_spelling_but_keeps_footprints_distinct():
         fixture_source_key("ARRI SkyPanel S60-C Mode 6", 18)
 
 
+def test_fixture_source_key_preserves_numeric_mode_punctuation():
+    assert fixture_source_key("Panel Mode 1.2", 12) != \
+        fixture_source_key("Panel Mode 1-2", 12)
+    assert fixture_source_key("Panel Mode 1-2", 12) != \
+        fixture_source_key("Panel Mode 1/2", 12)
+
+
 def test_group_fixture_sources_collapses_repeated_fixture_rows():
     groups = group_fixture_sources([
         {"type": "Vortex8 16b RGBW", "channelCount": 18},
@@ -141,6 +156,16 @@ def test_rank_fixture_candidates_marks_only_normalized_exact_names_exact():
     assert ranked[0]["id"] == 1
     assert ranked[0]["exact"] is True
     assert ranked[1]["exact"] is False
+
+
+def test_rank_fixture_candidates_does_not_auto_exact_distinct_mode_punctuation():
+    candidates = [{
+        "id": 1, "manufacturer": "Test", "fixture": "Panel Mode 1-2",
+        "channelCount": 12,
+    }]
+    ranked = rank_fixture_candidates("Test Panel Mode 1.2", 12, candidates)
+    assert ranked[0]["id"] == 1
+    assert ranked[0]["exact"] is False
 
 
 def test_rank_fixture_candidates_uses_mode_tokens_to_rank_close_names():

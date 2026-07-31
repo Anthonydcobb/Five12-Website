@@ -28,10 +28,12 @@ Add a safe fixture-matching review to patch-sheet import: rank library profiles 
 
 - `backend/app/patch_import.py`
 - `backend/app/routes.py` — fixture CRUD and patch-import sections only; do not touch Claude's reserved network section
+- `backend/app/fixture_library_routes.py` — patch-profile search filtering only
 - `backend/app/models.py` — imported fixture source identity fields only
 - `backend/migrations/versions/f12patchsrc1_preserve_imported_fixture_identity.py`
 - `backend/tests/test_patch_import.py`
 - `backend/tests/test_patch_import_api.py`
+- `backend/tests/test_patch_profile_search.py`
 - focused fixture-create tests if needed
 - `app/src/components/ImportWizard.jsx`
 - `app/src/components/ImportWizard.test.jsx`
@@ -72,11 +74,11 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 | Command | Result | Evidence level |
 |---|---|---|
-| `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `523 passed, 19 warnings` | software verification |
-| `npm test` | `66 passed` | software verification |
+| `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `538 passed, 19 warnings` | software verification |
+| `npm test` | `70 passed` | software verification |
 | `npm run build` | passed; existing chunk-size warning only | software verification |
-| focused backend patch/custom tests | `44 passed` after review hardening | software verification |
-| focused `ImportWizard.test.jsx` | `5 passed` after review hardening | software verification |
+| focused backend patch/custom/search tests | `54 passed` after review hardening | software verification |
+| focused `ImportWizard.test.jsx` | `6 passed` after review hardening | software verification |
 | focused `PatchTab.test.jsx` | `1 passed`; imported identity stays visible | software verification |
 | disposable SQLite Alembic upgrade/downgrade | `f12hoglib001 -> f12patchsrc1 -> f12hoglib001` passed | migration verification |
 | isolated Flask/Vite import bench | preview/review UI exercised; commit API inserted 3 matched rows with correct end addresses | software verification |
@@ -88,7 +90,7 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 No fixture profile is silently substituted on fuzzy similarity. Mode is embedded in Hog profile names rather than stored as a separate field, so similarity ranks text but exact footprint remains the safety boundary.
 
-Review of `a1832f1` found three warnings. All are resolved on the current branch: missing imported footprints cannot select a profile, custom footprint drift is rejected before creation, and booleans/fractional channel counts are rejected. The duplicate-create recovery and stale-search invalidation suggestions were also implemented; dialog semantics, Escape handling, and initial focus were added.
+Review of `a1832f1` found three warnings. Review of `aee93c4` found the same missing-footprint issue plus fractional-count coercion, loose selected-ID coercion, stale search results, internal-part duplicate recovery, real patch-profile search limitations, and punctuation-sensitive mode identity risk. All are resolved on the current branch: missing or malformed imported footprints cannot select a profile; custom footprint drift is rejected before creation; booleans/fractional counts and non-integer selected IDs are rejected; stale searches are invalidated; duplicate recovery cannot choose an internal part; manufacturer/model/mode searches are token-aware; and numeric mode punctuation cannot become an automatic exact match. A frontend duplicate-recovery regression now covers the remaining `2ed9c0b` review suggestion.
 
 ## Handoff / next action
 

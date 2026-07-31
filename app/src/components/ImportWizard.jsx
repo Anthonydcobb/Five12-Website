@@ -28,7 +28,8 @@ function profileLabel(profile) {
 
 function isCompatible(group, profile) {
   return group.channelCount != null
-    && Number(profile.channelCount) === Number(group.channelCount);
+    && Number(profile.channelCount) === Number(group.channelCount)
+    && profile.libraryType !== 'part';
 }
 
 export default function ImportWizard({ patchId, onClose, onImported }) {
