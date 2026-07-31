@@ -409,9 +409,7 @@ export default function PatchTab({
                         ) : (
                           <span className="block select-none text-text">
                             {r[col.key] ?? ''}
-                            {col.key === 'type' && r.importedFixtureType
-                              && (r.importedFixtureType !== r.type
-                                || Number(r.importedChannelCount) !== Number(r.channelCount)) && (
+                            {col.key === 'type' && r.importedFixtureType && (
                               <span className="block text-[10px] text-text-muted whitespace-nowrap"
                                 title="Original patch-sheet fixture identity">
                                 Imported: {r.importedFixtureType} · {r.importedChannelCount ?? '?'}ch

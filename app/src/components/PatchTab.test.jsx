@@ -15,6 +15,11 @@ describe('PatchTab imported fixture traceability', () => {
           type: 'Mystery Panel Mode A', channelCount: 12,
           importedFixtureType: 'Mystery Panel', importedChannelCount: 12,
           location: '', wattage: '', weight: '', firmware: '', notes: '',
+        }, {
+          id: 2, set: '', fixture: '2', universe: 1, address: 201, endAddress: 220,
+          type: 'ARRI SkyPanel S60-C Mode 6', channelCount: 20,
+          importedFixtureType: 'ARRI SkyPanel S60-C Mode 6', importedChannelCount: 20,
+          location: '', wattage: '', weight: '', firmware: '', notes: '',
         }]}
         conflicts={[]}
         onPatch={vi.fn()}
@@ -27,6 +32,7 @@ describe('PatchTab imported fixture traceability', () => {
 
     expect(screen.getByText('Mystery Panel Mode A')).toBeInTheDocument()
     expect(screen.getByText('Imported: Mystery Panel · 12ch')).toBeInTheDocument()
+    expect(screen.getByText('Imported: ARRI SkyPanel S60-C Mode 6 · 20ch')).toBeInTheDocument()
   })
 
   it('returns focus to the Import trigger after closing the wizard', async () => {
