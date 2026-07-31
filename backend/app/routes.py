@@ -586,6 +586,11 @@ def _fit(value, maxlen):
 def commit_patch_import(patch_id):
     catalog_guard = ExitStack()
     try:
+        # Acquire before the session performs any consistent read. On MySQL's
+        # default REPEATABLE READ, even an unrelated pre-lock read would pin a
+        # stale snapshot that survives successful advisory-lock acquisition.
+        catalog_guard.enter_context(fixture_catalog_mutation_lock())
+
         if db.session.get(PatchSheet, patch_id) is None:
             return jsonify({'error': 'Patch sheet not found'}), 404
         canonical_rows, data_rows = _canonical_patch_upload()
@@ -603,10 +608,6 @@ def commit_patch_import(patch_id):
                     'Fixture selections do not match the imported fixture groups; '
                     'review fixture matches again'
                 )
-
-        # Serialize fixture lookup/validation and patch-row commit against every
-        # cooperative catalog mutation, including MySQL multi-process workers.
-        catalog_guard.enter_context(fixture_catalog_mutation_lock())
 
         selected_ids = set()
         selection_bindings = {}

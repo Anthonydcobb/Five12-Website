@@ -189,13 +189,16 @@ def test_commit_rejects_profile_that_changed_after_review(client, db):
     assert PatchRow.query.filter_by(patch_id=pid).count() == 0
 
 
-def test_commit_holds_catalog_lock_through_token_check_and_row_commit(
+def test_commit_acquires_catalog_lock_before_first_read_and_holds_through_commit(
     client, db, monkeypatch,
 ):
     pid = _make_patch(db, show_name="T-selection-lock")
     selected = _fixture(db, "Reviewed Profile", 18, "Vendor")
     binding = _binding(selected)
-    state = {'held': False, 'entered': 0, 'committed': False}
+    state = {
+        'held': False, 'entered': 0, 'first_read_checked': False,
+        'committed': False,
+    }
 
     @contextmanager
     def fake_catalog_lock():
@@ -208,7 +211,13 @@ def test_commit_holds_catalog_lock_through_token_check_and_row_commit(
             state['held'] = False
 
     original_token = Fixture.selection_token
+    original_get = db.session.get
     original_commit = db.session.commit
+
+    def guarded_get(*args, **kwargs):
+        assert state['held'] is True
+        state['first_read_checked'] = True
+        return original_get(*args, **kwargs)
 
     def guarded_token(fixture):
         assert state['held'] is True
@@ -221,6 +230,7 @@ def test_commit_holds_catalog_lock_through_token_check_and_row_commit(
 
     monkeypatch.setattr(routes_module, 'fixture_catalog_mutation_lock', fake_catalog_lock)
     monkeypatch.setattr(Fixture, 'selection_token', guarded_token)
+    monkeypatch.setattr(db.session, 'get', guarded_get)
     monkeypatch.setattr(db.session, 'commit', guarded_commit)
 
     csv = b"Fixture Type,DMX Addr,Ch\nSource Profile,101,18\n"
@@ -233,7 +243,32 @@ def test_commit_holds_catalog_lock_through_token_check_and_row_commit(
     )
 
     assert resp.status_code == 200
-    assert state == {'held': False, 'entered': 1, 'committed': True}
+    assert state == {
+        'held': False, 'entered': 1, 'first_read_checked': True,
+        'committed': True,
+    }
+
+
+def test_commit_returns_409_when_fixture_catalog_lock_is_busy(
+    client, db, monkeypatch,
+):
+    pid = _make_patch(db, show_name="T-selection-lock-busy")
+
+    @contextmanager
+    def busy_catalog_lock():
+        raise routes_module.FixtureLibraryBusyError(
+            'Another fixture-library operation is already running'
+        )
+        yield
+
+    monkeypatch.setattr(
+        routes_module, 'fixture_catalog_mutation_lock', busy_catalog_lock,
+    )
+    resp = client.post(f"/api/patch-sheets/{pid}/import/commit")
+
+    assert resp.status_code == 409
+    assert 'already running' in resp.get_json()['error']
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
 
 
 def test_commit_preserves_explicitly_unmatched_source_type(client, db):
