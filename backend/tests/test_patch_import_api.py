@@ -117,6 +117,8 @@ def test_commit_applies_compatible_selection_and_recomputes_end_address(client, 
     row = PatchRow.query.filter_by(patch_id=pid).one()
     assert row.type == selected.fixture
     assert row.channel_count == 18
+    assert row.imported_fixture_type == "Vortex8 16b RGBW"
+    assert row.imported_channel_count == 18
     assert row.end_address == 118
 
 

@@ -611,6 +611,8 @@ def commit_patch_import(patch_id):
         for source_row in canonical_rows:
             row = dict(source_row)
             source_type = row.get('type')
+            row['importedFixtureType'] = source_type
+            row['importedChannelCount'] = row.get('channelCount')
             key = fixture_source_key(source_type, row.get('channelCount'))
             selected_value = selections.get(key)
             if selected_value is not None:
@@ -655,6 +657,10 @@ def commit_patch_import(patch_id):
                 end_address=row.get('endAddress'),
                 type=_fit(row.get('type'), _PATCHROW_MAXLEN['type']),
                 channel_count=row.get('channelCount'),
+                imported_fixture_type=_fit(
+                    row.get('importedFixtureType'), _PATCHROW_MAXLEN['type']
+                ),
+                imported_channel_count=row.get('importedChannelCount'),
                 location=_fit(row.get('location'), _PATCHROW_MAXLEN['location']),
                 wattage=_fit(row.get('wattage'), _PATCHROW_MAXLEN['wattage']),
                 weight=_fit(row.get('weight'), _PATCHROW_MAXLEN['weight']),

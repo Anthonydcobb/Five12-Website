@@ -28,12 +28,15 @@ Add a safe fixture-matching review to patch-sheet import: rank library profiles 
 
 - `backend/app/patch_import.py`
 - `backend/app/routes.py` — fixture CRUD and patch-import sections only; do not touch Claude's reserved network section
+- `backend/app/models.py` — imported fixture source identity fields only
+- `backend/migrations/versions/f12patchsrc1_preserve_imported_fixture_identity.py`
 - `backend/tests/test_patch_import.py`
 - `backend/tests/test_patch_import_api.py`
 - focused fixture-create tests if needed
 - `app/src/components/ImportWizard.jsx`
 - `app/src/components/ImportWizard.test.jsx`
-- `app/src/components/PatchTab.jsx` — import completion message only
+- `app/src/components/PatchTab.jsx` — import completion message and original-source display only
+- `app/src/components/PatchTab.test.jsx`
 - `app/src/pages/Database.jsx` — preserve the existing add-blank-draft workflow explicitly
 - `app/src/pages/Database.test.jsx` if focused regression coverage is needed
 - this active record and linked plan
@@ -74,6 +77,9 @@ This first iteration keeps matching as an import-time review instead of adding a
 | `npm run build` | passed; existing chunk-size warning only | software verification |
 | focused backend patch/custom tests | `44 passed` after review hardening | software verification |
 | focused `ImportWizard.test.jsx` | `5 passed` after review hardening | software verification |
+| focused `PatchTab.test.jsx` | `1 passed`; imported identity stays visible | software verification |
+| disposable SQLite Alembic upgrade/downgrade | `f12hoglib001 -> f12patchsrc1 -> f12hoglib001` passed | migration verification |
+| isolated Flask/Vite import bench | preview/review UI exercised; commit API inserted 3 matched rows with correct end addresses | software verification |
 | `git diff --check` | clean before hardening commit | software verification |
 
 ## Commits
