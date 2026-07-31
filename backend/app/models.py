@@ -1,5 +1,7 @@
 # backend/app/models.py
 from datetime import datetime, timezone
+import hashlib
+import json
 
 from sqlalchemy.dialects import mysql
 
@@ -49,6 +51,22 @@ class Fixture(db.Model):
     library_source = db.Column(db.String(50), nullable=True, index=True)
     library_version = db.Column(db.String(32), nullable=True, index=True)
 
+    def selection_token(self):
+        """Digest the profile fields that define an operator's selection."""
+        payload = [
+            self.id,
+            self.manufacturer,
+            self.fixture,
+            self.channel_count,
+            self.library_type,
+            self.hog_uuid,
+            self.revision_id,
+        ]
+        encoded = json.dumps(
+            payload, ensure_ascii=False, separators=(',', ':'),
+        ).encode('utf-8')
+        return hashlib.sha256(encoded).hexdigest()
+
     def to_dict(self):
         display_name = (
             f'{self.manufacturer} — {self.fixture}'
@@ -79,6 +97,7 @@ class Fixture(db.Model):
             'libraryVersion': self.library_version,
             'isPatchable': unsupported_reason is None,
             'unsupportedReason': unsupported_reason,
+            'selectionToken': self.selection_token(),
         }
 
 

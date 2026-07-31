@@ -19,9 +19,10 @@ def test_analyze_returns_mapping_and_preview(client):
     assert body["previewRows"][0]["Fixture Type"] == "PAR64"
 
 
-def test_match_preview_rejects_fractional_channel_count(client, db):
-    pid = _make_patch(db, show_name="T-fractional-count")
-    csv = b"Fixture Type,DMX Addr,Ch\nUnsafe Profile,1,12.5\n"
+@pytest.mark.parametrize('bad_count', ['12.5', '12.0000000000000001'])
+def test_match_preview_rejects_fractional_channel_count(client, db, bad_count):
+    pid = _make_patch(db, show_name=f"T-fractional-count-{bad_count}")
+    csv = f"Fixture Type,DMX Addr,Ch\nUnsafe Profile,1,{bad_count}\n".encode()
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/matches",
         data=_import_data(csv, {
@@ -65,6 +66,10 @@ def _fixture(db, name, count, manufacturer=None):
     return fixture
 
 
+def _binding(fixture):
+    return {'id': fixture.id, 'token': fixture.selection_token()}
+
+
 def test_match_preview_groups_rows_and_preselects_only_exact_match(client, db):
     pid = _make_patch(db, show_name="T-match-preview")
     exact = _fixture(db, "SkyPanel S60-C Mode 6", 20, "ARRI")
@@ -88,6 +93,7 @@ def test_match_preview_groups_rows_and_preselects_only_exact_match(client, db):
     sky = groups[0]
     assert sky["rowCount"] == 2
     assert sky["selectedFixtureId"] == exact.id
+    assert sky["suggestions"][0]["selectionToken"] == exact.selection_token()
     assert [item["id"] for item in sky["suggestions"]] == [exact.id, fuzzy.id]
     mystery = groups[1]
     assert mystery["selectedFixtureId"] is None
@@ -103,7 +109,7 @@ def test_commit_rejects_incompatible_selected_footprint_before_writing(client, d
     key = fixture_source_key("ARRI S60 Mode 6", 20)
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/commit",
-        data=_import_data(csv, mapping, {key: wrong.id}),
+        data=_import_data(csv, mapping, {key: _binding(wrong)}),
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
@@ -145,7 +151,7 @@ def test_commit_applies_compatible_selection_and_recomputes_end_address(client, 
     key = fixture_source_key("Vortex8 16b RGBW", 18)
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/commit",
-        data=_import_data(csv, mapping, {key: selected.id}),
+        data=_import_data(csv, mapping, {key: _binding(selected)}),
         content_type="multipart/form-data",
     )
     assert resp.status_code == 200
@@ -158,6 +164,27 @@ def test_commit_applies_compatible_selection_and_recomputes_end_address(client, 
     assert row.imported_fixture_type == "Vortex8 16b RGBW"
     assert row.imported_channel_count == 18
     assert row.end_address == 118
+
+
+def test_commit_rejects_profile_that_changed_after_review(client, db):
+    pid = _make_patch(db, show_name="T-changed-selection")
+    selected = _fixture(db, "Reviewed Profile", 18, "Vendor")
+    reviewed_binding = _binding(selected)
+    selected.fixture = "Different Unreviewed Profile"
+    db.session.commit()
+
+    csv = b"Fixture Type,DMX Addr,Ch\nSource Profile,101,18\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    key = fixture_source_key("Source Profile", 18)
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, {key: reviewed_binding}),
+        content_type="multipart/form-data",
+    )
+
+    assert resp.status_code == 400
+    assert "changed after review" in resp.get_json()["error"]
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
 
 
 def test_commit_preserves_explicitly_unmatched_source_type(client, db):
@@ -183,7 +210,7 @@ def test_commit_rejects_selection_when_sheet_omits_channel_count(client, db):
     key = fixture_source_key("Unknown Profile", None)
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/commit",
-        data=_import_data(csv, mapping, {key: selected.id}),
+        data=_import_data(csv, mapping, {key: _binding(selected)}),
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
@@ -215,7 +242,9 @@ def test_commit_rejects_selected_profile_that_no_longer_exists(client, db):
     key = fixture_source_key("Unknown Profile", 7)
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/commit",
-        data=_import_data(csv, mapping, {key: 999999}),
+        data=_import_data(csv, mapping, {
+            key: {'id': 999999, 'token': '0' * 64},
+        }),
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400
@@ -231,7 +260,9 @@ def test_commit_rejects_non_integer_selected_fixture_ids(client, db, invalid_id)
     key = fixture_source_key("Unknown Profile", 7)
     resp = client.post(
         f"/api/patch-sheets/{pid}/import/commit",
-        data=_import_data(csv, mapping, {key: invalid_id}),
+        data=_import_data(csv, mapping, {
+            key: {'id': invalid_id, 'token': '0' * 64},
+        }),
         content_type="multipart/form-data",
     )
     assert resp.status_code == 400

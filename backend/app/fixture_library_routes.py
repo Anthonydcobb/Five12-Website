@@ -124,6 +124,7 @@ def list_patchable_fixture_profiles():
             "notes": fixture.notes,
             "manufacturer": fixture.manufacturer,
             "libraryType": fixture.library_type,
+            "selectionToken": fixture.selection_token(),
             "isPatchable": True,
             "unsupportedReason": None,
         }

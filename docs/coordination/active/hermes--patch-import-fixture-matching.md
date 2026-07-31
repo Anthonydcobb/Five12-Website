@@ -74,10 +74,10 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 | Command | Result | Evidence level |
 |---|---|---|
-| `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `542 passed, 19 warnings` | software verification |
+| `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `544 passed, 19 warnings` | software verification |
 | `npm test` | `74 passed` | software verification |
 | `npm run build` | passed; existing chunk-size warning only | software verification |
-| focused backend patch/custom/search tests | `58 passed` after review hardening | software verification |
+| focused backend patch/custom/search tests | `60 passed` after review hardening | software verification |
 | focused `ImportWizard.test.jsx` | `9 passed` after review hardening | software verification |
 | focused `PatchTab.test.jsx` | `2 passed`; imported identity display and focus restoration | software verification |
 | disposable SQLite Alembic upgrade/downgrade | `f12hoglib001 -> f12patchsrc1 -> f12hoglib001` passed; source identity is SQL `TEXT` | migration verification |
@@ -90,7 +90,7 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 No fixture profile is silently substituted on fuzzy similarity. Mode is embedded in Hog profile names rather than stored as a separate field, so similarity ranks text but exact footprint remains the safety boundary.
 
-Review iterations found missing-footprint selection, fractional-count and ID coercion, stale searches, unsafe duplicate recovery, real search limitations, punctuation-sensitive identity collisions, dismissible in-flight mutations, source-identity truncation, and a mapping/review race. All are resolved on the current branch: missing or malformed imported footprints cannot select a profile; custom footprint drift is rejected before creation; booleans/fractional counts and non-integer selected IDs are rejected; stale searches are invalidated; duplicate recovery cannot choose an internal part; manufacturer/model/mode searches are token-aware; group keys and automatic exact matches preserve all punctuation while fuzzy ranking remains loose; mappings are locked during review; commit rejects missing, stale, or unknown selection keys; mutation controls and dismissal remain locked until completion; and the full imported fixture identity is stored as SQL `TEXT`. Duplicate recovery, mapping locking, server key-set validation, mutation locking, focus trapping, and trigger-focus restoration have regressions.
+Review iterations found missing-footprint selection, fractional-count and ID coercion, stale searches, unsafe duplicate recovery, real search limitations, punctuation-sensitive identity collisions, dismissible or competing mutations, source-identity truncation, mapping/review races, unbound catalog-profile identities, and binary-float precision loss. All are resolved on the current branch: imported counts use exact decimal parsing; missing or malformed footprints cannot select a profile; selected IDs are bound to digests of the reviewed profile identity and footprint and commit rejects catalog drift; custom footprint drift is rejected; stale searches are invalidated; duplicate recovery cannot choose an internal part; search is token-aware; group keys and exact matches preserve punctuation while fuzzy ranking remains loose; mappings and workflow mutations are locked appropriately; commit enforces exact source-group keys; and full imported identity is stored as SQL `TEXT`. These safety boundaries have backend and frontend regressions, and asynchronous group errors use alert semantics.
 
 ## Handoff / next action
 

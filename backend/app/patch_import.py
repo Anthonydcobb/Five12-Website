@@ -3,6 +3,7 @@ alias matching, mapping and address derivation. No Flask/DB dependencies."""
 import json
 import math
 import re
+from decimal import Decimal, InvalidOperation
 from difflib import SequenceMatcher
 from io import BytesIO
 import pandas as pd
@@ -80,11 +81,11 @@ def parse_int(value):
     if s == "" or s.lower() == "nan":
         return None
     try:
-        number = float(s)
-        if not math.isfinite(number) or not number.is_integer():
+        number = Decimal(s)
+        if not number.is_finite() or number != number.to_integral_value():
             return None
         return int(number)
-    except (ValueError, TypeError):
+    except (InvalidOperation, ValueError, TypeError):
         return None
 
 

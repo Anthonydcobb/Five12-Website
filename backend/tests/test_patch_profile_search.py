@@ -30,6 +30,8 @@ def test_patch_profile_search_matches_tokens_across_manufacturer_and_name(client
     body = resp.get_json()
     ids = {item['id'] for item in body['items']}
     assert profile.id in ids
+    selected_item = next(item for item in body['items'] if item['id'] == profile.id)
+    assert selected_item['selectionToken'] == profile.selection_token()
     assert part.id not in ids
     assert all('Mode 6' in item['fixture'] for item in body['items'])
 

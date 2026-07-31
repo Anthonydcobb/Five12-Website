@@ -508,6 +508,7 @@ def _fixture_match_payload(fixture):
         ),
         'manufacturer': fixture.manufacturer,
         'channelCount': fixture.channel_count,
+        'selectionToken': fixture.selection_token(),
     }
 
 
@@ -602,18 +603,35 @@ def commit_patch_import(patch_id):
                 )
 
         selected_ids = set()
-        for value in selections.values():
+        selection_bindings = {}
+        for key, value in selections.items():
             if value is None:
                 continue
-            if isinstance(value, bool) or not isinstance(value, int):
+            if not isinstance(value, dict) or set(value) != {'id', 'token'}:
+                raise ValueError('Invalid selected fixture binding')
+            fixture_id = value.get('id')
+            token = value.get('token')
+            if isinstance(fixture_id, bool) or not isinstance(fixture_id, int):
                 raise ValueError('Invalid selected fixture ID')
-            selected_ids.add(value)
+            if (
+                not isinstance(token, str)
+                or re.fullmatch(r'[0-9a-f]{64}', token) is None
+            ):
+                raise ValueError('Invalid selected fixture binding')
+            selected_ids.add(fixture_id)
+            selection_bindings[key] = (fixture_id, token)
         selected_fixtures = {
             fixture.id: fixture
             for fixture in Fixture.query.filter(Fixture.id.in_(selected_ids)).all()
         } if selected_ids else {}
         if len(selected_fixtures) != len(selected_ids):
             raise ValueError('A selected fixture profile no longer exists')
+        for fixture_id, token in selection_bindings.values():
+            if selected_fixtures[fixture_id].selection_token() != token:
+                raise ValueError(
+                    'A selected fixture profile changed after review; '
+                    'review fixture matches again'
+                )
 
         prepared = []
         matched_rows = 0
@@ -624,9 +642,9 @@ def commit_patch_import(patch_id):
             row['importedFixtureType'] = source_type
             row['importedChannelCount'] = row.get('channelCount')
             key = fixture_source_key(source_type, row.get('channelCount'))
-            selected_value = selections.get(key)
+            selected_value = selection_bindings.get(key)
             if selected_value is not None:
-                selected = selected_fixtures[selected_value]
+                selected = selected_fixtures[selected_value[0]]
                 if (
                     selected.library_type == 'part'
                     or not selected.channel_count

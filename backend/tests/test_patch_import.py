@@ -51,6 +51,8 @@ def test_parse_int_handles_floats_and_junk():
     assert parse_int("101") == 101
     assert parse_int(101.0) == 101       # pandas gives floats
     assert parse_int("12.5") is None
+    assert parse_int("12.0000000000000001") is None
+    assert parse_int("9007199254740993") == 9007199254740993
     assert parse_int("") is None
     assert parse_int("n/a") is None
     assert parse_int(None) is None

@@ -101,8 +101,10 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
       const nextProfiles = {};
       const nextSearches = {};
       nextGroups.forEach((group) => {
-        nextSelections[group.key] = group.selectedFixtureId ?? null;
         const selected = group.suggestions?.find(item => item.id === group.selectedFixtureId);
+        nextSelections[group.key] = selected
+          ? { id: selected.id, token: selected.selectionToken }
+          : null;
         if (selected) nextProfiles[group.key] = selected;
         nextSearches[group.key] = { query: group.sourceType, results: [], busy: false, error: null };
       });
@@ -119,7 +121,14 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
 
   const chooseProfile = (group, profile) => {
     if (!isCompatible(group, profile)) return;
-    setSelections(current => ({ ...current, [group.key]: profile.id }));
+    if (!profile.selectionToken) {
+      setError('The selected profile has no review identity. Review fixture matches again.');
+      return;
+    }
+    setSelections(current => ({
+      ...current,
+      [group.key]: { id: profile.id, token: profile.selectionToken },
+    }));
     setSelectedProfiles(current => ({ ...current, [group.key]: profile }));
     setUnmatchedAcknowledged(current => ({ ...current, [group.key]: false }));
   };
@@ -388,7 +397,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                         {search.busy ? 'Searching…' : 'Search'}
                       </button>
                     </div>
-                    {search.error && <div className="text-xs text-brand-hi mb-2">{search.error}</div>}
+                    {search.error && <div role="alert" className="text-xs text-brand-hi mb-2">{search.error}</div>}
                     {search.results?.length > 0 && (
                       <div className="max-h-36 overflow-auto border border-border rounded mb-3 divide-y divide-border">
                         {search.results.map(profile => {
@@ -438,7 +447,7 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                           className="px-3 py-1 bg-online text-bg rounded text-sm disabled:opacity-40">
                           {custom.busy ? 'Creating…' : 'Create and select fixture'}
                         </button>
-                        {custom.error && <div className="sm:col-span-4 text-xs text-brand-hi">{custom.error}</div>}
+                        {custom.error && <div role="alert" className="sm:col-span-4 text-xs text-brand-hi">{custom.error}</div>}
                       </div>
                     )}
                   </section>

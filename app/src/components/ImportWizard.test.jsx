@@ -29,6 +29,8 @@ const analysis = {
   previewRows: [{ 'Fixture Type': 'ARRI SkyPanel S60-C Mode 6', 'DMX Addr': 1, Ch: 20 }],
 }
 
+const SELECTION_TOKEN = 'a'.repeat(64)
+
 const exactProfile = {
   id: 1,
   fixture: 'SkyPanel S60-C Mode 6',
@@ -37,6 +39,7 @@ const exactProfile = {
   channelCount: 20,
   exact: true,
   score: 1,
+  selectionToken: SELECTION_TOKEN,
 }
 
 const matchGroups = [
@@ -118,7 +121,7 @@ describe('ImportWizard fixture matching', () => {
     }))
     const commitCall = global.fetch.mock.calls.find(([url]) => url.endsWith('/import/commit'))
     expect(JSON.parse(commitCall[1].body.get('fixtureSelections'))).toEqual({
-      '["arri skypanel s60-c mode 6",20]': 1,
+      '["arri skypanel s60-c mode 6",20]': { id: 1, token: SELECTION_TOKEN },
       '["mystery panel",12]': null,
     })
   })
@@ -181,6 +184,7 @@ describe('ImportWizard fixture matching', () => {
       displayName: 'Vendor — Mystery Panel Mode A',
       manufacturer: 'Vendor',
       channelCount: 12,
+      selectionToken: SELECTION_TOKEN,
     }
     const incompatible = { ...compatible, id: 9, fixture: 'Mystery Panel Mode B', channelCount: 10,
       displayName: 'Vendor — Mystery Panel Mode B' }
@@ -265,6 +269,7 @@ describe('ImportWizard fixture matching', () => {
       manufacturer: 'Indie Light Co',
       channelCount: 12,
       librarySource: null,
+      selectionToken: SELECTION_TOKEN,
     }
     installBaseFetch((url, options) => {
       if (url === '/api/fixtures' && options.method === 'POST') {
@@ -322,6 +327,7 @@ describe('ImportWizard fixture matching', () => {
     pending.resolve(response({
       id: 46, fixture: 'Mystery Panel', displayName: 'Mystery Panel',
       manufacturer: '', channelCount: 12, libraryType: null,
+      selectionToken: SELECTION_TOKEN,
     }, true, 201))
     expect(await screen.findByText(/selected: mystery panel/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /close import/i })).toBeEnabled()
@@ -335,6 +341,7 @@ describe('ImportWizard fixture matching', () => {
       manufacturer: 'Indie Light Co',
       channelCount: 12,
       libraryType: null,
+      selectionToken: SELECTION_TOKEN,
     }
     installBaseFetch((url, options) => {
       if (url === '/api/fixtures' && options.method === 'POST') {
