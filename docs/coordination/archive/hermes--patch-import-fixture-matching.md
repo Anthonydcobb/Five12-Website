@@ -4,7 +4,7 @@
 - **Branch:** `feat/hermes/patch-import-fixture-matching`
 - **Workspace:** `/root/five12-worktrees/hermes-patch-import-fixture-matching`
 - **Base SHA:** `57bd29bd6a6261745b42db3a8d2a0423b4e62a21`
-- **Status:** active
+- **Status:** completed; accepted for integration
 - **Last updated:** 2026-07-31
 
 ## Goal
@@ -13,16 +13,16 @@ Add a safe fixture-matching review to patch-sheet import: rank library profiles 
 
 ## Acceptance criteria
 
-- [ ] Import mapping is followed by a fixture review grouped by unique imported fixture type and channel count.
-- [ ] Exact normalized library matches may be preselected; fuzzy suggestions require operator choice.
-- [ ] Suggestions and manual selections require an exact channel count when the sheet provides one.
-- [ ] The operator can search the patchable fixture catalog and choose a different compatible profile.
-- [ ] The operator can create a validated custom fixture and immediately select it.
-- [ ] Unmatched imported types remain visibly identified and can be intentionally imported unchanged.
-- [ ] Commit validates all client selections server-side and returns matched/unmatched counts.
-- [ ] Existing import behavior remains compatible when no selections are supplied.
-- [ ] Focused backend/frontend tests, complete suites, build, and diff checks pass.
-- [ ] Independent exact-head review has no Critical or Warning findings before integration.
+- [x] Import mapping is followed by a fixture review grouped by unique imported fixture type and channel count.
+- [x] Exact normalized library matches may be preselected; fuzzy suggestions require operator choice.
+- [x] Suggestions and manual selections require an exact channel count when the sheet provides one.
+- [x] The operator can search the patchable fixture catalog and choose a different compatible profile.
+- [x] The operator can create a validated custom fixture and immediately select it.
+- [x] Unmatched imported types remain visibly identified and can be intentionally imported unchanged.
+- [x] Commit validates all client selections server-side and returns matched/unmatched counts.
+- [x] Existing import behavior remains compatible when no selections are supplied.
+- [x] Focused backend/frontend tests, complete suites, build, and diff checks pass.
+- [x] Independent exact-head review has no Critical or Warning findings before integration.
 
 ## Reserved paths
 
@@ -86,6 +86,9 @@ This first iteration keeps matching as an import-time review instead of adding a
 
 ## Commits
 
+- Accepted code head: `afc5f6af2427ba28e2a434209aa2c5263bdc0dcd`
+- Independent exact-head gate: no Critical, Warning, or Suggestion findings.
+
 ## Risks and skipped checks
 
 No fixture profile is silently substituted on fuzzy similarity. Mode is embedded in Hog profile names rather than stored as a separate field, so similarity ranks text but exact footprint remains the safety boundary.
@@ -94,4 +97,4 @@ Review iterations found missing-footprint selection, fractional-count and ID coe
 
 ## Handoff / next action
 
-Implement test-first, verify, push, and request independent exact-head review.
+Accepted for integration after the exact-head gate. On the Windows checkout after the `main` merge, pull `main`, run the Alembic upgrade, and browser-test import review, explicit unmatched import, manual compatible-profile selection, and custom-fixture creation on a disposable patch sheet.
