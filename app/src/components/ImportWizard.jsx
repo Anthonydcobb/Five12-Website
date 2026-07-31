@@ -27,7 +27,8 @@ function profileLabel(profile) {
 }
 
 function isCompatible(group, profile) {
-  return group.channelCount == null || Number(profile.channelCount) === Number(group.channelCount);
+  return group.channelCount != null
+    && Number(profile.channelCount) === Number(group.channelCount);
 }
 
 export default function ImportWizard({ patchId, onClose, onImported }) {
@@ -121,9 +122,10 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
   };
 
   const updateSearch = (key, query) => {
+    searchGeneration.current[key] = (searchGeneration.current[key] || 0) + 1;
     setSearches(current => ({
       ...current,
-      [key]: { ...(current[key] || {}), query, error: null },
+      [key]: { ...(current[key] || {}), query, results: [], busy: false, error: null },
     }));
   };
 
@@ -230,14 +232,16 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
     selections[group.key] != null || unmatchedAcknowledged[group.key]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-surface border border-border rounded-lg p-6 w-[min(94vw,980px)] max-h-[88vh] overflow-auto shadow-xl">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50"
+      onKeyDown={event => { if (event.key === 'Escape' && !busy) onClose(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="patch-import-title"
+        className="bg-surface border border-border rounded-lg p-6 w-[min(94vw,980px)] max-h-[88vh] overflow-auto shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-lg font-semibold">Import Patch Sheet</h3>
+            <h3 id="patch-import-title" className="text-lg font-semibold">Import Patch Sheet</h3>
             {analysis && <p className="text-xs text-text-muted mt-1">Map columns → Match fixtures → Import</p>}
           </div>
-          <button aria-label="Close import" onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
+          <button autoFocus aria-label="Close import" onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
         </div>
 
         {error && (
@@ -350,11 +354,14 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                         {search.results.map(profile => {
                           const compatible = isCompatible(group, profile);
                           const label = profileLabel(profile);
+                          const incompatibility = group.channelCount == null
+                            ? 'imported footprint missing'
+                            : `footprint mismatch (${group.channelCount}ch imported)`;
                           return (
                             <button key={profile.id} disabled={!compatible} onClick={() => chooseProfile(group, profile)}
-                              aria-label={compatible ? `Choose ${label}` : `${label} — footprint mismatch`}
+                              aria-label={compatible ? `Choose ${label}` : `${label} — ${incompatibility}`}
                               className="w-full text-left px-2 py-1.5 text-xs hover:bg-surface-2 disabled:opacity-40 disabled:cursor-not-allowed">
-                              {label} · {profile.channelCount}ch{compatible ? '' : ` — footprint mismatch (${group.channelCount}ch imported)`}
+                              {label} · {profile.channelCount}ch{compatible ? '' : ` — ${incompatibility}`}
                             </button>
                           );
                         })}
@@ -362,8 +369,11 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                     )}
 
                     <div className="flex flex-wrap gap-2">
-                      <button onClick={() => toggleCustom(group)} aria-label={`Add ${group.sourceType} to fixture database`}
-                        className="text-xs px-2 py-1 border border-border hover:border-online rounded">
+                      <button onClick={() => toggleCustom(group)} disabled={group.channelCount == null}
+                        aria-label={group.channelCount == null
+                          ? `Cannot add ${group.sourceType}; imported channel count is missing`
+                          : `Add ${group.sourceType} to fixture database`}
+                        className="text-xs px-2 py-1 border border-border hover:border-online rounded disabled:opacity-40 disabled:cursor-not-allowed">
                         Add to fixture database
                       </button>
                       <button onClick={() => keepUnmatched(group)} aria-label={`Keep ${group.sourceType} unmatched`}

@@ -72,8 +72,8 @@ This first iteration keeps matching as an import-time review instead of adding a
 | `/root/five12-website/.venv/bin/python -m pytest -q backend/tests` | `523 passed, 19 warnings` | software verification |
 | `npm test` | `66 passed` | software verification |
 | `npm run build` | passed; existing chunk-size warning only | software verification |
-| focused backend patch/custom tests | `43 passed` after hardening additions | software verification |
-| focused `ImportWizard.test.jsx` | `3 passed` | software verification |
+| focused backend patch/custom tests | `44 passed` after review hardening | software verification |
+| focused `ImportWizard.test.jsx` | `5 passed` after review hardening | software verification |
 | `git diff --check` | clean before hardening commit | software verification |
 
 ## Commits
@@ -81,6 +81,8 @@ This first iteration keeps matching as an import-time review instead of adding a
 ## Risks and skipped checks
 
 No fixture profile is silently substituted on fuzzy similarity. Mode is embedded in Hog profile names rather than stored as a separate field, so similarity ranks text but exact footprint remains the safety boundary.
+
+Review of `a1832f1` found three warnings. All are resolved on the current branch: missing imported footprints cannot select a profile, custom footprint drift is rejected before creation, and booleans/fractional channel counts are rejected. The duplicate-create recovery and stale-search invalidation suggestions were also implemented; dialog semantics, Escape handling, and initial focus were added.
 
 ## Handoff / next action
 

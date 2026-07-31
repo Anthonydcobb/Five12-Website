@@ -624,7 +624,12 @@ def commit_patch_import(patch_id):
                         f'Selected fixture {selected.fixture} is not patchable'
                     )
                 imported_count = row.get('channelCount')
-                if imported_count is not None and imported_count != selected.channel_count:
+                if imported_count is None:
+                    raise ValueError(
+                        'Cannot select a fixture profile when the imported '
+                        'channel count is missing'
+                    )
+                if imported_count != selected.channel_count:
                     raise ValueError(
                         f'Imported footprint {imported_count} does not match '
                         f'selected fixture footprint {selected.channel_count}'

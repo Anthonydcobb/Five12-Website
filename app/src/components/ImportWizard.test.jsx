@@ -11,6 +11,12 @@ function response(data, ok = true, status = 200) {
   }
 }
 
+function deferred() {
+  let resolve
+  const promise = new Promise(resolvePromise => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
 const analysis = {
   rowCount: 3,
   headerRowIndex: 0,
@@ -52,11 +58,11 @@ const matchGroups = [
   },
 ]
 
-function installBaseFetch(extraHandler = null) {
+function installBaseFetch(extraHandler = null, groups = matchGroups) {
   global.fetch = vi.fn((url, options = {}) => {
     if (url === '/api/patch-sheets/7/import/analyze') return Promise.resolve(response(analysis))
     if (url === '/api/patch-sheets/7/import/matches') {
-      return Promise.resolve(response({ groups: matchGroups }))
+      return Promise.resolve(response({ groups }))
     }
     if (extraHandler) {
       const handled = extraHandler(url, options)
@@ -69,7 +75,7 @@ function installBaseFetch(extraHandler = null) {
   })
 }
 
-async function uploadAndReview() {
+async function uploadAndReview(expectedFixture = 'ARRI SkyPanel S60-C Mode 6') {
   const file = new File(
     ['Fixture Type,DMX Addr,Ch\nARRI SkyPanel S60-C Mode 6,1,20\n'],
     'patch.csv',
@@ -78,7 +84,7 @@ async function uploadAndReview() {
   await userEvent.upload(screen.getByLabelText(/choose an .*patch sheet/i), file)
   expect(await screen.findByText(/3 rows .* header row 1/i)).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: /review fixture matches/i }))
-  expect(await screen.findByText('ARRI SkyPanel S60-C Mode 6')).toBeInTheDocument()
+  expect(await screen.findByText(expectedFixture)).toBeInTheDocument()
 }
 
 afterEach(() => {
@@ -142,6 +148,57 @@ describe('ImportWizard fixture matching', () => {
     expect(badButton).toBeDisabled()
     await userEvent.click(goodButton)
     expect(screen.getByText(/selected: vendor .* mystery panel mode a/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /import 3 rows/i })).toBeEnabled()
+  })
+
+  it('does not show an old search response after the operator changes the query', async () => {
+    const pending = deferred()
+    installBaseFetch((url) => {
+      if (url.startsWith('/api/fixture-library/patch-profiles?')) return pending.promise
+      return null
+    })
+    render(<ImportWizard patchId={7} onClose={vi.fn()} onImported={vi.fn()} />)
+    await uploadAndReview()
+
+    const search = screen.getByLabelText(/search profile for mystery panel/i)
+    await userEvent.click(screen.getByRole('button', { name: /search library for mystery panel/i }))
+    await userEvent.clear(search)
+    await userEvent.type(search, 'new query')
+    pending.resolve(response({ items: [{
+      id: 99, fixture: 'Old Result', displayName: 'Vendor — Old Result', channelCount: 12,
+    }] }))
+
+    await waitFor(() => expect(search).toHaveValue('new query'))
+    expect(screen.queryByText(/vendor .* old result/i)).not.toBeInTheDocument()
+  })
+
+  it('keeps profiles with a missing imported footprint unmatched', async () => {
+    const noFootprintGroups = [{
+      key: 'unknown profile|?', sourceType: 'Unknown Profile', channelCount: null,
+      rowCount: 1, suggestions: [], selectedFixtureId: null,
+    }]
+    const candidate = {
+      id: 81, fixture: 'Unknown Profile', displayName: 'Vendor — Unknown Profile',
+      manufacturer: 'Vendor', channelCount: 12,
+    }
+    installBaseFetch((url) => {
+      if (url.startsWith('/api/fixture-library/patch-profiles?')) {
+        return Promise.resolve(response({ items: [candidate] }))
+      }
+      return null
+    }, noFootprintGroups)
+    render(<ImportWizard patchId={7} onClose={vi.fn()} onImported={vi.fn()} />)
+    await uploadAndReview('Unknown Profile')
+
+    expect(screen.getByRole('button', {
+      name: /cannot add unknown profile; imported channel count is missing/i,
+    })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: /search library for unknown profile/i }))
+    expect(await screen.findByRole('button', {
+      name: /vendor .* unknown profile .* imported footprint missing/i,
+    })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /import 3 rows/i })).toBeDisabled()
+    await userEvent.click(screen.getByRole('button', { name: /keep unknown profile unmatched/i }))
     expect(screen.getByRole('button', { name: /import 3 rows/i })).toBeEnabled()
   })
 
