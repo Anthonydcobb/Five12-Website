@@ -79,6 +79,17 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
     analyze(pickedFile);
   };
 
+  const changeMapping = (column, value) => {
+    setMapping(current => ({ ...current, [column]: value }));
+    setGroups([]);
+    setSelections({});
+    setSelectedProfiles({});
+    setUnmatchedAcknowledged({});
+    setSearches({});
+    setCustomForms({});
+    searchGeneration.current = {};
+  };
+
   const reviewMatches = async () => {
     setBusy(true); setError(null);
     try {
@@ -298,8 +309,10 @@ export default function ImportWizard({ patchId, onClose, onImported }) {
                   <tr key={column} className="border-t border-border">
                     <td className="py-1.5 pr-3 font-mono">{column}</td>
                     <td className="py-1.5 pr-3">
-                      <select aria-label={`Map ${column}`} value={mapping[column] || 'ignore'}
-                        onChange={event => setMapping(current => ({ ...current, [column]: event.target.value === 'ignore' ? null : event.target.value }))}
+                      <select aria-label={`Map ${column}`} value={mapping[column] || 'ignore'} disabled={busy}
+                        onChange={event => changeMapping(
+                          column, event.target.value === 'ignore' ? null : event.target.value,
+                        )}
                         className="bg-bg border border-border rounded px-2 py-1 text-text">
                         <option value="ignore">— Ignore —</option>
                         {FIELDS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}

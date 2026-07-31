@@ -590,6 +590,16 @@ def commit_patch_import(patch_id):
         selections = json.loads(raw_selections) if raw_selections else {}
         if not isinstance(selections, dict):
             raise ValueError('Invalid fixture selections')
+        if raw_selections is not None:
+            expected_selection_keys = {
+                group['key'] for group in group_fixture_sources(canonical_rows)
+            }
+            supplied_selection_keys = set(selections)
+            if supplied_selection_keys != expected_selection_keys:
+                raise ValueError(
+                    'Fixture selections do not match the imported fixture groups; '
+                    'review fixture matches again'
+                )
 
         selected_ids = set()
         for value in selections.values():

@@ -41,7 +41,7 @@ const exactProfile = {
 
 const matchGroups = [
   {
-    key: 'arri skypanel s 60 c mode 6|20',
+    key: '["arri skypanel s60-c mode 6",20]',
     sourceType: 'ARRI SkyPanel S60-C Mode 6',
     channelCount: 20,
     rowCount: 2,
@@ -49,7 +49,7 @@ const matchGroups = [
     selectedFixtureId: 1,
   },
   {
-    key: 'mystery panel|12',
+    key: '["mystery panel",12]',
     sourceType: 'Mystery Panel',
     channelCount: 12,
     rowCount: 1,
@@ -61,12 +61,12 @@ const matchGroups = [
 function installBaseFetch(extraHandler = null, groups = matchGroups) {
   global.fetch = vi.fn((url, options = {}) => {
     if (url === '/api/patch-sheets/7/import/analyze') return Promise.resolve(response(analysis))
-    if (url === '/api/patch-sheets/7/import/matches') {
-      return Promise.resolve(response({ groups }))
-    }
     if (extraHandler) {
       const handled = extraHandler(url, options)
       if (handled) return handled
+    }
+    if (url === '/api/patch-sheets/7/import/matches') {
+      return Promise.resolve(response({ groups }))
     }
     if (url === '/api/patch-sheets/7/import/commit') {
       return Promise.resolve(response({ inserted: 3, matchedRows: 2, unmatchedRows: 1, skipped: 0 }))
@@ -118,9 +118,33 @@ describe('ImportWizard fixture matching', () => {
     }))
     const commitCall = global.fetch.mock.calls.find(([url]) => url.endsWith('/import/commit'))
     expect(JSON.parse(commitCall[1].body.get('fixtureSelections'))).toEqual({
-      'arri skypanel s 60 c mode 6|20': 1,
-      'mystery panel|12': null,
+      '["arri skypanel s60-c mode 6",20]': 1,
+      '["mystery panel",12]': null,
     })
+  })
+
+  it('locks mapping while fixture match review is in flight', async () => {
+    const pending = deferred()
+    installBaseFetch((url) => {
+      if (url === '/api/patch-sheets/7/import/matches') return pending.promise
+      return null
+    })
+    render(<ImportWizard patchId={7} onClose={vi.fn()} onImported={vi.fn()} />)
+    const file = new File(
+      ['Fixture Type,DMX Addr,Ch\nARRI SkyPanel S60-C Mode 6,1,20\n'],
+      'patch.csv',
+      { type: 'text/csv' },
+    )
+    await userEvent.upload(screen.getByLabelText(/choose an .*patch sheet/i), file)
+    expect(await screen.findByText(/3 rows .* header row 1/i)).toBeInTheDocument()
+
+    const fixtureMapping = screen.getByLabelText('Map Fixture Type')
+    expect(fixtureMapping).toBeEnabled()
+    await userEvent.click(screen.getByRole('button', { name: /review fixture matches/i }))
+    expect(fixtureMapping).toBeDisabled()
+
+    pending.resolve(response({ groups: matchGroups }))
+    expect(await screen.findByText('Mystery Panel')).toBeInTheDocument()
   })
 
   it('does not allow dismissal while the patch import commit is in flight', async () => {
@@ -200,7 +224,7 @@ describe('ImportWizard fixture matching', () => {
 
   it('keeps profiles with a missing imported footprint unmatched', async () => {
     const noFootprintGroups = [{
-      key: 'unknown profile|?', sourceType: 'Unknown Profile', channelCount: null,
+      key: '["unknown profile",null]', sourceType: 'Unknown Profile', channelCount: null,
       rowCount: 1, suggestions: [], selectedFixtureId: null,
     }]
     const candidate = {

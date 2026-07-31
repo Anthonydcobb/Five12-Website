@@ -1,5 +1,6 @@
 """Pure logic for the smart patch-sheet importer: header detection, column
 alias matching, mapping and address derivation. No Flask/DB dependencies."""
+import json
 import math
 import re
 from difflib import SequenceMatcher
@@ -148,19 +149,19 @@ def _normalize_fixture_text(value) -> str:
 
 
 def _normalize_fixture_identity(value) -> str:
-    """Normalize benign formatting while preserving numeric mode punctuation."""
-    text = str(value or "").strip().lower()
-    for punctuation, word in ((".", "dot"), ("/", "slash"), ("-", "dash")):
-        text = re.sub(
-            rf"(?<=\d){re.escape(punctuation)}(?=\d)", f" {word} ", text
-        )
-    return normalize_header(text)
+    """Case/space-normalize identity without discarding punctuation."""
+    text = str(value or "").lower()
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def fixture_source_key(source_type, channel_count) -> str:
     """Stable key shared by preview and commit for one imported profile shape."""
     footprint = parse_int(channel_count)
-    return f"{_normalize_fixture_identity(source_type)}|{footprint if footprint is not None else '?'}"
+    return json.dumps(
+        [_normalize_fixture_identity(source_type), footprint],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def group_fixture_sources(rows) -> list[dict]:
@@ -215,13 +216,16 @@ def rank_fixture_candidates(source_type, channel_count, candidates, limit=5) -> 
         name = _normalize_fixture_text(item.get("fixture"))
         manufacturer = _normalize_fixture_text(item.get("manufacturer"))
         full_name = " ".join(piece for piece in (manufacturer, name) if piece)
+        candidate_fixture = item.get("fixture") or ""
+        candidate_manufacturer = item.get("manufacturer") or ""
         exact = source_identity in {
-            _normalize_fixture_identity(item.get("fixture")),
-            _normalize_fixture_identity(" ".join(
-                piece for piece in (
-                    item.get("manufacturer"), item.get("fixture")
-                ) if piece
-            )),
+            _normalize_fixture_identity(candidate_fixture),
+            _normalize_fixture_identity(
+                f"{candidate_manufacturer} {candidate_fixture}"
+            ),
+            _normalize_fixture_identity(
+                f"{candidate_manufacturer} — {candidate_fixture}"
+            ),
         }
         candidate_tokens = set(full_name.split())
         union = source_tokens | candidate_tokens

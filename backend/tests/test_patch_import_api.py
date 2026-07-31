@@ -73,7 +73,7 @@ def test_match_preview_groups_rows_and_preselects_only_exact_match(client, db):
     csv = (
         b"Fixture Type,DMX Addr,Ch\n"
         b"ARRI SkyPanel S60-C Mode 6,1,20\n"
-        b"arri skypanel s60 c mode 6,21,20\n"
+        b"arri skypanel s60-c mode 6,21,20\n"
         b"Mystery Panel,100,12\n"
     )
     mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
@@ -108,6 +108,29 @@ def test_commit_rejects_incompatible_selected_footprint_before_writing(client, d
     )
     assert resp.status_code == 400
     assert "20" in resp.get_json()["error"] and "18" in resp.get_json()["error"]
+    assert PatchRow.query.filter_by(patch_id=pid).count() == 0
+
+
+@pytest.mark.parametrize('selection_shape', ['missing', 'unknown', 'extra'])
+def test_commit_rejects_stale_or_incomplete_fixture_selection_keys(
+    client, db, selection_shape,
+):
+    pid = _make_patch(db, show_name=f"T-selection-keys-{selection_shape}")
+    csv = b"Fixture Type,DMX Addr,Ch\nMystery Panel,1,12\n"
+    mapping = {"Fixture Type": "type", "DMX Addr": "address", "Ch": "channelCount"}
+    expected = fixture_source_key("Mystery Panel", 12)
+    selections = {
+        'missing': {},
+        'unknown': {'stale profile|12': None},
+        'extra': {expected: None, 'stale profile|12': None},
+    }[selection_shape]
+    resp = client.post(
+        f"/api/patch-sheets/{pid}/import/commit",
+        data=_import_data(csv, mapping, selections),
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    assert 'review fixture matches again' in resp.get_json()['error']
     assert PatchRow.query.filter_by(patch_id=pid).count() == 0
 
 

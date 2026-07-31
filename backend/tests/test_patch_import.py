@@ -101,9 +101,11 @@ def test_apply_mapping_ignore_keyword():
     assert out[0]["address"] == 5 and out[0]["type"] is None
 
 
-def test_fixture_source_key_normalizes_spelling_but_keeps_footprints_distinct():
+def test_fixture_source_key_normalizes_case_and_space_but_preserves_identity():
     assert fixture_source_key("ARRI  SkyPanel S60-C / Mode 6", 20) == \
-        fixture_source_key("arri skypanel s60 c mode 6", 20)
+        fixture_source_key("  arri skypanel s60-c / mode 6  ", 20)
+    assert fixture_source_key("Panel Mode A/B", 12) != \
+        fixture_source_key("Panel Mode A-B", 12)
     assert fixture_source_key("ARRI SkyPanel S60-C Mode 6", 20) != \
         fixture_source_key("ARRI SkyPanel S60-C Mode 6", 18)
 
@@ -118,7 +120,7 @@ def test_fixture_source_key_preserves_numeric_mode_punctuation():
 def test_group_fixture_sources_collapses_repeated_fixture_rows():
     groups = group_fixture_sources([
         {"type": "Vortex8 16b RGBW", "channelCount": 18},
-        {"type": "vortex8 16B-RGBW", "channelCount": 18},
+        {"type": "  vortex8   16B RGBW ", "channelCount": 18},
         {"type": "Mystery Panel", "channelCount": 12},
         {"type": None, "channelCount": 1},
     ])
@@ -165,6 +167,19 @@ def test_rank_fixture_candidates_does_not_auto_exact_distinct_mode_punctuation()
     }]
     ranked = rank_fixture_candidates("Test Panel Mode 1.2", 12, candidates)
     assert ranked[0]["id"] == 1
+    assert ranked[0]["exact"] is False
+
+
+def test_alphabetic_punctuation_remains_distinct_for_grouping_and_exact_match():
+    groups = group_fixture_sources([
+        {"type": "Test Panel Mode A/B", "channelCount": 12},
+        {"type": "Test Panel Mode A-B", "channelCount": 12},
+    ])
+    assert len(groups) == 2
+    ranked = rank_fixture_candidates("Test Panel Mode A/B", 12, [{
+        "id": 1, "manufacturer": "Test", "fixture": "Panel Mode A-B",
+        "channelCount": 12,
+    }])
     assert ranked[0]["exact"] is False
 
 
