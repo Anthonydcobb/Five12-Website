@@ -4,7 +4,7 @@
 - **Branch:** `feat/claude/bolero-websocket-antenna`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\bolero-ws`
 - **Base SHA:** `7084e91` (`origin/main`)
-- **Status:** in progress
+- **Status:** BLOCKED — the approach does not work; see the live result below
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -98,4 +98,71 @@ in the module docstring rather than papered over.
 
 ## Checks run
 
-To be filled in.
+| Command | Result | Evidence level |
+|---|---|---|
+| `pytest -q backend/tests/test_bolero_ws.py` | **17 passed** | software verification (Windows rig) |
+| Live listener against `192.168.1.11` for 120 s | **did not converge** — see below | **verified on actual gear** |
+
+The accumulator's 11 tests were written first and watched failing. The 6
+lifecycle tests are characterisation: the listener class was written alongside
+them rather than before, and that is recorded rather than presented as TDD.
+
+## The approach does not work, and the live rig proved it
+
+```text
+REST says 9 packs online: [2, 4, 6, 30, 32, 33, 34, 35, 37]
+
+  t+  2.0s  known=1   awaiting=8
+  ...
+  t+120.0s  known=5   awaiting=4
+NOT CONVERGED in 120s - known 5, awaiting 4
+
+listener status: state=running messages=54 restarts=0
+stopped cleanly: state=stopped
+```
+
+The listener itself is fine — connected first try, 54 messages, zero restarts,
+clean shutdown. It simply never learned where four of the nine packs were.
+
+**`audioPorts` fires on handover. A pack that is not moving is never announced,
+so a listen-only client cannot ever see it.** Two minutes of a real rig got 5 of
+9. The remaining four would appear only when somebody carrying them walks
+between antennas.
+
+So the feature as designed would sit blank on a stable rig and populate only
+while people move around — which is the opposite of useful, and precisely why
+the `converged` guard exists. The guard worked: it refused to render 5 of 9 as
+though it were the whole picture. That is the one part of this worth keeping.
+
+## The contradiction that has to be resolved first
+
+The Bolero GUI *does* show complete counts — 7 + 1 + 2 = 10, matching every
+connected pack. And the devtools capture proves the GUI sends nothing but pings.
+Both of those cannot be true alongside "the server only announces handovers",
+so one of the following is the case and it is not yet known which:
+
+1. the server pushes a full `audioPorts` set on connect under some condition the
+   listener did not meet — a subprotocol, a header, or something tied to the
+   `connectionToken` the server issues;
+2. the GUI had simply been open long enough to see every pack hand over at least
+   once, and would also show an incomplete picture on a cold load;
+3. there is another message kind carrying full state that neither the 45 s nor
+   the 120 s listen happened to catch.
+
+**Distinguishing (1) from (2) is one observation:** open the Bolero GUI in a
+fresh private window with devtools already recording, and watch whether the
+antenna Beltpacks column is complete immediately or fills in over a minute or
+two. If it is complete immediately, the server does send state on connect and
+the listener is missing something recoverable. If it fills in gradually, then
+the Bolero GUI has the same limitation and nobody can build this from this
+protocol.
+
+## What is kept
+
+`BoleroAntennaCounts` and `BoleroAntennaListener` are sound and tested, and the
+listener is wired into nothing, so nothing is at risk from leaving them in
+place. If (1) turns out to be the answer, the accumulator is already correct and
+only the connect handshake changes.
+
+**Not merged, and should not be**, until the question above is settled. Shipping
+it now would add a panel element that is blank almost always.
