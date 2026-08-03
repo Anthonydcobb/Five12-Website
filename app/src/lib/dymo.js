@@ -78,50 +78,91 @@ export async function renderPreview(labelXml, values) {
   return f.renderLabel(mergeLabel(labelXml, values), '', '');
 }
 
-// One printLabel2 job per record, strictly sequenced: submit a label, poll its
-// job until the printer says Finished, only then submit the next. The service
-// returns from PrintLabel as soon as it ACCEPTS a job — not when the label
-// finishes feeding — so firing jobs back-to-back makes the LabelWriter start a
-// new job mid-feed and re-seek the label gap (the "buzz"/misregistration).
-// Batching alternatives are ruled out by evidence: the service 400s on any
-// non-empty labelSetXml (see labelMerge.js), and physical tests show the
-// embedded DataTable never drives the label count.
+// One printLabelAsync job per record, strictly sequenced: submit a label,
+// wait for the printer's queue to fully drain, only then submit the next.
+// The service returns from PrintLabel as soon as it ACCEPTS a job — not when
+// the label finishes feeding — so firing jobs back-to-back makes the
+// LabelWriter start a new job mid-feed and re-seek the label gap (the
+// "buzz"/misregistration). Batching alternatives are ruled out by evidence:
+// the service 400s on any non-empty labelSetXml (see labelMerge.js), and
+// physical tests show the embedded DataTable never drives the label count.
+//
+// Status is NOT sourced from the DYMO service — on DYMO Connect 1.6.1.7 that
+// path does not exist: the vendored DlsWebService has no getJobStatus method
+// (framework.job.getStatus() always answers Unknown/"not implemented"),
+// PrintLabel2 returns `true` rather than a job id, and the service's
+// GetJobStatus HTTP endpoint 404s identically to a nonexistent route. So we
+// submit with the simpler printLabelAsync (its return value is unused —
+// PrintLabel2's "job id" was never usable either) and read status from the
+// Windows print spooler instead, via the backend's GET /api/print-queue.
+// DYMO jobs verifiably land in the spooler under the same printer name and
+// drain in ~1.8s.
 //
 // opts.roll ('Left'|'Right') is passed only for Twin Turbo printers — it pins
 // the roll via LabelWriterPrintParams. opts.signal stops the run between
 // labels (the service has no cancel endpoint, so the label in flight always
 // completes). opts.onProgress fires after each label finishes.
-const JOB_POLL_MS = 150;
+const QUEUE_POLL_MS = 400;
+const APPEAR_GRACE_MS = 2000;
 const JOB_CEILING_MS = 15000;
-const STATUS_FINISHED = 2; // dymo.label.framework.PrintJobStatus
-const FAULT_REASONS = {
-  3: 'Printer error',
-  4: 'Paper out',
-  [-1]: 'Processing error',
-  [-2]: 'Printer busy',
-};
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-// Resolve {fault: string|null} for one PrintJob. Finished → null fault.
-// Error/PaperOut/ProcessingError/PrinterBusy → that reason. Printing/InQueue
-// keep polling; Unknown/InvalidJobId/NotSpooled also keep polling (they appear
-// transiently right after submit) — but the ceiling bounds the wait so a
-// printer with unreliable status reporting paces the run instead of hanging
-// it. An abort stops the WAIT (not the label) so Stop needn't outlast a slow
-// label; the caller counts the label as printed either way.
-async function awaitJobDone(job, signal) {
+async function fetchQueue(printerName) {
+  const res = await fetch(`/api/print-queue?printer=${encodeURIComponent(printerName)}`);
+  if (!res.ok) throw new Error(`print-queue request failed (${res.status})`);
+  return res.json();
+}
+
+function faultFrom(q) {
+  const ps = q.printerStatus || '';
+  if (/PaperOut|PaperProblem|PaperJam/.test(ps)) return 'Paper out';
+  if (/Error|Offline/.test(ps)) return 'Printer error';
+  if ((q.jobs || []).some((j) => /Error/.test(j.status || ''))) return 'Printer error';
+  return null;
+}
+
+// Wait for one submitted label to leave the spooler queue, reading status
+// from the backend's spooler probe rather than the (nonexistent) DYMO job
+// status. Two phases: APPEAR (the job may not have reached the spooler yet —
+// a brief service-ACK-to-spooler race — so wait up to APPEAR_GRACE_MS for
+// jobCount > 0, then proceed regardless in case it already drained between
+// polls) and DRAIN (poll until jobCount === 0). A fetch rejection or non-200
+// response is treated as a transient backend hiccup and just keeps polling,
+// subject to the overall ceiling — it must never abort the run. An abort
+// stops the WAIT (not the label) so Stop needn't outlast a slow label; the
+// caller counts the label as printed either way.
+async function awaitQueueDrain(printerName, signal) {
   const deadline = Date.now() + JOB_CEILING_MS;
+  const appearDeadline = Date.now() + APPEAR_GRACE_MS;
+
+  // Phase 1: APPEAR
   for (;;) {
-    const info = await new Promise((res) => {
-      try { job.getStatus(res); } catch (e) { res({ status: -1, statusMessage: String(e) }); }
-    });
-    const status = info ? info.status : 0;
-    if (status === STATUS_FINISHED) return { fault: null };
-    if (FAULT_REASONS[status] !== undefined) return { fault: FAULT_REASONS[status] };
     if (signal?.aborted) return { fault: null };
     if (Date.now() >= deadline) return { fault: null };
-    await sleep(JOB_POLL_MS);
+    let q;
+    try { q = await fetchQueue(printerName); } catch { q = null; }
+    if (q) {
+      const fault = faultFrom(q);
+      if (fault) return { fault };
+      if (q.jobCount > 0) break;
+    }
+    if (Date.now() >= appearDeadline) break; // proceed regardless — may have already drained
+    await sleep(QUEUE_POLL_MS);
+  }
+
+  // Phase 2: DRAIN
+  for (;;) {
+    if (signal?.aborted) return { fault: null };
+    if (Date.now() >= deadline) return { fault: null };
+    let q;
+    try { q = await fetchQueue(printerName); } catch { q = null; }
+    if (q) {
+      const fault = faultFrom(q);
+      if (fault) return { fault };
+      if (q.jobCount === 0) return { fault: null };
+    }
+    await sleep(QUEUE_POLL_MS);
   }
 }
 
@@ -135,8 +176,8 @@ export async function printMerge(printerName, labelXml, records, opts = {}) {
   let printed = 0;
   for (const rec of records) {
     if (signal?.aborted) return { printed, total, stopped: true, reason: null };
-    const job = await f.printLabel2Async(printerName, paramsXml, mergeLabel(labelXml, rec), '');
-    const { fault } = await awaitJobDone(job, signal);
+    await f.printLabelAsync(printerName, paramsXml, mergeLabel(labelXml, rec), '');
+    const { fault } = await awaitQueueDrain(printerName, signal);
     if (fault) return { printed, total, stopped: true, reason: fault };
     printed += 1;
     if (onProgress) onProgress({ printed, total });
