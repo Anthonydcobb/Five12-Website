@@ -150,6 +150,47 @@ Fake framework grows `printLabel2Async` returning a `PrintJob` stub whose
 
 Existing suite (66 tests) must stay green.
 
+## Amendment (2026-08-03, post final review): job status comes from the Windows spooler, not the DYMO service
+
+The final whole-branch review found, and live probes confirmed, that job-status
+polling via the DYMO service is impossible on DYMO Connect 1.6.1.7:
+
+- The vendored `DlsWebService` defines **no `getJobStatus` method** (its
+  method list: getPrinters, openLabelFile, printLabel, printLabel2,
+  renderLabel, loadImageAsPngBase64, is550Printer,
+  getConsumableInfoIn550Printer + Async twins), so the framework's
+  `job.getStatus()` always returns Unknown/"not implemented".
+- `PrintLabel2` returns `true`, **not a job id**.
+- The service's `GetJobStatus` HTTP endpoint returns 404 identically to a
+  nonexistent route (real routes return 200). There is nothing to call.
+
+Without this amendment every label would wait out the full 15 s ceiling
+(138 labels ≈ 34 min) and fault reporting could never fire.
+
+**Replacement mechanism (verified live):** DYMO service jobs appear in the
+Windows print spooler under the same printer name, with a real lifecycle
+(observed: job appears on submit, drains ~1.8 s later, JobCount returns
+to 0), and `Get-Printer` exposes printer-level fault states.
+
+- **Backend:** new endpoint `GET /api/print-queue?printer=<name>` →
+  `{jobCount, printerStatus, jobs: [{id, status}]}`. Implementation shells
+  out to ONE fixed-literal PowerShell script (`Get-Printer` + per-printer
+  `Get-PrintJob`, enums forced to strings via `.ToString()`, output
+  `ConvertTo-Json`) and filters for the requested printer in Python. The
+  client-supplied name is never interpolated into the command — it is
+  matched against the enumerated printer names; unknown name → 404.
+  pywin32 stays out of the dependency set.
+- **Engine:** submit via `printLabelAsync` (PrintLabel2's job id is
+  useless), then poll the backend at 400 ms: first wait for the job to
+  APPEAR (jobCount > 0, grace ≤ 2 s — a service-ACK-to-spooler race
+  exists), then wait for the queue to DRAIN (jobCount === 0) before the
+  next label. The 15 s/label ceiling stays as the safety net.
+- **Fault mapping** (spooler → spec reason copy): printerStatus containing
+  `PaperOut`/`PaperProblem`/`PaperJam` → `Paper out`; containing
+  `Error`/`Offline`, or any job status containing `Error` →
+  `Printer error`. Other states keep polling until the ceiling.
+- Stop, progress, outcome messages, roll selection: unchanged.
+
 ## Verification
 
 Unit suite + `vite build`, then a live 5-label range print on the physical
