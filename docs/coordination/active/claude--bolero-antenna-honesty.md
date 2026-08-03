@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/bolero-antenna-honesty`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\bolero`
 - **Base SHA:** `4710f51` (`origin/main`)
-- **Status:** in progress
+- **Status:** complete — merged to `main` at `b8c0caf069d97b60466a062c44bcc4fd40a5a87f`
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -148,3 +148,33 @@ is recorded here and left alone rather than quietly widened into this branch.
 and it sits inside the sACN `10.0.0.0/8` subnet, so it becomes a sweep target.
 NordVPN was already the unproven suspect in the show-NIC category drift. That is
 an operational finding, not a test artifact.
+
+
+## Merged to `main` — 2026-07-30
+
+Clean fast-forward; `main` had not moved, so the merged tree is exactly the one
+the checks above ran against and no re-verification was needed.
+
+Merged at Anthony's direction without an independent review. Sixth today, and
+recorded like the rest. The judgement most worth a second opinion is the
+decision to blank rather than approximate: the alternative was to keep showing
+the DECT master's name with a caveat, and I took the view that a panel read at
+speed does not get read carefully.
+
+### Left deliberately for someone to pick up
+
+1. **Recovering real attribution.** Needs a HAR capture from the Bolero web GUI
+   at `192.168.1.11` — the GUI has the 5/3 split, so an endpoint exists that
+   this adapter does not use. Six guesses returned 400.
+2. **`test_a_mixed_family_hint_does_not_abort_the_scan`** is red on `main` under
+   current NIC conditions. Environment-dependent, mine, and outside this task's
+   reserved paths — see the section above.
+3. **NordVPN inside the sACN `/8`.** Investigated after the fact: routing is
+   fine. `10.100.0.0/22` is more specific than `10.0.0.0/8`, so longest-prefix
+   match sends show traffic out the right interfaces, and Nord holds no default
+   route (Wi-Fi metric 0, Local Area Connection metric 1 — split tunnel). The
+   only real consequence is that the scanner adds `10.100.0.0/24` to its sweep
+   targets, which wastes sweep time and can surface tunnel addresses as devices.
+   The fix is `ignore_cidrs` on the sACN subnet — the mechanism already used for
+   the venue Wi-Fi `/23` inside Management `/16`. Not applied: it needs the
+   backend up with network tools on, which Hermes has asked us to hold off.
