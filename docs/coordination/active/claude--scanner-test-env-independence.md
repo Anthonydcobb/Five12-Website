@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/scanner-test-env-independence`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\scanner-test`
 - **Base SHA:** `756a37b` (`origin/main`)
-- **Status:** complete, pushed for review
+- **Status:** complete — merged to `main` at `cce4b9065c75ceca9506676282b65dc8b4596b78`
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -103,7 +103,10 @@ the machine holds the adapter — the guard added earlier today doing its job.
 
 ## Handoff / next action
 
-Pushed for review, not merged. Test-only, no production change.
+Merged to `main` at Anthony's direction. Clean fast-forward; `main` had not
+moved, so the merged tree is exactly the one the checks ran against. Test-only,
+no production change, which makes this the lowest-risk of today's merges — but
+it is still the seventh without independent review and is recorded as such.
 
 Worth Hermes' attention less for the diff than for the pattern: this is the
 third environment-dependent test found today, after the BLE adapter-lock tests
