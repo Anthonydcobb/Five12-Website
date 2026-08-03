@@ -50,11 +50,12 @@ def test_hint_networks_rejects_a_hint_too_wide_to_sweep():
     assert scanner._hint_networks('10.0.0.0/8', '10.0.0.0/8') == []
 
 
-def test_a_mixed_family_hint_does_not_abort_the_scan():
+def test_a_mixed_family_hint_does_not_abort_the_scan(monkeypatch):
     """Found in review. `subnet_of` raises TypeError across address families,
     and only ValueError was caught — so an IPv6 hint on an IPv4 subnet threw
     out of _sweep_targets, past _arp_scan, and aborted that subnet's entire
     scan rather than being ignored."""
+    _no_local_ifaces(monkeypatch)
     assert scanner._hint_networks('fd00::/120', '10.0.0.0/8') == []
     assert scanner._sweep_targets('10.0.0.0/8', known_ips=[], sweep_hints='fd00::/120') == []
 
@@ -96,23 +97,39 @@ def test_hint_networks_survives_nonsense_without_raising():
 # ---------------------------------------------------------------------------
 
 
-def test_wide_subnet_without_hints_misses_the_node_range():
+def _no_local_ifaces(monkeypatch):
+    """Pin the host's interfaces out of the picture.
+
+    `_sweep_targets` falls back to the /24s holding a local NIC, so any test
+    asserting on its exact output is otherwise measuring the laptop. Same helper
+    and same reason as test_scanner_discovery.py. Learned the hard way on
+    2026-07-30: these passed all morning with the show NICs unplugged and went
+    red the moment they were connected.
+    """
+    monkeypatch.setattr(scanner, 'local_ipv4s', lambda *a, **k: [])
+
+
+
+def test_wide_subnet_without_hints_misses_the_node_range(monkeypatch):
     """The fault, stated as a test. No local NIC and no known device in
     10.9.15.0/24, so nothing aims there and the SideCars stay invisible."""
+    _no_local_ifaces(monkeypatch)
     targets = scanner._sweep_targets('10.0.0.0/8', known_ips=['10.220.220.220'])
     assert '10.9.15.0/24' not in targets
 
 
-def test_a_hint_puts_the_node_range_in_the_sweep():
+def test_a_hint_puts_the_node_range_in_the_sweep(monkeypatch):
+    _no_local_ifaces(monkeypatch)
     targets = scanner._sweep_targets(
         '10.0.0.0/8', known_ips=['10.220.220.220'], sweep_hints='10.9.15.0/24'
     )
     assert '10.9.15.0/24' in targets
 
 
-def test_hints_do_not_replace_the_existing_targets():
+def test_hints_do_not_replace_the_existing_targets(monkeypatch):
     """Hints are additive. Losing the local-NIC /24 would trade one blind spot
     for another."""
+    _no_local_ifaces(monkeypatch)
     targets = scanner._sweep_targets(
         '10.0.0.0/8', known_ips=['10.0.0.5'], sweep_hints='10.9.15.0/24'
     )
@@ -120,16 +137,18 @@ def test_hints_do_not_replace_the_existing_targets():
     assert '10.0.0.0/24' in targets
 
 
-def test_hints_are_deduplicated_against_discovered_targets():
+def test_hints_are_deduplicated_against_discovered_targets(monkeypatch):
+    _no_local_ifaces(monkeypatch)
     targets = scanner._sweep_targets(
         '10.0.0.0/8', known_ips=['10.9.15.111'], sweep_hints='10.9.15.0/24'
     )
     assert targets.count('10.9.15.0/24') == 1
 
 
-def test_a_narrow_subnet_is_still_swept_whole():
+def test_a_narrow_subnet_is_still_swept_whole(monkeypatch):
     """Under MAX_SWEEP_ADDRESSES the whole range is swept, so hints are
     irrelevant rather than harmful."""
+    _no_local_ifaces(monkeypatch)
     targets = scanner._sweep_targets('192.168.1.0/24', sweep_hints='192.168.1.0/25')
     assert targets == ['192.168.1.0/24']
 
