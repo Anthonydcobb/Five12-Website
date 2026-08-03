@@ -160,10 +160,14 @@ antenna" column would be a value that changes faster than anyone can read it,
 and any single reading of it is stale before it renders. Two packs looked at a
 second apart would disagree with themselves.
 
-Note also that the Bolero's own GUI does **not** show a per-pack antenna. It
-shows a per-antenna *count*, which aggregates the churn into something that
-moves slowly enough to be read. That is the design to copy, and the number
-Anthony was comparing against in the first place.
+~~Note also that the Bolero's own GUI does **not** show a per-pack antenna.~~
+
+**WRONG — corrected 2026-07-30.** The Bolero GUI *does* show a per-pack antenna:
+the **Device** column in the Beltpacks view (`/bps_view`), populated for every
+connected pack — TSB on MBS LM 2, Suck It Bryant on MBS LM 1, Eric on MBS LM 2,
+and so on. The claim above was generalised from the Network Devices view alone,
+where the per-antenna count is all that appears. It was load-bearing for the
+design argument below and it was not checked.
 
 ### Revised recommendation
 
@@ -212,3 +216,43 @@ the adapter change is small and well-understood:
   Phases 3 and 5 rather than bolted into a polling adapter
 - until attribution can be shown for **every** connected pack, it should not be
   shown for any — partial attribution is the failure this whole thread began with
+
+
+## Correction and current state — 2026-07-30, later
+
+**The claim that the GUI shows no per-pack antenna was wrong.** The Beltpacks
+view has a `Device` column giving each connected pack's antenna, complete, with
+only the disconnected pack ("Local Gaffer", grey status dot) left blank.
+
+So per-pack attribution is displayable, the vendor does display it, and the
+argument that DECT churn makes it meaningless is weakened — the GUI evidently
+finds a way to present it.
+
+### What is still unknown, and it is now the only question
+
+Where the `Device` column gets its value. Two possibilities remain:
+
+1. **It is the same `audioPorts` accumulation**, and the GUI simply had been open
+   long enough — the observed session started ~13:21 and the screenshot is
+   ~13:24, three minutes, against my listener reaching 5 of 9 in two. If so, a
+   cold GUI load would also show blanks, and the limitation is real for everyone.
+2. **There is a source not yet found.** Neither `/rest/bp` (6 top-level keys, no
+   node) nor the ws `bp` message (not captured in full) obviously carries it.
+
+### The observation that settles it, and it is easier than the count
+
+On a **fresh** load of `/bps_view`, watch the `Device` column itself:
+
+- if some connected packs start blank and fill in over a minute or two →
+  possibility 1, the GUI accumulates like everything else, and the honest
+  incomplete state is unavoidable
+- if every connected pack has a Device from the first paint → possibility 2, and
+  the source is still out there
+
+### Message kinds now observed
+
+`nodeStatus`, `audioPorts`, `userEventAdded`, `connectionToken`, `bp`,
+`ioDeviceStatus`. The last two appear only when something changes — a 100 s
+listen saw `ioDeviceStatus` and no `bp`, while a concurrent GUI session saw `bp`
+three times and no `ioDeviceStatus`. That is churn, not a different subscription:
+the GUI still sends nothing but pings.

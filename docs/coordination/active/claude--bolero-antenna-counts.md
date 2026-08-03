@@ -48,8 +48,14 @@ been, so it is not done here.
 ### It does not report a per-pack antenna
 
 Antenna assignment changes several times a second — pack 30 moved three times in
-450 ms in the capture. A per-pack column would be stale before it rendered. The
-Bolero GUI does not show one either. See the protocol doc.
+450 ms in the capture — so a per-pack column would be stale before it rendered.
+
+**The second half of this reasoning was wrong and is retracted.** I wrote that
+the Bolero GUI does not show a per-pack antenna either. It does: the `Device`
+column in the Beltpacks view. I had generalised from the Network Devices view
+without checking the others, and then used it to justify a design decision. The
+churn argument still stands on its own evidence; the appeal to vendor behaviour
+does not, and the vendor in fact does the opposite.
 
 ### It does not claim a count it has not converged on
 
