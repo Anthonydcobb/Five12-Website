@@ -225,3 +225,74 @@ def test_the_system_wide_total_is_still_reported(adapter):
     """packsOnline IS knowable -- the master lists them all."""
     out = adapter._normalize(MASTER_NODE_STATUS, MASTER_NODE_CONFIG, NAME_MAP)
     assert out['packsOnline'] == 2
+
+
+# ── Antenna attribution, from /rest/audioPorts (2026-07-30, second pass) ─────
+#
+# The earlier conclusion that this API carries no attribution was WRONG. It
+# does: GET /rest/audioPorts returns a complete snapshot mapping each beltpack
+# to the node it is on. It was missed because the endpoint was inferred from a
+# grep of the minified GUI bundle for quoted '/rest/...' strings -- a search that
+# also failed to find the websocket URL, which was known to exist. The REST
+# paths mirror the websocket message kinds; audioPorts is one of them.
+#
+# Real payload from the rig: 13 ports, id.type 1 = beltpack.
+
+AUDIO_PORTS = {'audioPorts': [
+    {'registered': True, 'id': {'type': 1, 'id': 34}, 'nodeId': 163060633},
+    {'registered': True, 'id': {'type': 1, 'id': 2}, 'nodeId': 132651929},
+    {'registered': True, 'id': {'type': 7, 'id': 99}, 'nodeId': 132651929},
+    {'registered': False, 'id': {'type': 1, 'id': 55}, 'nodeId': 163060633},
+]}
+
+
+def _norm_with_ports(adapter, ports=None):
+    return adapter._normalize(NODE_STATUS, NODE_CONFIG, NAME_MAP,
+                              ports if ports is not None else AUDIO_PORTS)
+
+
+def test_each_pack_reports_the_antenna_it_is_actually_on(adapter):
+    packs = {p['name']: p for p in _norm_with_ports(adapter)['beltpacks']}
+    assert packs['Anthony']['antenna'] == 'MBS LM 1'    # bp 34
+    assert packs['TSB']['antenna'] == 'MBS LM 2'        # bp 2
+
+
+def test_per_antenna_counts_come_from_the_attribution(adapter):
+    by_name = {a['name']: a for a in _norm_with_ports(adapter)['antennas']}
+    assert by_name['MBS LM 1']['packCount'] == 1
+    assert by_name['MBS LM 2']['packCount'] == 1
+
+
+def test_counts_sum_to_packs_online(adapter):
+    out = _norm_with_ports(adapter)
+    assert sum(a['packCount'] for a in out['antennas']) == out['packsOnline']
+
+
+def test_non_beltpack_ports_do_not_inflate_a_count(adapter):
+    """id.type 7 is some other port kind and must not be counted as a pack."""
+    out = _norm_with_ports(adapter)
+    assert sum(a['packCount'] for a in out['antennas']) == 2
+
+
+def test_an_unregistered_port_is_not_attributed(adapter):
+    packs = {p['id']: p for p in _norm_with_ports(adapter)['beltpacks']}
+    assert 55 not in packs
+
+
+def test_without_the_endpoint_it_still_refuses_to_guess(adapter):
+    """If audioPorts is unavailable the old wrong answer must not come back."""
+    out = adapter._normalize(NODE_STATUS, NODE_CONFIG, NAME_MAP, None)
+    assert [p['antenna'] for p in out['beltpacks']] == [None, None]
+    assert [a['packCount'] for a in out['antennas']] == [None, None]
+
+
+def test_a_pack_absent_from_audio_ports_reports_no_antenna(adapter):
+    """Better a blank than the DECT master's name, which is the bug that
+    started all of this."""
+    out = adapter._normalize(NODE_STATUS, NODE_CONFIG, NAME_MAP,
+                             {'audioPorts': [
+                                 {'registered': True, 'id': {'type': 1, 'id': 34},
+                                  'nodeId': 163060633}]})
+    packs = {p['name']: p for p in out['beltpacks']}
+    assert packs['Anthony']['antenna'] == 'MBS LM 1'
+    assert packs['TSB']['antenna'] is None

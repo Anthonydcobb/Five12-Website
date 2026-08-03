@@ -8,6 +8,9 @@
                         true, NOT under the antenna it is radio-linked to. A
                         non-master antenna asked about itself reports bp: [].
                         Verified against all three antennas 2026-07-30.
+  GET /rest/audioPorts  beltpack -> antenna, the attribution nodeStatus lacks.
+                        [{registered, id:{type,id}, nodeId}]; id.type 1 is a
+                        beltpack. Complete snapshot, no accumulation needed.
   GET /rest/nodeConfig  nodeId -> antenna name (MBS LM 2 = .11, MBS LM 1 = .12)
   GET /rest/bp          DECT id -> crew name (bpConfig.bpName), ~98 KB
 
@@ -35,9 +38,13 @@ log = logging.getLogger(__name__)
 ENDPOINTS = {
     'antennas': '/rest/nodeStatus',   # antennas + live per-pack battery
     'nodes': '/rest/nodeConfig',      # nodeId -> antenna name
+    'ports': '/rest/audioPorts',      # beltpack -> the antenna it is on
     'roster': '/rest/bp',             # DECT id -> crew name (large; cached)
 }
 VERIFIED_AGAINST_UNIT = True
+
+# id.type in /rest/audioPorts. 1 is a beltpack; other kinds share the endpoint.
+BELTPACK_PORT_TYPE = 1
 
 # The roster is ~98 KB and changes rarely; the live battery (nodeStatus) is
 # small and polled every cycle. Refresh the id->name map no more than this.
@@ -67,6 +74,34 @@ SIGNAL_LEVELS = {
     3: (1, 'Bad'),
 }
 SIGNAL_NOT_CONNECTED = (0, 'Not Connected')  # BP_SIGNAL_LEVELS.INVALID (0xFF)
+
+
+def _beltpack_owners(audio_ports):
+    """{beltpack id -> node id} from /rest/audioPorts, or None if absent.
+
+    None and {} mean different things. None is "we could not ask", which leaves
+    every antenna blank; {} is "we asked and nothing is attributed".
+    """
+    if not audio_ports:
+        return None
+    owners = {}
+    for port in audio_ports.get('audioPorts') or []:
+        if not isinstance(port, dict) or not port.get('registered'):
+            continue
+        ident = port.get('id') or {}
+        if ident.get('type') != BELTPACK_PORT_TYPE:
+            continue
+        if ident.get('id') is not None and port.get('nodeId') is not None:
+            owners[ident['id']] = port['nodeId']
+    return owners
+
+
+def _antenna_name(names_by_id, owner, pack_id):
+    """The antenna a pack is on, or None. Never the DECT master by default."""
+    if not owner or pack_id not in owner:
+        return None
+    node_id = owner[pack_id]
+    return names_by_id.get(node_id) or f'Antenna {node_id}'
 
 
 def _signal_quality(signal_level):
@@ -154,34 +189,38 @@ class BoleroAdapter(DeviceAdapter):
             names = self._name_map()
         except Exception as exc:  # noqa: BLE001
             return {'available': False, 'reason': f'Bolero unreachable: {exc}'}
-        return self._normalize(node_status, node_config, names)
+        try:
+            audio_ports = self._fetch_json(ENDPOINTS['ports'])
+        except Exception as exc:  # noqa: BLE001
+            # Attribution is an enhancement, not the panel. Losing it must not
+            # take battery and PTP down with it - _normalize reports a blank
+            # antenna rather than a wrong one.
+            log.warning('Bolero audioPorts fetch failed, antenna unknown: %s', exc)
+            audio_ports = None
+        return self._normalize(node_status, node_config, names, audio_ports)
 
-    def _normalize(self, node_status, node_config, name_map):
+    def _normalize(self, node_status, node_config, name_map, audio_ports=None):
         """Join the real payloads into the panel contract.
 
-        THIS API DOES NOT SAY WHICH ANTENNA A PACK IS ON. `/rest/nodeStatus`
-        hangs every connected pack off the node with `isDectMaster` true, and a
-        non-master antenna asked about ITSELF reports `bp: []`. Verified against
-        the live rig on 2026-07-30 by asking all three antennas in turn: each
-        one attributed all nine packs to MBS LM 2, the master, including MBS
-        LM 1 describing itself.
+        `/rest/nodeStatus` lists every connected pack under the DECT MASTER, not
+        under the antenna it is radio-linked to - a non-master antenna asked
+        about itself reports `bp: []`. Reading a pack's antenna from the node
+        whose `bp[]` contains it therefore always names the master, which is the
+        bug this whole thread started with.
 
-        This function used to read a pack's antenna off the node whose `bp[]`
-        contained it, on the stated premise that this was "how the operator sees
-        it in the GUI". It is not: the GUI showed five packs on MBS LM 1 while
-        the API showed zero. The derived value could only ever name the master.
+        The attribution comes from `/rest/audioPorts`, a complete snapshot of
+        beltpack -> nodeId. It was missed on the first pass, and the reason is
+        worth keeping: the endpoint list was inferred by grepping the minified
+        GUI bundle for quoted '/rest/...' strings, a search that also failed to
+        find the websocket URL which was known to exist. The REST paths mirror
+        the websocket message kinds; audioPorts is one of them.
 
-        Nothing else in the payload carries it either — a `bp[]` entry has no
-        node reference, and `timeslots` is RF slot statistics, not a radio link.
-
-        So `antenna` is None and per-antenna `packCount` is None, deliberately.
-        `packsOnline` stays, because the system-wide total is genuinely known.
-        `isDectMaster` is reported because it is the one true thing this payload
-        says about the topology, and it explains the blanks.
-
-        `online` is True for every pack present in the master's `bp[]`.
+        `audio_ports` is optional. When it is missing the antenna is reported as
+        None rather than falling back to the master's name - a blank is honest,
+        the master's name is a confident lie.
         """
         names_by_id = {n['nodeId']: n.get('name') for n in node_config.get('nodeConfig', [])}
+        owner = _beltpack_owners(audio_ports)
 
         antennas, beltpacks = [], []
         for node in node_status.get('nodeStatus', []):
@@ -212,11 +251,19 @@ class BoleroAdapter(DeviceAdapter):
                     'charging': bool(batt.get('usbPower')),
                     'signalQuality': sig_bars,
                     'signalLabel': sig_label,
-                    # Not aname. See the docstring: aname is always the DECT
-                    # master, never the antenna this pack is linked to.
-                    'antenna': None,
+                    # NOT aname, which is always the master. From audioPorts,
+                    # or blank when that is unavailable.
+                    'antenna': _antenna_name(names_by_id, owner, pid),
                     'online': True,
                 })
+
+        if owner is not None:
+            counted = {}
+            for pack in beltpacks:
+                if pack['antenna']:
+                    counted[pack['antenna']] = counted.get(pack['antenna'], 0) + 1
+            for antenna in antennas:
+                antenna['packCount'] = counted.get(antenna['name'], 0)
 
         beltpacks.sort(key=lambda p: p['batteryPct'] if isinstance(p.get('batteryPct'), (int, float)) else 999)
         batts = [p['batteryPct'] for p in beltpacks if isinstance(p.get('batteryPct'), (int, float))]
@@ -251,19 +298,19 @@ class BoleroAdapter(DeviceAdapter):
                 'charging': i == 0 and int(t / 120) % 2 == 1,   # SM docks now and then
                 'signalQuality': sig_bars,
                 'signalLabel': sig_label,
-                # None, like the real adapter: the Bolero REST API does not
-                # say which antenna a pack is on, and a sim that invents it
-                # produces a demo that looks better than the hardware and a UI
-                # that never exercises the blank case.
-                'antenna': None,
+                'antenna': 'ANT-A' if i % 2 == 0 else 'ANT-B',
                 'online': online,
             })
         ptp_glitch = 55 < (t % 300) < 70                 # brief PTP loss every 5 min
         antennas = [
             {'id': 1, 'name': 'ANT-A', 'online': True, 'ptpSynced': True,
-             'packCount': None, 'isDectMaster': True},
+             'isDectMaster': True,
+             'packCount': sum(1 for p in packs
+                              if p['antenna'] == 'ANT-A' and p['online'])},
             {'id': 2, 'name': 'ANT-B', 'online': True, 'ptpSynced': not ptp_glitch,
-             'packCount': None, 'isDectMaster': False},
+             'isDectMaster': False,
+             'packCount': sum(1 for p in packs
+                              if p['antenna'] == 'ANT-B' and p['online'])},
         ]
         online = [p for p in packs if p['online']]
         batts = [p['batteryPct'] for p in online]

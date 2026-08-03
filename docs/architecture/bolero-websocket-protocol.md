@@ -1,4 +1,30 @@
-# Riedel Bolero — websocket protocol, and where beltpack→antenna attribution lives
+# Riedel Bolero — where beltpack→antenna attribution actually lives
+
+> **RESOLVED 2026-07-30. `GET /rest/audioPorts` returns a complete
+> beltpack→antenna snapshot.** One request, no websocket, no accumulation.
+>
+> ```text
+> {"audioPorts":[{"registered":true,"id":{"type":1,"id":2},"nodeId":163060633}, ...]}
+> ```
+>
+> **How this was missed for an entire investigation.** The endpoint list was
+> inferred by grepping the minified GUI bundle for quoted `/rest/...` strings,
+> which found two firmware paths and led to "the GUI does not use REST for live
+> data". That same grep also failed to find the `ws://` URL — which was *known*
+> to exist. Having direct evidence the search method was unreliable, it was used
+> anyway, and everything below was built on its result.
+>
+> The endpoint names mirror the websocket message kinds. `nodeStatus`,
+> `nodeConfig`, `bp` and `audioPorts` are all both. Six endpoint names were
+> guessed before `audioPorts` was known to exist, and never re-guessed after.
+>
+> Everything below is kept as the record of a wrong path, because the protocol
+> facts in it are real and the reasoning failure is worth not repeating. The
+> conclusions it draws — that attribution is unavailable, that a listener is
+> needed, that the feature is not buildable — are all **void**.
+
+---
+
 
 **Date:** 2026-07-30
 **Investigated against:** the live rig, MBS LM 1/2/3 at 192.168.1.11/.12/.13,
