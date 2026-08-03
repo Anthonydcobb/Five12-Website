@@ -44,6 +44,9 @@ def create_app(test_config=None):
     from .dymo_routes import csv_sources as dymo_csv_bp
     app.register_blueprint(dymo_csv_bp)
 
+    from .print_queue_routes import print_queue as print_queue_bp
+    app.register_blueprint(print_queue_bp)
+
     from .fixture_library_routes import fixture_library as fixture_library_bp
     app.register_blueprint(fixture_library_bp)
 
