@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import DymoPrintDialog from './DymoPrintDialog'
-import { dymoReady, getPrinters, renderPreview } from '../lib/dymo'
+import { dymoReady, getPrinters, renderPreview, printMerge } from '../lib/dymo'
 
 vi.mock('../lib/dymo', () => ({
   dymoReady: vi.fn(),
@@ -130,5 +130,61 @@ describe('DymoPrintDialog roll selector', () => {
     await screen.findByRole('button', { name: 'Left' })   // Twin Turbo printer selected by default
     await user.selectOptions(screen.getByLabelText('Printer'), 'DYMO LabelWriter 450')
     expect(screen.queryByRole('button', { name: 'Left' })).toBeNull()
+  })
+})
+
+describe('DymoPrintDialog run control', () => {
+  beforeEach(() => { renderPreview.mockResolvedValue(null) })   // preview isn't under test here
+
+  it('swaps Print for Stop while running, aborts on click, reports a stopped run', async () => {
+    let resolvePrint
+    printMerge.mockReturnValue(new Promise((res) => { resolvePrint = res }))
+    await renderMapped()
+    await userEvent.click(await screen.findByRole('button', { name: /Print all 2/ }))
+
+    const stop = await screen.findByRole('button', { name: 'Stop' })
+    expect(screen.queryByRole('button', { name: /Print all/ })).toBeNull()
+    expect(screen.getByText('Printing 1 of 2…')).toBeInTheDocument()
+
+    const opts = printMerge.mock.calls[0][3]
+    expect(opts.roll).toBe('Left')            // twin turbo default from Task 2
+    expect(opts.signal.aborted).toBe(false)
+    await userEvent.click(stop)
+    expect(opts.signal.aborted).toBe(true)
+
+    resolvePrint({ printed: 1, total: 2, stopped: true, reason: null })
+    await screen.findByText('Stopped — 1 of 2 printed.')
+    expect(screen.getByRole('button', { name: /Print all 2/ })).toBeInTheDocument()
+  })
+
+  it('reports a fault with reason and count', async () => {
+    printMerge.mockResolvedValue({ printed: 1, total: 2, stopped: true, reason: 'Paper out' })
+    await renderMapped()
+    await userEvent.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    await screen.findByText('Paper out — stopped after 1 of 2.')
+  })
+
+  it('reports a completed run and passes no roll for a non-Twin-Turbo printer', async () => {
+    getPrinters.mockResolvedValue([
+      { name: 'DYMO LabelWriter 450 Twin Turbo', isTwinTurbo: true },
+      { name: 'DYMO LabelWriter 450', isTwinTurbo: false },
+    ])
+    printMerge.mockResolvedValue({ printed: 2, total: 2, stopped: false, reason: null })
+    await renderMapped()
+    await userEvent.selectOptions(screen.getByLabelText('Printer'), 'DYMO LabelWriter 450')
+    await userEvent.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    await screen.findByText('Printed 2 labels.')
+    expect(printMerge.mock.calls[0][3].roll).toBeUndefined()
+  })
+
+  it('disables closing while a run is active', async () => {
+    let resolvePrint
+    printMerge.mockReturnValue(new Promise((res) => { resolvePrint = res }))
+    await renderMapped()
+    await userEvent.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    resolvePrint({ printed: 2, total: 2, stopped: false, reason: null })
+    await screen.findByText('Printed 2 labels.')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
   })
 })

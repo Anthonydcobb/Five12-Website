@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { dymoReady, getPrinters, renderPreview, printMerge } from '../lib/dymo';
 import { parseRangeExpr } from '../lib/rangeExpr';
 
@@ -85,6 +85,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [printedMsg, setPrintedMsg] = useState(null);
+  const [progress, setProgress] = useState(null);   // {printed, total} while running
+  const abortRef = useRef(null);
 
   const probe = async () => {
     setReady(null);
@@ -211,21 +213,36 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     if (printList.length > 200 &&
         !window.confirm(`Print ${printList.length} labels?`)) return;
     setBusy(true); setError(null); setPrintedMsg(null);
+    setProgress({ printed: 0, total: printList.length });
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
-      await printMerge(printer, tpl.labelXml, printList);
+      const res = await printMerge(printer, tpl.labelXml, printList, {
+        roll: selectedPrinter?.isTwinTurbo ? roll : undefined,
+        signal: ac.signal,
+        onProgress: setProgress,
+      });
       localStorage.setItem(LAST_PRINTER_KEY, printer);
-      try {
-        const srcKey = source === 'csv' ? 'csv' : 'patch';
-        await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
-      } catch (e) {
-        console.warn('mapping save failed (labels already printed):', e);
+      if (res.printed > 0) {
+        // labels came out — worth remembering the mapping even on a stopped run
+        try {
+          const srcKey = source === 'csv' ? 'csv' : 'patch';
+          await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
+        } catch (e) {
+          console.warn('mapping save failed (labels already printed):', e);
+        }
       }
-      // Keep the dialog open so the user can print again — they close it via ×/Done.
-      setPrintedMsg(`Printed ${printList.length} label${printList.length === 1 ? '' : 's'}.`);
+      if (res.reason) {
+        setError(`${res.reason} — stopped after ${res.printed} of ${res.total}.`);
+      } else if (res.stopped) {
+        setPrintedMsg(`Stopped — ${res.printed} of ${res.total} printed.`);
+      } else {
+        setPrintedMsg(`Printed ${res.total} label${res.total === 1 ? '' : 's'}.`);
+      }
     } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(null); abortRef.current = null; }
   };
 
   return (
@@ -233,7 +250,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       <div className="bg-surface border border-border rounded-lg p-6 w-[min(92vw,760px)] max-h-[88vh] overflow-auto shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Print DYMO Labels</h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
+          <button onClick={onClose} disabled={busy}
+            className="text-text-muted hover:text-text text-lg leading-none disabled:opacity-40">×</button>
         </div>
 
         {error && <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-sm rounded px-3 py-2 mb-3">{error}</div>}
@@ -398,13 +416,26 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
               </div>
             )}
           </div>
-          <div className="flex gap-3">
-            <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
-            <button onClick={doPrint}
-              disabled={busy || !tpl || !printer || printList.length === 0 || ready !== true}
-              className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
-              {busy ? 'Printing…' : (scopeMode === 'all' ? `Print all ${records.length}` : `Print ${printList.length} labels`)}
-            </button>
+          <div className="flex items-center gap-3">
+            {busy && progress && (
+              <span className="text-sm text-text-muted">
+                Printing {Math.min(progress.printed + 1, progress.total)} of {progress.total}…
+              </span>
+            )}
+            <button onClick={onClose} disabled={busy}
+              className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">Cancel</button>
+            {busy ? (
+              <button onClick={() => abortRef.current?.abort()}
+                className="px-4 py-2 bg-brand-dim/40 border border-brand/40 text-brand-hi hover:bg-brand-dim/60 rounded text-sm font-medium">
+                Stop
+              </button>
+            ) : (
+              <button onClick={doPrint}
+                disabled={!tpl || !printer || printList.length === 0 || ready !== true}
+                className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
+                {scopeMode === 'all' ? `Print all ${records.length}` : `Print ${printList.length} labels`}
+              </button>
+            )}
           </div>
         </div>
       </div>
