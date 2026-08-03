@@ -77,6 +77,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [printers, setPrinters] = useState([]);
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
   const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [scopeMode, setScopeMode] = useState('all');   // 'all' | 'custom'
   const [rangeExpr, setRangeExpr] = useState('');
@@ -131,7 +132,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   }, [records.length]);
 
   const pickTemplate = async (id) => {
-    setError(null); setPreview(null);
+    setError(null); setPreview(null); setPreviewError(null);
     if (!id) { setTpl(null); return; }
     try {
       const t = await fetch(`/api/dymo-templates/${id}`).then(readJson);
@@ -165,12 +166,20 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
 
   // live preview of the currently-jogged record
   useEffect(() => {
-    if (!tpl || !records.length || ready !== true) { setPreview(null); return; }
+    if (!tpl || !records.length || ready !== true) {
+      setPreview(null); setPreviewError(null); return;
+    }
     const rec = records[Math.min(previewIndex, records.length - 1)];
     let alive = true;
     renderPreview(tpl.labelXml, rec)
-      .then(png => { if (alive) setPreview(png); })
-      .catch(() => { if (alive) setPreview(null); });
+      .then(png => { if (alive) { setPreview(png); setPreviewError(null); } })
+      .catch(err => {
+        // Never swallow this. On DYMO Connect 1.6.1.7 RenderLabel is dead (see
+        // lib/dymo.js), and a silent failure left the pane showing "preview
+        // appears when mapped" — blaming the user for a service fault.
+        console.error('DYMO label preview failed:', err);
+        if (alive) { setPreview(null); setPreviewError(err); }
+      });
     return () => { alive = false; };
   }, [tpl, records, previewIndex, ready]);
 
@@ -306,9 +315,18 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
             </table>
             <div className="flex flex-col gap-2">
               <div className="bg-bg border border-border rounded-lg p-3 flex items-center justify-center min-h-[140px]">
-                {preview
-                  ? <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
-                  : <span className="text-text-muted text-xs">preview appears when mapped</span>}
+                {preview ? (
+                  <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
+                ) : previewError ? (
+                  <div className="text-center px-2" title={String(previewError.message || previewError)}>
+                    <div className="text-warn text-xs font-medium">Preview unavailable</div>
+                    <div className="text-text-muted text-[11px] mt-1 leading-snug">
+                      DYMO Connect could not render this label. Printing is unaffected.
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-text-muted text-xs">preview appears when mapped</span>
+                )}
               </div>
               {records.length > 0 && (
                 <div className="flex items-center justify-center gap-2 text-sm text-text-muted">
