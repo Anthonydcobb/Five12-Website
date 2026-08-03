@@ -187,4 +187,33 @@ describe('DymoPrintDialog run control', () => {
     await screen.findByText('Printed 2 labels.')
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled()
   })
+
+  it('saves the mapping when a stopped run still printed labels', async () => {
+    printMerge.mockResolvedValue({ printed: 1, total: 2, stopped: true, reason: 'Paper out' })
+    const user = await renderMapped()
+    await user.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    await screen.findByText('Paper out — stopped after 1 of 2.')
+    // labels came out, so the column mapping must still be remembered
+    expect(global.fetch.mock.calls.some(([url, init]) =>
+      String(url) === '/api/dymo-templates/3/mapping' && init?.method === 'PUT')).toBe(true)
+  })
+
+  it('does not save the mapping when zero labels printed', async () => {
+    printMerge.mockResolvedValue({ printed: 0, total: 2, stopped: true, reason: null })
+    const user = await renderMapped()
+    await user.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    await screen.findByText('Stopped — 0 of 2 printed.')
+    expect(global.fetch.mock.calls.some(([url]) => String(url).includes('/mapping'))).toBe(false)
+  })
+
+  it('clamps the progress line on the final label', async () => {
+    printMerge.mockImplementation((printer, xml, recs, opts) => {
+      opts.onProgress({ printed: 2, total: 2 })   // last label finished, run not yet resolved
+      return new Promise(() => {})                // stay busy so the line stays visible
+    })
+    const user = await renderMapped()
+    await user.click(await screen.findByRole('button', { name: /Print all 2/ }))
+    await screen.findByText('Printing 2 of 2…')   // min(printed+1, total) clamps — NOT '3 of 2'
+    expect(screen.queryByText('Printing 3 of 2…')).toBeNull()
+  })
 })
