@@ -18,8 +18,9 @@ const TEMPLATE = { id: 3, name: 'LZMU Dymo Label Big', labelXml: '<DesktopLabel/
 const PATCH_ROWS = [{ universe: '1', address: '25' }, { universe: '1', address: '37' }]
 
 beforeEach(() => {
+  localStorage.clear()
   dymoReady.mockResolvedValue(true)
-  getPrinters.mockResolvedValue(['DYMO LabelWriter 450 Twin Turbo'])
+  getPrinters.mockResolvedValue([{ name: 'DYMO LabelWriter 450 Twin Turbo', isTwinTurbo: true }])
 })
 
 function textResponse(data) {
@@ -105,5 +106,29 @@ describe('DymoPrintDialog preview pane', () => {
 
     await user.click(screen.getByRole('button', { name: /next label/i }))   // re-renders
     await waitFor(() => expect(screen.queryByText(/preview unavailable/i)).not.toBeInTheDocument())
+  })
+})
+
+describe('DymoPrintDialog roll selector', () => {
+  beforeEach(() => { renderPreview.mockResolvedValue(null) })   // preview isn't under test here
+
+  it('shows Left/Right for a Twin Turbo printer, defaults Left, persists per printer', async () => {
+    const user = await renderMapped()
+    const left = await screen.findByRole('button', { name: 'Left' })
+    const right = screen.getByRole('button', { name: 'Right' })
+    expect(left.className).toContain('border-brand')   // selected style
+    await user.click(right)
+    expect(localStorage.getItem('five12_dymo_roll:DYMO LabelWriter 450 Twin Turbo')).toBe('Right')
+  })
+
+  it('hides the roll selector for a non-Twin-Turbo printer', async () => {
+    getPrinters.mockResolvedValue([
+      { name: 'DYMO LabelWriter 450 Twin Turbo', isTwinTurbo: true },
+      { name: 'DYMO LabelWriter 450', isTwinTurbo: false },
+    ])
+    const user = await renderMapped()
+    await screen.findByRole('button', { name: 'Left' })   // Twin Turbo printer selected by default
+    await user.selectOptions(screen.getByLabelText('Printer'), 'DYMO LabelWriter 450')
+    expect(screen.queryByRole('button', { name: 'Left' })).toBeNull()
   })
 })

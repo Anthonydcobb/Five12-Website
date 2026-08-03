@@ -76,6 +76,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [mapping, setMapping] = useState({});        // {var: column}
   const [printers, setPrinters] = useState([]);
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
+  const [roll, setRoll] = useState('Left');               // TwinTurbo roll, per printer
   const [preview, setPreview] = useState(null);
   const [previewError, setPreviewError] = useState(null);
   const [previewIndex, setPreviewIndex] = useState(0);
@@ -93,11 +94,19 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       try {
         const ps = await getPrinters();
         setPrinters(ps);
-        if (ps.length && !ps.includes(printer)) setPrinter(ps[0]);
+        if (ps.length && !ps.some(p => p.name === printer)) setPrinter(ps[0].name);
       } catch { setPrinters([]); }
     }
   };
   useEffect(() => { probe(); }, []);
+  const selectedPrinter = printers.find(p => p.name === printer);
+  useEffect(() => {
+    if (printer) setRoll(localStorage.getItem(`five12_dymo_roll:${printer}`) || 'Left');
+  }, [printer]);
+  const pickRoll = (r) => {
+    setRoll(r);
+    localStorage.setItem(`five12_dymo_roll:${printer}`, r);
+  };
   useEffect(() => {
     fetch('/api/dymo-templates').then(readJson).then(setTemplates).catch(e => setError(e.message));
   }, []);
@@ -376,9 +385,18 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
               <select value={printer} onChange={e => setPrinter(e.target.value)}
                 className="bg-bg border border-border rounded px-2 py-1 text-text">
                 {printers.length === 0 && <option value="">none found</option>}
-                {printers.map(p => <option key={p} value={p}>{p}</option>)}
+                {printers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
             </label>
+            {selectedPrinter?.isTwinTurbo && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-text-muted">Roll</span>
+                <button type="button" onClick={() => pickRoll('Left')}
+                  className={`px-3 py-1.5 rounded border ${roll==='Left' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>Left</button>
+                <button type="button" onClick={() => pickRoll('Right')}
+                  className={`px-3 py-1.5 rounded border ${roll==='Right' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>Right</button>
+              </div>
+            )}
           </div>
           <div className="flex gap-3">
             <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
