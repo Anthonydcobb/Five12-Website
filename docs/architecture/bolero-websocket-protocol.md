@@ -115,7 +115,79 @@ it goes through an Angular `$websocket`-style wrapper.
 This is a live comms system. Fuzzing an undocumented protocol on it, to save a
 two-minute capture, is not a trade worth making.
 
-## The cheap way to finish this
+## ANSWERED 2026-07-30 by a devtools capture — and it changes the design
+
+Anthony captured the socket with devtools open across a reload. Two findings,
+the second much more important than the first.
+
+### 1. There is no request. The GUI sends only pings.
+
+Every outgoing frame, across the whole capture, is:
+
+```json
+{"event":"ping","data":"ping"}
+```
+
+answered by `{"pong":"pong"}`. No subscribe, no state request, no snapshot call.
+The protocol is **pure server-push**. So the earlier open question — "what does
+the GUI send after connectionToken" — has the answer *nothing*, and a client
+cannot ask for a snapshot because no such request exists.
+
+That means accumulating the `audioPorts` delta stream is not a workaround. It is
+the only mechanism there is, and it is what the GUI itself does.
+
+### 2. Antenna assignment is not stable. It changes several times a second.
+
+From the capture, with node ids resolved:
+
+```text
+12:46:21.552  audioPorts  bp 30 -> 198187945  MBS LM 3
+12:46:21.903  audioPorts  bp 30 -> 163060633  MBS LM 1
+12:46:22.002  audioPorts  bp 30 -> 198187945  MBS LM 3
+
+12:46:45.132  audioPorts  bp 35 -> 132651929  MBS LM 2
+12:46:45.482  audioPorts  bp 35 -> 163060633  MBS LM 1
+12:46:45.633  audioPorts  bp 35 -> 132651929  MBS LM 2
+12:46:46.546  audioPorts  bp 35 -> 163060633  MBS LM 1
+```
+
+Pack 30 changed antenna three times in 450 ms; pack 35 four times in 1.5 s. This
+is DECT handover working normally — beltpacks roam between antennas continuously,
+and a pack near a coverage boundary flaps.
+
+**This invalidates the feature as originally requested.** A per-pack "which
+antenna" column would be a value that changes faster than anyone can read it,
+and any single reading of it is stale before it renders. Two packs looked at a
+second apart would disagree with themselves.
+
+Note also that the Bolero's own GUI does **not** show a per-pack antenna. It
+shows a per-antenna *count*, which aggregates the churn into something that
+moves slowly enough to be read. That is the design to copy, and the number
+Anthony was comparing against in the first place.
+
+### Revised recommendation
+
+- do **not** add a per-pack antenna column; the underlying value is not stable
+  enough to be meaningful, and showing it would recreate the confidently-wrong
+  panel this whole thread began by removing
+- if the counts are wanted, mirror the GUI: a long-lived socket listener
+  maintaining `{bp id -> nodeId}` from `audioPorts`, surfaced as a per-antenna
+  count, with an explicit "converging" state until every connected pack has been
+  seen at least once
+- that listener is a lifecycle the polling adapter should not own. It belongs
+  with the runtime manager in the hardening plan's Phases 3 and 5, alongside the
+  sACN listener, with the same start/stop/status contract
+
+### Still unknown
+
+Whether a pack can be registered on more than one antenna at once. `audioPorts`
+carries no explicit deregistration in this capture — only `registered: true` —
+so the flapping may be a genuine handover sequence, or it may be simultaneous
+bearers on several antennas being announced in turn. That distinction decides
+whether `{bp -> nodeId}` is even single-valued, and it should be settled before
+any counter is built on it.
+
+## The cheap way to finish this (superseded by the section above)
 
 A HAR capture, or just the devtools Network → WS frame list, from the Bolero GUI
 at `192.168.1.11`:
