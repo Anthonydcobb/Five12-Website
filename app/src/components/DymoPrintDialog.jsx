@@ -199,12 +199,13 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     const max = Math.max(0, records.length - 1);
     const onKey = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (busy) return; // renderPreview is a synchronous XHR — jogging mid-run blocks the tab
       if (e.key === 'ArrowLeft') setPreviewIndex(i => Math.max(0, i - 1));
       else if (e.key === 'ArrowRight') setPreviewIndex(i => Math.max(0, Math.min(max, i + 1)));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [records.length]);
+  }, [records.length, busy]);
 
   // clear the "Printed" confirmation once the print context changes
   useEffect(() => { setPrintedMsg(null); }, [tpl, source, csv, scopeMode, rangeExpr]);
@@ -359,11 +360,12 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                 <div className="flex items-center justify-center gap-2 text-sm text-text-muted">
                   <button type="button" aria-label="previous label"
                     onClick={() => setPreviewIndex(i => Math.max(0, i - 1))}
-                    disabled={previewIndex <= 0}
+                    disabled={previewIndex <= 0 || busy}
                     className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">‹</button>
                   <span className="flex items-center gap-1">
                     Label
                     <input type="number" min={1} max={records.length} value={previewIndex + 1}
+                      disabled={busy}
                       onChange={e => {
                         const n = parseInt(e.target.value, 10);
                         if (!Number.isNaN(n)) setPreviewIndex(Math.min(records.length - 1, Math.max(0, n - 1)));
@@ -373,7 +375,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                   </span>
                   <button type="button" aria-label="next label"
                     onClick={() => setPreviewIndex(i => Math.min(records.length - 1, i + 1))}
-                    disabled={previewIndex >= records.length - 1}
+                    disabled={previewIndex >= records.length - 1 || busy}
                     className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">›</button>
                 </div>
               )}
