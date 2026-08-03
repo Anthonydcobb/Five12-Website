@@ -166,4 +166,29 @@ describe('printMerge', () => {
     expect(res).toEqual({ printed: 2, total: 2, stopped: false, reason: null })
     expect(printLabel2Async).toHaveBeenCalledTimes(2)
   })
+
+  it("abort during a label's wait counts that label and stops before the next", async () => {
+    vi.useFakeTimers()
+    // job 0 reports Printing forever — the abort lands mid-wait, not between labels
+    const { printLabel2Async } = fakeFramework({ statusScripts: { 0: [1] } })
+    const ac = new AbortController()
+    const p = printMerge('LW450', LABEL_XML, [rec(601), rec(602)], { signal: ac.signal })
+    await vi.advanceTimersByTimeAsync(450)   // several polls, job 0 still Printing
+    ac.abort()
+    await vi.advanceTimersByTimeAsync(300)   // the next poll tick observes the abort
+    const res = await p
+    // the in-flight label completes physically (no cancel endpoint) so it COUNTS;
+    // label 2 must never be submitted
+    expect(res).toEqual({ printed: 1, total: 2, stopped: true, reason: null })
+    expect(printLabel2Async).toHaveBeenCalledTimes(1)
+  })
+
+  it('maps each fault status to its exact reason copy', async () => {
+    for (const [code, reason] of [[3, 'Printer error'], [-1, 'Processing error'], [-2, 'Printer busy']]) {
+      resetDymo()  // drop the cached framework so the new fake is picked up
+      fakeFramework({ statusScripts: { 0: [code] } })
+      const res = await printMerge('LW450', LABEL_XML, [rec(601)])
+      expect(res).toEqual({ printed: 0, total: 1, stopped: true, reason })
+    }
+  })
 })
