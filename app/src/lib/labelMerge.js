@@ -10,6 +10,15 @@
 // The DesktopLabel schema REQUIRES every <TextSpan> to carry a <FontInfo>, so
 // the run we build always gets one: the box's own font if present, else a
 // font borrowed from elsewhere in the label, else a synthesized default.
+//
+// There is no batch form of this. The DYMO Connect web service (1.6.1.7)
+// rejects a PrintLabel/PrintLabel2 carrying ANY non-empty labelSetXml against a
+// DesktopLabel with HTTP 400 "Error printing label. Exception: " — an empty
+// exception detail — no matter how the set is shaped (framework-canonical
+// LabelSetBuilder output, CDATA or plain text, with or without an XML
+// declaration, box names with or without spaces). The same request with an
+// empty labelSetXml returns 200. So callers merge one record per label and
+// print one job per label; see printMerge in dymo.js.
 
 export function mergeLabel(labelXml, values) {
   const doc = new DOMParser().parseFromString(labelXml, 'application/xml');
@@ -24,55 +33,20 @@ export function mergeLabel(labelXml, values) {
     if (name == null || !Object.prototype.hasOwnProperty.call(values, name)) continue;
     setTextObjectText(doc, obj, values[name] == null ? '' : String(values[name]), fallbackFont);
   }
+  clearDataRows(doc);
   return new XMLSerializer().serializeToString(doc);
 }
 
-// Multi-record printing via a DYMO "LabelSet". One printLabel() call feeds every
-// record to the printer as a SINGLE continuous job, so the LabelWriter never
-// re-seeks the label gap between labels (the "buzz"/misregistration that printing
-// one job per record causes). The DYMO web service iterates the <LabelRecord>s
-// and merges each <ObjectData> into the like-named text object.
-//
-// IMPORTANT: the service APPENDS ObjectData onto whatever text the object already
-// holds (the DesktopLabel doubled-text bug). So the label XML passed ALONGSIDE
-// this set must have those boxes emptied first — printMerge does that with
-// mergeLabel(labelXml, blanks) — turning append-onto-empty into just the value.
-//
-// `boxNames` are the TextObject names to fill; `records` are keyed by those names.
-export function buildLabelSetXml(records, boxNames) {
-  const cdata = (v) =>
-    `<![CDATA[${String(v == null ? '' : v).replace(/]]>/g, ']]]]><![CDATA[>')}]]>`;
-  const attr = (s) =>
-    String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-  const body = records.map((rec) =>
-    '  <LabelRecord>\n' +
-    boxNames.map((b) => `    <ObjectData Name="${attr(b)}">${cdata(rec[b])}</ObjectData>`).join('\n') +
-    '\n  </LabelRecord>'
-  ).join('\n');
-  return `<?xml version="1.0" encoding="utf-8"?>\n<LabelSet>\n${body}\n</LabelSet>`;
-}
-
-// The label to send ALONGSIDE a LabelSet: every mapped box emptied (so the
-// service's append-onto-existing-text can't double), and any embedded <DataTable>
-// rows cleared so only the LabelSet drives how many labels print.
-export function blankLabel(labelXml, boxNames) {
-  const doc = new DOMParser().parseFromString(labelXml, 'application/xml');
-  if (doc.getElementsByTagName('parsererror').length) {
-    throw new Error('Could not parse label XML');
-  }
-  const fallbackFont = firstFontInfoInDoc(doc);
-  const wanted = new Set(boxNames);
-  const objects = doc.getElementsByTagName('TextObject');
-  for (let i = 0; i < objects.length; i++) {
-    const name = directChildText(objects[i], 'Name');
-    if (name != null && wanted.has(name)) setTextObjectText(doc, objects[i], '', fallbackFont);
-  }
+// A template authored in DYMO Connect carries the rows it was authored against
+// (ours ships 98). Those rows are a second, invisible answer to "how many labels
+// come out" sitting behind the records the operator actually chose, so every
+// label we hand to the service gets them cleared. The <DataTable> and its
+// <Columns> stay: the boxes are bound to those column names.
+function clearDataRows(doc) {
   const dataTable = doc.getElementsByTagName('DataTable')[0];
-  if (dataTable) {
-    const rowsEl = firstChild(dataTable, 'Rows');
-    if (rowsEl) while (rowsEl.firstChild) rowsEl.removeChild(rowsEl.firstChild);
-  }
-  return new XMLSerializer().serializeToString(doc);
+  if (!dataTable) return;
+  const rowsEl = firstChild(dataTable, 'Rows');
+  if (rowsEl) while (rowsEl.firstChild) rowsEl.removeChild(rowsEl.firstChild);
 }
 
 function directChildText(el, tag) {

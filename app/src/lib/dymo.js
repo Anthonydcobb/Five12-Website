@@ -1,5 +1,5 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
-import { mergeLabel, buildLabelSetXml, blankLabel } from './labelMerge';
+import { mergeLabel } from './labelMerge';
 
 let _fw = null;
 let _loading = null;
@@ -59,25 +59,34 @@ export async function getPrinters() {
     .map((p) => p.name);
 }
 
+// Rejects on this DYMO Connect web service (1.6.1.7): its RenderLabel endpoint
+// is broken outright, not just for our template. It answers HTTP 500 with an
+// empty body for EVERY input — the stored template, a stock DLS 8.0
+// DieCutLabel, a minimal DesktopLabel, and even no parameters at all — while
+// PrintLabel accepts the same XML and returns 200. The Windows Application log
+// names the cause: the handler throws before it reads the request.
+//
+//   System.IO.FileNotFoundException:
+//   File name: 'System.Xml.XmlSerializer, Version=8.0.0.0, ...'
+//      at DYMO.WebApi.Server.Controllers.DymoDLSSDKController.RenderLabel(...)
+//
+// i.e. the assembly is missing from DYMO's single-file bundle, so the endpoint
+// cannot work at all in this build. Callers must surface the rejection rather
+// than treat a missing preview as "not mapped yet" — see DymoPrintDialog.
 export async function renderPreview(labelXml, values) {
   const f = await fw();
   return f.renderLabel(mergeLabel(labelXml, values), '', '');
 }
 
+// One printLabel() call per record, each carrying that record's values merged in.
+//
+// A LabelSet would batch all records into a single continuous job, but this DYMO
+// Connect web service (1.6.1.7) answers ANY non-empty labelSetXml on a
+// DesktopLabel with HTTP 400 "Error printing label. Exception: " — see the note
+// in labelMerge.js for the shapes ruled out. Sending one merged label per job is
+// the only form it accepts, so that is what we do.
 export async function printMerge(printerName, labelXml, records) {
   const f = await fw();
-  const boxNames = records.length ? Object.keys(records[0]) : [];
-  if (boxNames.length) {
-    // One continuous job for all records: empty the mapped boxes, then feed the
-    // values via a LabelSet. Boxes MUST be empty first — the DYMO service appends
-    // ObjectData onto existing text, so an empty box yields the value alone
-    // (printing the populated template directly is what doubled the text before).
-    const blankXml = blankLabel(labelXml, boxNames);
-    const setXml = buildLabelSetXml(records, boxNames);
-    f.printLabel(printerName, '', blankXml, setXml);
-    return;
-  }
-  // No mapped boxes to merge — print each record's label as-is.
   for (const rec of records) {
     f.printLabel(printerName, '', mergeLabel(labelXml, rec), '');
   }
