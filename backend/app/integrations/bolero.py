@@ -3,8 +3,11 @@
 [VERIFIED 2026-07-22] Mapped against a real Bolero Standalone at 192.168.1.11
 (HAR capture). The web GUI is an AngularJS app over a plain REST surface:
 
-  GET /rest/nodeStatus  antennas + LIVE per-pack battery (each node's bp[] are
-                        the packs currently attached to that antenna)
+  GET /rest/nodeStatus  antennas + LIVE per-pack battery. NOTE: every connected
+                        pack is listed under the node whose isDectMaster is
+                        true, NOT under the antenna it is radio-linked to. A
+                        non-master antenna asked about itself reports bp: [].
+                        Verified against all three antennas 2026-07-30.
   GET /rest/nodeConfig  nodeId -> antenna name (MBS LM 2 = .11, MBS LM 1 = .12)
   GET /rest/bp          DECT id -> crew name (bpConfig.bpName), ~98 KB
 
@@ -156,9 +159,27 @@ class BoleroAdapter(DeviceAdapter):
     def _normalize(self, node_status, node_config, name_map):
         """Join the real payloads into the panel contract.
 
-        A pack is 'attached' to exactly the antenna whose bp[] lists it, which
-        is how the operator sees it in the GUI. `online` is therefore True for
-        every pack present in a node's bp[].
+        THIS API DOES NOT SAY WHICH ANTENNA A PACK IS ON. `/rest/nodeStatus`
+        hangs every connected pack off the node with `isDectMaster` true, and a
+        non-master antenna asked about ITSELF reports `bp: []`. Verified against
+        the live rig on 2026-07-30 by asking all three antennas in turn: each
+        one attributed all nine packs to MBS LM 2, the master, including MBS
+        LM 1 describing itself.
+
+        This function used to read a pack's antenna off the node whose `bp[]`
+        contained it, on the stated premise that this was "how the operator sees
+        it in the GUI". It is not: the GUI showed five packs on MBS LM 1 while
+        the API showed zero. The derived value could only ever name the master.
+
+        Nothing else in the payload carries it either — a `bp[]` entry has no
+        node reference, and `timeslots` is RF slot statistics, not a radio link.
+
+        So `antenna` is None and per-antenna `packCount` is None, deliberately.
+        `packsOnline` stays, because the system-wide total is genuinely known.
+        `isDectMaster` is reported because it is the one true thing this payload
+        says about the topology, and it explains the blanks.
+
+        `online` is True for every pack present in the master's `bp[]`.
         """
         names_by_id = {n['nodeId']: n.get('name') for n in node_config.get('nodeConfig', [])}
 
@@ -170,7 +191,12 @@ class BoleroAdapter(DeviceAdapter):
             packs = node.get('bp', []) or []
             antennas.append({
                 'id': nid, 'name': aname, 'online': True,
-                'ptpSynced': ptp_synced, 'packCount': len(packs),
+                'ptpSynced': ptp_synced,
+                # Not len(packs): that is "packs the master enumerates", which
+                # would read as this antenna's own load and be wrong everywhere
+                # except by accident on the master.
+                'packCount': None,
+                'isDectMaster': bool(node.get('isDectMaster')),
             })
             for bp in packs:
                 batt = bp.get('battery', {}) or {}
@@ -186,7 +212,9 @@ class BoleroAdapter(DeviceAdapter):
                     'charging': bool(batt.get('usbPower')),
                     'signalQuality': sig_bars,
                     'signalLabel': sig_label,
-                    'antenna': aname,
+                    # Not aname. See the docstring: aname is always the DECT
+                    # master, never the antenna this pack is linked to.
+                    'antenna': None,
                     'online': True,
                 })
 
@@ -223,15 +251,19 @@ class BoleroAdapter(DeviceAdapter):
                 'charging': i == 0 and int(t / 120) % 2 == 1,   # SM docks now and then
                 'signalQuality': sig_bars,
                 'signalLabel': sig_label,
-                'antenna': 'ANT-A' if i % 2 == 0 else 'ANT-B',
+                # None, like the real adapter: the Bolero REST API does not
+                # say which antenna a pack is on, and a sim that invents it
+                # produces a demo that looks better than the hardware and a UI
+                # that never exercises the blank case.
+                'antenna': None,
                 'online': online,
             })
         ptp_glitch = 55 < (t % 300) < 70                 # brief PTP loss every 5 min
         antennas = [
             {'id': 1, 'name': 'ANT-A', 'online': True, 'ptpSynced': True,
-             'packCount': sum(1 for p in packs if p['antenna'] == 'ANT-A' and p['online'])},
+             'packCount': None, 'isDectMaster': True},
             {'id': 2, 'name': 'ANT-B', 'online': True, 'ptpSynced': not ptp_glitch,
-             'packCount': sum(1 for p in packs if p['antenna'] == 'ANT-B' and p['online'])},
+             'packCount': None, 'isDectMaster': False},
         ]
         online = [p for p in packs if p['online']]
         batts = [p['batteryPct'] for p in online]

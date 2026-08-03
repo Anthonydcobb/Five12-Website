@@ -104,4 +104,47 @@ the Bolero web UI, which is a bench task for Anthony. Tracked separately.
 
 ## Checks run
 
-To be filled in as the work proceeds.
+| Command | Result | Evidence level |
+|---|---|---|
+| `pytest -q backend/tests/test_bolero_normalize.py` | **22 passed** | software verification (Windows rig) |
+| `pytest -q backend/tests` from the repository root | 542 passed, 7 skipped, **1 pre-existing failure unrelated to this change** (see below) | software verification (Windows rig) |
+| `npm test` (Vitest) in `app/` | **74 passed**, 7 files | software verification (Windows rig) |
+| Live probe of all three antennas | read-only GETs only; nothing written to the gear | **verified on actual gear** |
+
+Written test-first: four tests asserting the honest contract were watched
+failing — `antenna` still naming MBS LM 2, `packCount` still a number, and
+`isDectMaster` absent entirely.
+
+Two existing tests encoded the false premise and were deliberately updated
+rather than deleted: `test_pack_count_per_antenna` became
+`test_no_per_antenna_pack_count_is_claimed`, and the antenna assertion inside
+`test_beltpack_battery_fields_mapped` now asserts `None`. Both carry the reason
+in place so the change is not mistaken for a loosened test later.
+
+### Unrelated pre-existing failure found while running the suite
+
+`test_scanner_sweep_hints.py::test_a_mixed_family_hint_does_not_abort_the_scan`
+fails on this rig right now, and it is **not** caused by this change or by the
+IPv6 rule merged earlier today.
+
+```text
+assert scanner._sweep_targets('10.0.0.0/8', known_ips=[], sweep_hints='fd00::/120') == []
+AssertionError: assert ['10.100.0.0/24', '10.220.220.0/24'] == []
+```
+
+The mixed-family hint IS correctly rejected. What the test then asserts is that
+no targets remain at all — which only holds when the machine has no `10.x`
+interface. The show NICs are up now (`10.220.220.220` sACN,
+`10.100.0.2` NordVPN) and were unplugged when this suite last ran green this
+morning, so `_sweep_targets` correctly falls back to NIC-derived /24s.
+
+An environment-dependent test, the third of that shape found today after the BLE
+adapter-lock tests and the plan's baseline task. The test's stated intent — "does
+not abort the scan" — is still satisfied; the `== []` assertion is
+over-specified. Mine to fix, but it is outside this task's reserved paths, so it
+is recorded here and left alone rather than quietly widened into this branch.
+
+**Worth a separate look:** `10.100.0.2/22` is NordVPN's data-channel interface
+and it sits inside the sACN `10.0.0.0/8` subnet, so it becomes a sweep target.
+NordVPN was already the unproven suspect in the show-NIC category drift. That is
+an operational finding, not a test artifact.

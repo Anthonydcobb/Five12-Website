@@ -1,8 +1,10 @@
 """Bolero adapter — normalization of the REAL REST payloads.
 
-[VERIFIED 2026-07-22] Field mapping captured from the live unit at
-192.168.1.11 (HAR): /rest/nodeStatus carries antennas and, under each node's
-`bp[]`, the packs currently attached to that antenna with their battery block;
+[VERIFIED 2026-07-22, PARTLY CORRECTED 2026-07-30] Field mapping captured from
+the live unit at 192.168.1.11 (HAR): /rest/nodeStatus carries antennas and, under
+the DECT MASTER node's `bp[]`, every connected pack with its battery block. The
+2026-07-22 reading of "the packs attached to that antenna" was wrong -- see the
+antenna-attribution section at the foot of this file;
 /rest/nodeConfig maps nodeId -> antenna name; /rest/bp maps DECT id -> crew
 name. These fixtures are trimmed real responses.
 """
@@ -55,10 +57,15 @@ def test_antennas_named_from_node_config(adapter):
     assert names == {'MBS LM 1', 'MBS LM 2'}
 
 
-def test_pack_count_per_antenna(adapter):
+def test_no_per_antenna_pack_count_is_claimed(adapter):
+    """Was `test_pack_count_per_antenna`, asserting 2 on MBS LM 2 and 0 on
+    MBS LM 1. Those numbers were real, but they meant "packs the DECT master
+    enumerates", not "packs on this antenna" -- and they rendered as the latter.
+    Probed live 2026-07-30: MBS LM 1 asked about itself also reports zero while
+    the Bolero GUI showed five packs on it."""
     by_name = {a['name']: a for a in _norm(adapter)['antennas']}
-    assert by_name['MBS LM 2']['packCount'] == 2
-    assert by_name['MBS LM 1']['packCount'] == 0
+    assert by_name['MBS LM 2']['packCount'] is None
+    assert by_name['MBS LM 1']['packCount'] is None
 
 
 def test_ptp_synced_from_lockstate(adapter):
@@ -73,7 +80,9 @@ def test_beltpack_battery_fields_mapped(adapter):
     assert a['healthPct'] == 100
     assert a['tempC'] == 30
     assert a['charging'] is False          # usbPower 0
-    assert a['antenna'] == 'MBS LM 2'
+    # Not 'MBS LM 2'. That was the DECT master's name leaking in as if it
+    # were this pack's antenna; the API does not carry attribution.
+    assert a['antenna'] is None
     assert a['online'] is True             # present in a node's bp[]
 
 
@@ -157,3 +166,62 @@ def test_sim_still_produces_the_contract():
         assert 'healthPct' in p and 'charging' in p and 'batteryPct' in p
         assert 'signalQuality' in p and 'signalLabel' in p
         assert 0 <= p['signalQuality'] <= 4
+
+
+# ── Antenna attribution is not in this API (2026-07-30) ──────────────────────
+#
+# Anthony saw all eight packs on MBS LM 2 while the Bolero GUI showed 5 on LM 1
+# and 3 on LM 2. Probed live, read-only: /rest/nodeStatus hangs every connected
+# pack off the node with isDectMaster=True, and MBS LM 1 asked about ITSELF
+# reports bp: []. Nothing in a bp[] entry names a node. So the antenna a pack is
+# radio-linked to is simply not in this payload, and the old code derived it
+# from the containing node -- which is always the master.
+#
+# A confidently wrong antenna on a panel read under show pressure is worse than
+# a blank one.
+
+MASTER_NODE_CONFIG = {'nodeConfig': [
+    {'nodeId': 132651929, 'name': 'MBS LM 2', 'isLocal': True,
+     'ip': {'ip': '192.168.1.11'}},
+    {'nodeId': 163060633, 'name': 'MBS LM 1', 'isLocal': False,
+     'ip': {'ip': '192.168.1.12'}},
+]}
+
+MASTER_NODE_STATUS = {'nodeStatus': [
+    # the DECT master carries every pack, whichever antenna they are really on
+    {'nodeId': 132651929, 'ip': '192.168.1.11', 'isDectMaster': True,
+     'ptpStatus': {'lockState': 2},
+     'bp': [
+        {'id': 34, 'battery': {'status': 82, 'currentCharge': 3857, 'usbPower': 0,
+                               'batteryTemperature': 30, 'batteryHealth': 100},
+         'signalLevel': 0},
+        {'id': 2, 'battery': {'status': 96, 'currentCharge': 4420, 'usbPower': 1,
+                              'batteryTemperature': 29, 'batteryHealth': 96},
+         'signalLevel': 0},
+     ]},
+    {'nodeId': 163060633, 'ip': '192.168.1.12', 'isDectMaster': False,
+     'ptpStatus': {'lockState': 2}, 'bp': []},
+]}
+
+
+def test_no_pack_claims_an_antenna(adapter):
+    out = adapter._normalize(MASTER_NODE_STATUS, MASTER_NODE_CONFIG, NAME_MAP)
+    assert [p['antenna'] for p in out['beltpacks']] == [None, None]
+
+
+def test_no_antenna_claims_a_pack_count(adapter):
+    out = adapter._normalize(MASTER_NODE_STATUS, MASTER_NODE_CONFIG, NAME_MAP)
+    assert [a['packCount'] for a in out['antennas']] == [None, None]
+
+
+def test_the_dect_master_is_identified(adapter):
+    out = adapter._normalize(MASTER_NODE_STATUS, MASTER_NODE_CONFIG, NAME_MAP)
+    by_name = {a['name']: a for a in out['antennas']}
+    assert by_name['MBS LM 2']['isDectMaster'] is True
+    assert by_name['MBS LM 1']['isDectMaster'] is False
+
+
+def test_the_system_wide_total_is_still_reported(adapter):
+    """packsOnline IS knowable -- the master lists them all."""
+    out = adapter._normalize(MASTER_NODE_STATUS, MASTER_NODE_CONFIG, NAME_MAP)
+    assert out['packsOnline'] == 2

@@ -231,6 +231,15 @@ function BoleroPanel() {
             ))}
           </tbody>
         </table>
+        {status.source === 'rest' && status.beltpacks?.length > 0 &&
+          status.beltpacks.every((p) => p.antenna == null) && (
+          <div className="text-[8px] text-text-muted mt-1 leading-relaxed">
+            Antenna is blank because the Bolero REST API does not report it —
+            every connected pack is listed under the DECT master, whichever
+            antenna it is actually linked to. The figure in the Bolero web GUI
+            comes from somewhere this API does not expose.
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -240,7 +249,15 @@ function BoleroPanel() {
             <div className={'text-[9px] font-mono ' + (a.ptpSynced ? 'text-text-muted' : 'text-brand-hi font-bold')}>
               PTP {a.ptpSynced ? 'synced' : 'LOST'}
             </div>
-            <div className="text-[9px] font-mono text-text-muted">{a.packCount ?? '—'} packs</div>
+            {/* No per-antenna pack count: the Bolero REST API lists every pack
+                under the DECT master, so any number here would read as this
+                antenna's own load and be wrong. The master is the one true
+                thing the payload says about the topology. */}
+            {a.isDectMaster
+              ? <div className="text-[9px] font-mono text-text-muted">DECT master</div>
+              : a.packCount != null
+                ? <div className="text-[9px] font-mono text-text-muted">{a.packCount} packs</div>
+                : null}
           </div>
         ))}
         <div className="flex-1 min-w-[220px]">
