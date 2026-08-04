@@ -348,4 +348,107 @@ describe('AsteraMirrorPanel', () => {
     expect(screen.queryByRole('button', { name: /back/i })).not.toBeInTheDocument();
     expect(screen.queryByAltText('tablet screen')).not.toBeInTheDocument();
   });
+
+  // --- fix pass: pointer capture keeps a drag alive past the image edge ---
+  // Without setPointerCapture (and the window-level pointerup/pointercancel
+  // fallback jsdom needs, since it doesn't implement real capture), the
+  // native pointerup would fire on whatever element is under the cursor —
+  // not the <img> — and this gesture would be silently dropped: no request
+  // sent, downRef left set. We prove it by releasing on `window` itself,
+  // which is never an ancestor of the <img> in the delegated-event sense,
+  // so this can only pass if something outside the <img>'s own handlers is
+  // catching the release.
+  it('still sends the swipe when the pointer is released outside the image', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    mockImageBox(img, { left: 0, top: 0, width: 270, height: 600 });
+
+    fireEvent.pointerDown(img, { clientX: 50, clientY: 50 });
+    // The drag crosses the image's right edge (e.g. a swipe toward the
+    // mirrored screen's border, or dragging a colour wheel past its rim)
+    // and the pointerup lands somewhere that is not the <img> at all.
+    fireEvent.pointerUp(window, { clientX: 320, clientY: 50 });
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    const [, body] = axios.post.mock.calls[0];
+    // down: (50,50) in a 270x600 box over a 1080x2400 device -> (200,200).
+    // up: (320,50) -> x ratio 320/270*1080 = 1280, clamped to 1079; y=200.
+    expect(body).toMatchObject({ action: 'swipe', x: 200, y: 200, x2: 1079, y2: 200 });
+  });
+
+  it('clears the pending gesture on pointercancel so it cannot leak into the next one', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    mockImageBox(img, { left: 0, top: 0, width: 270, height: 600 });
+
+    fireEvent.pointerDown(img, { clientX: 50, clientY: 50 });
+    fireEvent.pointerCancel(img, {});
+    // A pointerup that arrives after the cancel must not be treated as the
+    // release of the cancelled gesture, even though it lands right back on
+    // the image (dispatched here on the <img> itself, deliberately, so this
+    // still catches the old img-only onPointerUp handler if it ever comes
+    // back).
+    fireEvent.pointerUp(img, { clientX: 50, clientY: 50 });
+
+    // Give any (incorrect) queued send() a chance to fire.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(axios.post).not.toHaveBeenCalled();
+  });
+
+  // --- fix pass: an input error must outlive the next frame poll -------
+  // The frame-poll effect calls setFrameError(null) on every successful
+  // tick (~750ms, FRAME_MS). Before this fix, send() reported failures
+  // through that same frameError state, so a rejected tap/swipe/key would
+  // be wiped from the screen well under a second after it appeared.
+  it('keeps an input error visible across a subsequent successful frame poll', async () => {
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        return Promise.resolve({ data: new Blob(['x']) });
+      }
+      return Promise.resolve(statusOf({}));
+    });
+    axios.post.mockRejectedValueOnce({ response: { data: { detail: 'x out of bounds' } } });
+
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    mockImageBox(img, { left: 0, top: 0, width: 270, height: 600 });
+
+    fireEvent.pointerDown(img, { clientX: 135, clientY: 300 });
+    fireEvent.pointerUp(img, { clientX: 135, clientY: 300 });
+
+    expect(await screen.findByText(/x out of bounds/)).toBeInTheDocument();
+
+    // Real time, past FRAME_MS (750ms), so at least one more successful
+    // frame poll completes and calls setFrameError(null) after the input
+    // error was set.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    expect(screen.getByText(/x out of bounds/)).toBeInTheDocument();
+  }, 10000);
+
+  // --- fix pass: coordinate rounding must be exercised by a scale that
+  // doesn't divide evenly, or a regression that drops Math.round would
+  // pass every existing test while sending floats the backend rejects. ---
+  it('rounds coordinates to integers at a non-dividing display scale', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    // 273x601 against a 1080x2400 device does not divide evenly in either
+    // axis, unlike the quarter-scale boxes used elsewhere in this file.
+    mockImageBox(img, { left: 5, top: 7, width: 273, height: 601 });
+
+    fireEvent.pointerDown(img, { clientX: 5 + 100, clientY: 7 + 250 });
+    fireEvent.pointerUp(img, { clientX: 5 + 100, clientY: 7 + 250 });
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    const [, body] = axios.post.mock.calls[0];
+    expect(body.action).toBe('tap');
+    // x: round(100/273*1080) = round(395.604...) = 396
+    // y: round(250/601*2400) = round(998.336...) = 998
+    expect(Number.isInteger(body.x)).toBe(true);
+    expect(Number.isInteger(body.y)).toBe(true);
+    expect(body).toMatchObject({ x: 396, y: 998 });
+  });
 });

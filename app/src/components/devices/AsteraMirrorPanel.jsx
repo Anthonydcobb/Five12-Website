@@ -9,6 +9,11 @@ const STATUS_MS = 3000;
 const FRAME_MS = 750;
 const STALE_AFTER_SEC = 3;
 const TAP_SLOP_PX = 8;
+// How long a failed-input message stays on screen before it auto-clears.
+// Long enough to read, short enough not to linger as permanent clutter if
+// the operator doesn't immediately retry. It's also cleared early — before
+// this fires — by the next *successful* input.
+const INPUT_ERROR_MS = 5000;
 
 // axios delivers the *error* response body as a Blob too when the request
 // was made with responseType: 'blob', so err.response.data is a Blob, not
@@ -32,8 +37,17 @@ export default function AsteraMirrorPanel() {
   const [status, setStatus] = useState(null);
   const [frameUrl, setFrameUrl] = useState(null);
   const [frameError, setFrameError] = useState(null);
+  // Kept separate from frameError: the frame-poll effect below writes
+  // frameError on every tick (~750ms), which would wipe out an input
+  // failure before the operator had a chance to read it.
+  const [inputError, setInputError] = useState(null);
   const urlRef = useRef(null);
   const generationRef = useRef(0);
+  const inputErrorTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (inputErrorTimerRef.current) clearTimeout(inputErrorTimerRef.current);
+  }, []);
 
   const pollStatus = useCallback(async () => {
     try {
@@ -112,17 +126,49 @@ export default function AsteraMirrorPanel() {
     return { x: clamp(x, status.screenW), y: clamp(y, status.screenH) };
   };
 
+  const clearInputErrorTimer = () => {
+    if (inputErrorTimerRef.current) {
+      clearTimeout(inputErrorTimerRef.current);
+      inputErrorTimerRef.current = null;
+    }
+  };
+
   const send = async (body) => {
-    try { await axios.post('/api/devices/astera/input', body); }
-    catch (err) { setFrameError(err?.response?.data?.detail || 'input refused'); }
+    try {
+      await axios.post('/api/devices/astera/input', body);
+      // A later successful input is the clearest signal the problem is
+      // gone — clear immediately rather than waiting for the timer.
+      clearInputErrorTimer();
+      setInputError(null);
+    } catch (err) {
+      clearInputErrorTimer();
+      setInputError(err?.response?.data?.detail || 'input refused');
+      inputErrorTimerRef.current = setTimeout(() => setInputError(null), INPUT_ERROR_MS);
+    }
   };
 
-  const onPointerDown = (e) => {
-    downRef.current = { pt: toDevice(e), clientX: e.clientX, clientY: e.clientY,
-                        at: Date.now() };
+  // A drag that leaves the image before release is a normal gesture (a
+  // swipe toward the mirrored screen's edge, dragging a colour wheel past
+  // its border, etc). The native pointerup then fires on whatever element
+  // is under the cursor, not the <img> — so pointerdown captures the
+  // pointer, and cleanup listens on window for pointerup/pointercancel
+  // regardless of where they land. setPointerCapture itself is also
+  // attempted for browsers that honor it, but jsdom does not implement it
+  // (hence the guarded call), so the window-level listeners are what
+  // actually keep the gesture alive under test and in any environment
+  // without capture support.
+  const gestureCleanupRef = useRef(null);
+
+  const endGesture = () => {
+    if (gestureCleanupRef.current) {
+      gestureCleanupRef.current();
+      gestureCleanupRef.current = null;
+    }
   };
 
-  const onPointerUp = (e) => {
+  useEffect(() => () => endGesture(), []);
+
+  const finishGesture = (e) => {
     const down = downRef.current;
     downRef.current = null;
     const up = toDevice(e);
@@ -134,6 +180,44 @@ export default function AsteraMirrorPanel() {
       send({ action: 'swipe', x: down.pt.x, y: down.pt.y, x2: up.x, y2: up.y,
              durationMs: Math.max(50, Math.min(Date.now() - down.at, 5000)) });
     }
+  };
+
+  const releaseCapture = (pointerId) => {
+    const el = imgRef.current;
+    if (el && typeof el.releasePointerCapture === 'function') {
+      try { el.releasePointerCapture(pointerId); } catch { /* not captured, or unsupported */ }
+    }
+  };
+
+  const onPointerDown = (e) => {
+    // Clear any stale, never-finished gesture before starting a new one.
+    endGesture();
+    downRef.current = { pt: toDevice(e), clientX: e.clientX, clientY: e.clientY,
+                        at: Date.now() };
+
+    const el = e.currentTarget;
+    if (typeof el.setPointerCapture === 'function') {
+      try { el.setPointerCapture(e.pointerId); } catch { /* unsupported, e.g. jsdom */ }
+    }
+
+    const handleUp = (ev) => {
+      endGesture();
+      releaseCapture(ev.pointerId);
+      finishGesture(ev);
+    };
+    const handleCancel = (ev) => {
+      endGesture();
+      releaseCapture(ev.pointerId);
+      // An interrupted gesture (e.g. the OS took over the touch) must not
+      // be mistaken for the start of the next one.
+      downRef.current = null;
+    };
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleCancel);
+    gestureCleanupRef.current = () => {
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleCancel);
+    };
   };
 
   if (!status) {
@@ -176,9 +260,13 @@ export default function AsteraMirrorPanel() {
         <div className="text-[10px] font-mono text-text-muted">{frameError}</div>
       )}
 
+      {inputError && (
+        <div className="text-[10px] font-mono text-warn">input: {inputError}</div>
+      )}
+
       {frameUrl && (
         <img ref={imgRef} src={frameUrl} alt="tablet screen"
-             onPointerDown={onPointerDown} onPointerUp={onPointerUp}
+             onPointerDown={onPointerDown}
              draggable={false}
              className={'border border-[var(--color-border)] max-h-[70vh] w-auto touch-none select-none cursor-pointer ' +
                         (stale ? 'opacity-60' : '')} />
