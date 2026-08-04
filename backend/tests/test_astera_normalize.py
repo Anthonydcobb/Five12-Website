@@ -110,3 +110,61 @@ def test_low_bridge_battery_raises_a_crit_alert(adapter, monkeypatch):
           status={**RAW_STATUS, 'bridge': {'name': 'ART7', 'battery': 12}})
     alerts = adapter.get_status()['alerts']
     assert any(a['level'] == 'crit' and '12' in a['message'] for a in alerts)
+
+
+# ── W1 (Hermes review 2026-08-03): non-mapping payloads ─────────────────────
+# The protocol is unverified, so "valid JSON of an unexpected shape" is a real
+# possibility, not a hypothetical. It must read as unavailable-with-a-reason,
+# never as a 500 and never as fabricated data.
+
+@pytest.mark.parametrize('bad', [None, [], 'a string', 42])
+def test_non_mapping_status_payload_reads_as_unavailable(adapter, monkeypatch, bad):
+    _wire(monkeypatch, adapter, status=bad)
+    s = adapter.get_status()
+    assert s['available'] is False
+    assert 'unexpected' in s['reason'].lower()
+    assert s['alerts'] == []
+
+
+@pytest.mark.parametrize('bad', [None, [], 'a string', 42])
+def test_non_mapping_targets_payload_reads_as_unavailable(adapter, monkeypatch, bad):
+    _wire(monkeypatch, adapter, targets=bad)
+    s = adapter.get_status()
+    assert s['available'] is False
+    assert 'unexpected' in s['reason'].lower()
+
+
+def test_non_mapping_bridge_field_does_not_crash(adapter, monkeypatch):
+    """A nested field of the wrong type is likelier than a wrong top level:
+    one renamed key in an unverified payload is enough."""
+    _wire(monkeypatch, adapter, status={**RAW_STATUS, 'bridge': []})
+    s = adapter.get_status()
+    assert s['available'] is True
+    assert s['bridge'] == {'name': None, 'batteryPct': None}
+
+
+def test_non_mapping_targets_list_entries_are_skipped(adapter, monkeypatch):
+    _wire(monkeypatch, adapter,
+          targets={'targets': ['nonsense', None, RAW_TARGETS['targets'][0]]})
+    s = adapter.get_status()
+    assert s['targetCount'] == 1
+    assert s['targets'][0]['name'] == 'Key Tubes'
+
+
+def test_targets_key_of_the_wrong_type_yields_no_targets(adapter, monkeypatch):
+    _wire(monkeypatch, adapter, targets={'targets': 'not a list'})
+    s = adapter.get_status()
+    assert s['available'] is True
+    assert s['targets'] == []
+
+
+# ── S1 (Hermes review 2026-08-03): alias width ──────────────────────────────
+
+def test_pin_alias_is_wide_enough_to_distinguish_every_four_digit_pin():
+    """A 4-hex alias is 16 bits; across the 10 000 possible PINs collisions are
+    near-certain, and a collision reads as 'the PIN did not change' — the exact
+    confidently-wrong-value failure this project keeps hitting. Widened to 8."""
+    from app.integrations.astera import _pin_alias
+    aliases = {_pin_alias(pin) for pin in range(10000)}
+    assert len(aliases) == 10000
+    assert len(_pin_alias(1234)) == len('PIN-') + 8

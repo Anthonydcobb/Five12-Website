@@ -33,6 +33,16 @@ function useAsteraStatus() {
   return status
 }
 
+// Three states, not two. The backend maps an unverified or renamed field to
+// null on purpose, and a truthiness check would turn "we don't know" into the
+// confident claim "offline" — the failure mode that cost this project the
+// Bolero antenna attribution.
+function appState(online) {
+  if (online === true) return 'online'
+  if (online === false) return 'offline'
+  return 'unknown'
+}
+
 function Badge({ tone, children }) {
   return (
     <span className={`text-[8px] font-mono uppercase tracking-widest px-1.5 py-0.5 border ${tone}`}>
@@ -46,6 +56,19 @@ export default function AsteraPanel() {
 
   if (!status) {
     return <div className="text-[10px] font-mono text-text-muted py-6 px-2">loading…</div>
+  }
+
+  // "Disabled" and "unavailable" are different claims. The gate-off state
+  // means we never looked; saying "device unavailable" would imply we did.
+  if (status.disabled) {
+    return (
+      <div className="p-3 space-y-2">
+        <div className="text-[10px] font-mono text-text-muted py-4 px-2">
+          not searched for{status.reason ? ` — ${status.reason}` : ''}
+        </div>
+        <Footer />
+      </div>
+    )
   }
 
   if (!status.available) {
@@ -66,10 +89,10 @@ export default function AsteraPanel() {
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-[11px] font-mono font-bold text-gel">{bridge.name ?? '—'}</span>
         <span className="text-[10px] font-mono text-text-muted">
-          bridge battery {bridge.batteryPct != null ? `${bridge.batteryPct}%` : '—'}
+          bridge battery {bridge.batteryPct != null ? `${bridge.batteryPct}%` : 'unknown'}
         </span>
         <span className="text-[10px] font-mono text-text-muted">
-          app {status.appOnline ? 'online' : 'offline'}
+          app {appState(status.appOnline)}
           {status.appVersion ? ` · ${status.appVersion}` : ''}
         </span>
         {status.radioPinAlias && (

@@ -76,3 +76,22 @@ def test_gate_on_without_host_names_the_setting_and_stays_offline(no_network, mo
     det = AsteraAdapter(sim=False).detect()
     assert det['found'] is False
     assert 'FIVE12_ASTERA_HOST' in det['detail']
+
+
+def test_gate_off_status_carries_an_explicit_disabled_flag(gate_off, no_network):
+    """The UI must distinguish 'we never looked' from 'we looked and failed'.
+    A flag is a firmer contract than the reason string's wording."""
+    status = AsteraAdapter(sim=False).get_status()
+    assert status['disabled'] is True
+
+
+def test_a_real_failure_is_not_marked_disabled(monkeypatch):
+    monkeypatch.setenv('FIVE12_ASTERA_TOOLS', '1')
+    monkeypatch.setenv('FIVE12_ASTERA_HOST', '192.168.1.50')
+    adapter = AsteraAdapter(sim=False)
+    def boom(key):
+        raise ValueError('refused redirect (HTTP 302)')
+    monkeypatch.setattr(adapter, '_fetch_json', boom)
+    status = adapter.get_status()
+    assert status['available'] is False
+    assert status.get('disabled') is not True

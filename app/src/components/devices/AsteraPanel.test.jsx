@@ -35,7 +35,7 @@ beforeEach(() => {
 
 describe('AsteraPanel', () => {
   it('renders the disabled gate state without implying a search happened', async () => {
-    wire({ available: false,
+    wire({ available: false, disabled: true,
            reason: 'Astera tools disabled — set FIVE12_ASTERA_TOOLS=1 to enable',
            alerts: [] })
     render(<AsteraPanel />)
@@ -77,5 +77,46 @@ describe('AsteraPanel', () => {
     wire({ available: false, reason: 'refused redirect (HTTP 302)', alerts: [] })
     render(<AsteraPanel />)
     expect(await screen.findByText(/refused redirect/)).toBeInTheDocument()
+  })
+})
+
+// ── Hermes review 2026-08-03 ────────────────────────────────────────────────
+
+describe('AsteraPanel — unknown vs known-negative state (W2)', () => {
+  it('renders an absent appOnline as unknown, not offline', async () => {
+    wire({ ...REAL_STATUS, appOnline: null })
+    render(<AsteraPanel />)
+    expect(await screen.findByText(/app unknown/i)).toBeInTheDocument()
+    expect(screen.queryByText(/app offline/i)).toBeNull()
+  })
+
+  it('still renders a real false as offline', async () => {
+    wire({ ...REAL_STATUS, appOnline: false })
+    render(<AsteraPanel />)
+    expect(await screen.findByText(/app offline/i)).toBeInTheDocument()
+  })
+
+  it('renders an absent bridge battery as unknown, not zero', async () => {
+    wire({ ...REAL_STATUS, bridge: { name: 'ART7 90210', batteryPct: null } })
+    render(<AsteraPanel />)
+    expect(await screen.findByText('ART7 90210')).toBeInTheDocument()
+    expect(await screen.findByText(/bridge battery unknown/i)).toBeInTheDocument()
+  })
+})
+
+describe('AsteraPanel — disabled is not unavailable (S2 copy)', () => {
+  it('does not use the searched-and-failed wording for the gate-off state', async () => {
+    wire({ available: false, disabled: true,
+           reason: 'Astera tools disabled — set FIVE12_ASTERA_TOOLS=1 to enable',
+           alerts: [] })
+    render(<AsteraPanel />)
+    expect(await screen.findByText(/Astera tools disabled/)).toBeInTheDocument()
+    expect(screen.queryByText(/device unavailable/i)).toBeNull()
+  })
+
+  it('still says unavailable when a real read actually failed', async () => {
+    wire({ available: false, reason: 'refused redirect (HTTP 302)', alerts: [] })
+    render(<AsteraPanel />)
+    expect(await screen.findByText(/device unavailable/i)).toBeInTheDocument()
   })
 })

@@ -73,10 +73,16 @@ def _pin_alias(pin):
     'same PIN' across sessions without the raw value ever being displayed or
     logged. Hygiene, not secrecy — a 4-digit PIN is trivially brute-forced
     from any short hash, so the protection is keeping it out of casual view
-    and logs, which is all the agreed direction requires."""
+    and logs, which is all the agreed direction requires.
+
+    8 hex characters, not 4 (Hermes review S1, 2026-08-03): a 16-bit alias
+    collides across the 10 000 possible PINs, and a collision renders as "the
+    PIN did not change" — a confidently wrong value, which is the failure mode
+    this project keeps meeting. The width is about telling PINs apart, not
+    about strength."""
     if pin is None:
         return None
-    return 'PIN-' + hashlib.sha256(str(pin).encode()).hexdigest()[:4].upper()
+    return 'PIN-' + hashlib.sha256(str(pin).encode()).hexdigest()[:8].upper()
 
 
 def _gate_enabled():
@@ -125,7 +131,11 @@ class AsteraAdapter(DeviceAdapter):
 
     def get_status(self):
         if not _gate_enabled():
-            return {'available': False, 'reason': DISABLED_DETAIL, 'alerts': []}
+            # `disabled` is a separate flag from `available` on purpose: the UI
+            # must be able to say "we never looked" rather than the generic
+            # "device unavailable", which reads as searched-and-absent.
+            return {'available': False, 'disabled': True,
+                    'reason': DISABLED_DETAIL, 'alerts': []}
         if self.sim:
             return self._sim_status()
         try:
@@ -133,6 +143,17 @@ class AsteraAdapter(DeviceAdapter):
             raw_targets = self._fetch_json('targets')
         except (ValueError, OSError, requests.RequestException) as exc:
             return {'available': False, 'reason': str(exc), 'alerts': []}
+        # A payload can be valid JSON and still not be the object we expect —
+        # `null`, a list, a bare string. With the protocol unverified that is a
+        # live possibility, and it must read as unavailable-with-a-reason
+        # rather than becoming an AttributeError and a backend 500 (review W1).
+        for name, payload in (('/api/status', raw_status),
+                              ('/api/targets', raw_targets)):
+            if not isinstance(payload, dict):
+                return {'available': False, 'alerts': [],
+                        'reason': (f'unexpected payload shape from {name}: '
+                                   f'expected an object, got '
+                                   f'{type(payload).__name__}')}
         status = self._normalize(raw_status, raw_targets)
         status['alerts'] = check_thresholds(status, ALERT_RULES)
         self.history.record({'bridgeBatteryPct': status['bridge']['batteryPct']})
@@ -143,9 +164,17 @@ class AsteraAdapter(DeviceAdapter):
         AsteraNext 13.18 — hence protocolVerified and the defensive .get()s.
         The bench capture corrects this mapping; until then a missing field
         reads as None, never as a guess."""
-        bridge = raw_status.get('bridge') or {}
+        # Nested shapes get the same treatment as the top level, and are the
+        # likelier failure: one renamed or retyped key in an unverified payload
+        # is enough. Anything not of the expected type reads as absent.
+        bridge = raw_status.get('bridge')
+        if not isinstance(bridge, dict):
+            bridge = {}
+        raw_list = raw_targets.get('targets')
+        if not isinstance(raw_list, list):
+            raw_list = []
         targets = []
-        for t in (raw_targets.get('targets') or []):
+        for t in raw_list:
             if isinstance(t, dict):
                 targets.append({
                     'id': t.get('id'),
