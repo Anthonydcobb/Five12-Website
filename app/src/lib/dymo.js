@@ -59,20 +59,21 @@ export async function getPrinters() {
     .map((p) => ({ name: p.name, isTwinTurbo: !!p.isTwinTurbo }));
 }
 
-// Rejects on this DYMO Connect web service (1.6.1.7): its RenderLabel endpoint
-// is broken outright, not just for our template. It answers HTTP 500 with an
-// empty body for EVERY input — the stored template, a stock DLS 8.0
-// DieCutLabel, a minimal DesktopLabel, and even no parameters at all — while
-// PrintLabel accepts the same XML and returns 200. The Windows Application log
-// names the cause: the handler throws before it reads the request.
+// Can reject even when DYMO Connect looks healthy, so callers must surface the
+// failure rather than treat a missing preview as "not mapped yet" — see
+// DymoPrintDialog.
 //
-//   System.IO.FileNotFoundException:
-//   File name: 'System.Xml.XmlSerializer, Version=8.0.0.0, ...'
-//      at DYMO.WebApi.Server.Controllers.DymoDLSSDKController.RenderLabel(...)
-//
-// i.e. the assembly is missing from DYMO's single-file bundle, so the endpoint
-// cannot work at all in this build. Callers must surface the rejection rather
-// than treat a missing preview as "not mapped yet" — see DymoPrintDialog.
+// History worth keeping: RenderLabel answered HTTP 500 with an empty body for
+// EVERY input for an entire session — stored template, minimal DesktopLabel,
+// even no parameters — while PrintLabel accepted the same XML and returned 200.
+// The Windows Application log showed the handler throwing before it read the
+// request (System.IO.FileNotFoundException on 'System.Xml.XmlSerializer'),
+// which we misread as the assembly being absent from DYMO's single-file bundle,
+// i.e. permanently broken in 1.6.1.7. It is not. The DYMO.WebApi.Win.Host
+// process had gone bad; it later died outright, and a freshly started host
+// renders the same template to a PNG on the first try. So: a 500 here means
+// RESTART THE HOST (DYMO.WebApi.Win.Host.exe, or quit and relaunch DYMO
+// Connect), not that previews are unsupported.
 export async function renderPreview(labelXml, values) {
   const f = await fw();
   return f.renderLabel(mergeLabel(labelXml, values), '', '');
