@@ -4,7 +4,19 @@
 mapping into a verified one, and name the ART7's radio transport so Stage B can
 be estimated or killed.
 
-**Status:** planned. Not yet run.
+**Status:** **EXECUTED 2026-08-04 — Step 0 fired, session stopped as designed.**
+There is no network-reachable AsteraNext server, and the ART7-U has no network
+interface at all. Steps 1–9 never ran because Step 0 gates them. Result and full
+probe list: `docs/hardware-tests/astera-art7-stage-a.md`.
+
+Session 2 (transport identification) was **not run and is not needed** for the
+question it existed to answer: the ART7-U datasheet states `Bluetooth Classic:
+Yes` where the ART7-WIFI states `No`, which puts Stage B on the Winsock/pywin32
+branch rather than the `five12_ble/` extension. Manufacturer documentation
+settled it more cheaply than an HCI capture would have.
+
+The plan below is retained as written, minus the corrections marked **AMENDED**,
+so the method is reusable if Astera ever ships a network-capable path.
 
 **Authority:**
 - `docs/agent-reviews/2026-07-29-claude-review-of-astera-integration-spec.md`
@@ -45,9 +57,21 @@ makes that honest today. This session is the only thing that can flip it.
 
 ## Safety envelope — read before touching anything
 
-1. **Isolated network only.** A dedicated AP/SSID or a laptop hotspot with only
-   the capture laptop and the AsteraNext phone on it. Not the show network, not
-   the production VLAN.
+1. **AMENDED — verified egress, not network isolation.** The original rule said
+   "isolated network only". That was wrong: stages have no cellular service, so
+   the phone is always on venue Wi-Fi, and an isolated bench network is a
+   configuration that never exists in production. Capturing under it would verify
+   a topology you never operate in.
+
+   The replacement control is per-request egress verification. Before any packet,
+   run `Find-NetRoute -RemoteIPAddress <PHONE_IP>` and confirm the interface is
+   **not** a show NIC. This matters concretely: Management owns `172.16.0.0/16`
+   while venue Wi-Fi owns `172.16.10.0/23`, so a phone addressed anywhere in
+   172.16-space *outside* that /23 egresses **Management, onto the show LAN**.
+   On 2026-08-04 the Windows neighbor table held a stale unresolved entry for the
+   phone on Management — the overlap is real, not theoretical.
+
+   Stop if the route resolves to Management, HOG, COMS, or sACN.
 2. **Dummy fixtures only.** No show rig, no fixture that is patched into
    anything. The ART7 talks to fixtures over its own radio — an ART7 on the
    bench with the show's tubes powered nearby is not isolated.
