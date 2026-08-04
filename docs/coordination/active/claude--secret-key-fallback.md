@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/secret-key-fallback`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\secret-key`
 - **Base SHA:** `e3c4bb7` (`origin/main`)
-- **Status:** complete, pushed for review
+- **Status:** complete — merged to `main` at `c679243d96c64c7d9df46c3b1964c78bc8a23349`
 - **Last updated:** 2026-07-30
 
 ## Goal
@@ -113,7 +113,9 @@ the unit test above, which runs the real probe over the real `config.py`.
 
 ## Handoff
 
-Pushed for review, not merged. Small and self-contained, but the piece worth a
+Merged to `main` at Anthony's direction — ninth today without independent
+review. Clean fast-forward; `main` had not moved, so the merged tree is exactly
+the one the checks ran against. Small and self-contained, but the piece worth a
 second opinion is the scope change above — I proposed one thing to Hermes and
 did a slightly larger thing, for a reason I believe is right but which Hermes
 should get to disagree with.
