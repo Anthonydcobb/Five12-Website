@@ -33,6 +33,14 @@ ADB_TIMEOUT = 6
 CAPTURE_TIMEOUT = 8
 MAX_TAPS_PER_SECOND = 8
 
+# The COMPLETE set of key events this module may send. Anything not here is
+# unreachable by construction, including POWER and anything text-related.
+ALLOWED_KEYCODES = {'BACK': 'KEYCODE_BACK',
+                    'HOME': 'KEYCODE_HOME',
+                    'APP_SWITCH': 'KEYCODE_APP_SWITCH'}
+
+MAX_SWIPE_MS = 5000
+
 DISABLED_DETAIL = 'tablet mirror disabled — set FIVE12_MIRROR_TOOLS=1 to enable'
 NO_SERIAL_DETAIL = ('set FIVE12_MIRROR_SERIAL to the adb serial of the tablet '
                     '(see `adb devices`)')
@@ -199,3 +207,78 @@ class AndroidMirrorAdapter(DeviceAdapter):
             'mirrorRunning': self._last_frame is not None,
             'lastFrameAgeSec': age,
         }
+
+    def _rate_ok(self):
+        now = time.monotonic()
+        while self._tap_times and now - self._tap_times[0] >= 1.0:
+            self._tap_times.popleft()
+        if len(self._tap_times) >= MAX_TAPS_PER_SECOND:
+            return False
+        self._tap_times.append(now)
+        return True
+
+    def _valid_point(self, payload, xk, yk, bounds):
+        w, h = bounds
+        x, y = payload.get(xk), payload.get(yk)
+        for value, limit in ((x, w), (y, h)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                return None
+            if value < 0 or value >= limit:
+                return None
+        return x, y
+
+    def send_input(self, payload):
+        """-> (ok, detail). `payload` is request-supplied and therefore
+        untrusted: the action is matched against a closed set, coordinates must
+        be integers inside the cached screen bounds, and no field of it ever
+        becomes part of an adb argument without passing one of those checks.
+        The device serial is not read from it at all."""
+        if not _tools_enabled():
+            return False, DISABLED_DETAIL
+        if not _serial():
+            return False, NO_SERIAL_DETAIL
+        if not isinstance(payload, dict):
+            return False, 'unknown action'
+
+        action = payload.get('action')
+        if action not in ('tap', 'swipe', 'key'):
+            return False, f'unknown action {action!r}'
+
+        if action == 'key':
+            keycode = ALLOWED_KEYCODES.get(payload.get('keycode'))
+            if keycode is None:
+                return False, f'keycode {payload.get("keycode")!r} not allowed'
+            if not self._rate_ok():
+                return False, 'rate limit exceeded'
+            ok, _out, detail = _run_adb(
+                ['shell', 'input', 'keyevent', keycode], ADB_TIMEOUT)
+            return ok, detail
+
+        bounds = self.screen_size()
+        if bounds is None:
+            return False, 'screen size unknown — cannot validate coordinates'
+
+        start = self._valid_point(payload, 'x', 'y', bounds)
+        if start is None:
+            return False, 'coordinate out of bounds or not an integer'
+
+        if action == 'tap':
+            if not self._rate_ok():
+                return False, 'rate limit exceeded'
+            ok, _out, detail = _run_adb(
+                ['shell', 'input', 'tap', str(start[0]), str(start[1])], ADB_TIMEOUT)
+            return ok, detail
+
+        end = self._valid_point(payload, 'x2', 'y2', bounds)
+        if end is None:
+            return False, 'coordinate out of bounds or not an integer'
+        duration = payload.get('durationMs', 200)
+        if not isinstance(duration, int) or isinstance(duration, bool):
+            return False, 'coordinate out of bounds or not an integer'
+        duration = max(1, min(duration, MAX_SWIPE_MS))
+        if not self._rate_ok():
+            return False, 'rate limit exceeded'
+        ok, _out, detail = _run_adb(
+            ['shell', 'input', 'swipe', str(start[0]), str(start[1]),
+             str(end[0]), str(end[1]), str(duration)], ADB_TIMEOUT)
+        return ok, detail
