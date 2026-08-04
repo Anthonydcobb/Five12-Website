@@ -9,6 +9,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import CintennaPanel from '../components/devices/CintennaPanel'
+import AsteraMirrorPanel from '../components/devices/AsteraMirrorPanel'
 
 const POLL_MS = 3000;
 
@@ -498,6 +499,7 @@ const PANELS = {
   bolero: BoleroPanel,
   stardust: StardustPanel,
   cintenna: CintennaPanel,
+  astera: AsteraMirrorPanel,
 };
 
 export default function Devices() {
