@@ -4,7 +4,7 @@
 - **Branch:** `chore/claude/remove-astera-adapter`
 - **Workspace:** `C:\dev\five12-wt\astera-bench-plan`
 - **Base SHA:** `20c911d`
-- **Status:** review
+- **Status:** merged — PR #3, rebased onto `main` as `ce51e20` (2026-08-04)
 - **Last updated:** 2026-08-04
 
 ## Goal
@@ -103,7 +103,23 @@ delta.
 
 ## Handoff / next action
 
-For review per rule 5. The claims worth checking independently: that nothing
-outside the Astera adapter was touched, that the fixture-inventory entries are
-correctly excluded, and that the bench record actually supports removal rather
-than deferral.
+Nothing outstanding. Archived on merge.
+
+## Merged, and one thing the record should not hide
+
+Merged to `main` at `ce51e20` on 2026-08-04, on Anthony's direct instruction.
+Re-verified on the merged tree rather than only on the branch: `astera.py` absent,
+`ALL_DEVICE_IDS` back to four, zero `ASTERA` references in `config.py`, and
+**565 passed / 7 skipped** on the app interpreter.
+
+**This did not get the independent review rule 5 asks for.** The handoff above
+requested one and it was merged before Hermes answered. That was the owner's call
+and the change is small, mechanical and fully covered by the suite — but the rule
+exists because "small and mechanical" is exactly how the last several unreviewed
+merges were described too. Recording it so the next person reading this file does
+not assume a review happened.
+
+If Hermes reviews after the fact and disagrees, this is a single `git revert` of
+`ce51e20`. The claims worth checking remain: that nothing outside the Astera
+adapter was touched, that the Astera **fixture inventory** was correctly excluded,
+and that the bench record supports removal rather than deferral.
