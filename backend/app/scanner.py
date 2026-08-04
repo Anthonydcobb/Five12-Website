@@ -336,7 +336,8 @@ def _hint_networks(raw: str | None, subnet_cidr: str) -> list[str]:
     return accepted
 
 
-def _sweep_targets(cidr: str, known_ips=(), sweep_hints=None) -> list[str]:
+def _sweep_targets(cidr: str, known_ips=(), sweep_hints=None,
+                   ignore_cidrs=None) -> list[str]:
     """The ranges actually worth enumerating inside `cidr`.
 
     A prefix at or under MAX_SWEEP_ADDRESSES is swept whole. Anything wider is
@@ -372,10 +373,26 @@ def _sweep_targets(cidr: str, known_ips=(), sweep_hints=None) -> list[str]:
             continue
         if addr in net:
             targets.add(str(ipaddress.ip_network(f'{ip}/24', strict=False)))
+
+    # A range the operator has declared not-ours is not worth probing: every
+    # answer from it is discarded at persist time anyway (see _is_ignored_ip in
+    # run_scan_now). Dropping it here saves the probes as well as the rows.
+    #
+    # ENTIRELY inside, not merely overlapping. Ignoring 10.9.15.0/25 must not
+    # stop the sweep of 10.9.15.0/24 and blind the half that is still ours.
+    ignored = _ignored_networks(ignore_cidrs)
+    if ignored:
+        targets = {
+            t for t in targets
+            if not any(ipaddress.ip_network(t).subnet_of(bad)
+                       for bad in ignored
+                       if ipaddress.ip_network(t).version == bad.version)
+        }
     return sorted(targets)
 
 
-def _arp_scan(cidr: str, known_ips=(), sweep_hints=None) -> list[tuple[str, str]]:
+def _arp_scan(cidr: str, known_ips=(), sweep_hints=None,
+              ignore_cidrs=None) -> list[tuple[str, str]]:
     """Discover (ip, mac) pairs using BOTH the active scapy sweep and the OS
     ARP cache.
 
@@ -394,7 +411,7 @@ def _arp_scan(cidr: str, known_ips=(), sweep_hints=None) -> list[tuple[str, str]
     subnets at all.
     """
     scapy_pairs = []
-    for target in _sweep_targets(cidr, known_ips, sweep_hints):
+    for target in _sweep_targets(cidr, known_ips, sweep_hints, ignore_cidrs):
         try:
             found = _scapy_scan(target)
         except Exception as e:
@@ -557,7 +574,8 @@ def run_scan_now(app) -> None:
             # /16. Same treatment randomized MACs get: filtered before persist,
             # so those rows never exist rather than being cleaned up later.
             pairs = [(ip, mac) for ip, mac in _arp_scan(cidr, known_ips,
-                                                        row.sweep_hints)
+                                                        row.sweep_hints,
+                                                        row.ignore_cidrs)
                      if ip not in excluded and _is_host_mac(mac)
                      and not is_randomized_mac(mac)
                      and not _is_ignored_ip(ip, ignored)]

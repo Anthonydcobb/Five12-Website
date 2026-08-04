@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/ignore-cidrs-patch`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\ignore-cidrs`
 - **Base SHA:** `900f613` (`origin/main`)
-- **Status:** in progress
+- **Status:** complete, pushed for review
 - **Last updated:** 2026-07-30
 
 ## Why
@@ -66,4 +66,50 @@ of `10.9.15.0/24` and blind half a range that is ours.
 
 ## Checks run
 
-To be filled in.
+| Command | Result | Evidence level |
+|---|---|---|
+| `pytest -q backend/tests/test_scanner_sweep_hints.py` | **40 passed** (was 31) | software verification (Windows rig) |
+| `pytest -q backend/tests` from the repository root | **565 passed**, 7 skipped | software verification (Windows rig) |
+
+Nine tests written first and watched failing: five on the sweep side, four on
+the API.
+
+One existing test was updated deliberately rather than deleted.
+`test_patch_refuses_fields_it_does_not_support` asserted
+`supported == ['sweepHints']`; the allowlist grew by one field, so it now
+asserts `['ignoreCidrs', 'sweepHints']`. Its point is unchanged and still
+enforced — `cidr` and `active` stay refused, because rewriting `cidr` leaves
+device attribution stale and flipping `active` silently stops a scan. The reason
+is recorded in place so a later reader does not mistake it for a loosened test.
+
+**Not verified:** no live scan was run, and nothing was written to Anthony's
+database. The behaviour is covered by tests only; the effect on the real sACN
+subnet is the separate step below.
+
+## The step this deliberately does NOT take
+
+Setting `ignoreCidrs = '10.100.0.0/22'` on Anthony's live sACN subnet. That is a
+write to production configuration and wants to be an explicit, separate act with
+its own before/after — not a side effect of merging a code change.
+
+Once this is on `main` and the backend is running it:
+
+```powershell
+# find the sACN subnet id
+Invoke-RestMethod http://127.0.0.1:5000/api/network/subnets |
+    Select-Object id, label, cidr, ignoreCidrs | Format-Table
+
+# set it
+Invoke-RestMethod -Method Patch `
+    -Uri http://127.0.0.1:5000/api/network/subnets/<id> `
+    -ContentType 'application/json' `
+    -Body (@{ ignoreCidrs = '10.100.0.0/22' } | ConvertTo-Json)
+```
+
+A bad value is a 400 naming each bad entry rather than a stored setting the
+scanner quietly ignores.
+
+**Note the range.** NordVPN's adapter is `10.100.0.2/22`, so the tunnel network
+is `10.100.0.0/22` — wider than the `/24` the sweep would target. Ignoring the
+`/22` covers the target; ignoring only `10.100.0.0/24` would work today but not
+if the tunnel address moved within its own /22.

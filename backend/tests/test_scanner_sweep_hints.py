@@ -299,7 +299,10 @@ def test_patch_refuses_fields_it_does_not_support(client):
     assert resp.status_code == 400
     body = resp.get_json()
     assert body['details'] == ['active', 'cidr']
-    assert body['supported'] == ['sweepHints']
+    # ignoreCidrs joined the allowlist on 2026-07-30. The test's point is
+    # unchanged -- cidr and active stay refused, because rewriting cidr leaves
+    # device attribution stale and flipping active silently stops a scan.
+    assert body['supported'] == ['ignoreCidrs', 'sweepHints']
 
     after = client.get('/api/network/subnets').get_json()[-1]
     assert after['cidr'] == '10.0.0.0/8'
@@ -335,3 +338,106 @@ def test_ipv4_is_still_accepted():
     accepted, errors = validate_sweep_hints('10.9.15.0/24', '10.0.0.0/8')
     assert accepted == ['10.9.15.0/24']
     assert errors == []
+
+
+# ── ignore_cidrs and the sweep (2026-07-30) ──────────────────────────────────
+#
+# ignore_cidrs filtered results at persist time only: _arp_scan probed the whole
+# range and _is_ignored_ip dropped the rows afterwards. So a range the operator
+# had declared not-ours was still swept every cycle.
+#
+# Found via NordVPN: its tunnel adapter is 10.100.0.2/22, inside the configured
+# sACN 10.0.0.0/8, so a local NIC put 10.100.0.0/24 in the sweep. Probing a VPN
+# tunnel to throw every answer away is pure waste.
+
+def test_a_target_entirely_inside_an_ignored_range_is_not_swept(monkeypatch):
+    monkeypatch.setattr(scanner, 'local_ipv4s', lambda *a, **k: ['10.100.0.2'])
+    targets = scanner._sweep_targets('10.0.0.0/8', known_ips=[],
+                                     ignore_cidrs='10.100.0.0/22')
+    assert '10.100.0.0/24' not in targets
+
+
+def test_ignoring_a_range_does_not_blind_a_target_that_is_only_partly_in_it(monkeypatch):
+    """A /25 inside a /24 must not stop the /24 being swept — half of it is
+    still ours."""
+    monkeypatch.setattr(scanner, 'local_ipv4s', lambda *a, **k: ['10.9.15.10'])
+    targets = scanner._sweep_targets('10.0.0.0/8', known_ips=[],
+                                     ignore_cidrs='10.9.15.0/25')
+    assert '10.9.15.0/24' in targets
+
+
+def test_ignoring_nothing_leaves_the_sweep_alone(monkeypatch):
+    monkeypatch.setattr(scanner, 'local_ipv4s', lambda *a, **k: ['10.100.0.2'])
+    assert scanner._sweep_targets('10.0.0.0/8', known_ips=[],
+                                  ignore_cidrs=None) == ['10.100.0.0/24']
+
+
+def test_an_ignored_range_also_suppresses_a_hint_aimed_into_it(monkeypatch):
+    """An operator hint and an operator ignore that contradict each other: the
+    ignore wins, because it is the more specific statement of intent."""
+    _no_local_ifaces(monkeypatch)
+    targets = scanner._sweep_targets('10.0.0.0/8', known_ips=[],
+                                     sweep_hints='10.100.0.0/24',
+                                     ignore_cidrs='10.100.0.0/22')
+    assert targets == []
+
+
+def test_a_garbage_ignore_entry_does_not_abort_the_sweep(monkeypatch):
+    """Rows can be edited straight in the database. A bad entry must not take
+    the whole subnet's scan down."""
+    monkeypatch.setattr(scanner, 'local_ipv4s', lambda *a, **k: ['10.100.0.2'])
+    targets = scanner._sweep_targets('10.0.0.0/8', known_ips=[],
+                                     ignore_cidrs='not-a-cidr, 10.100.0.0/22')
+    assert '10.100.0.0/24' not in targets
+
+
+def test_patch_sets_ignore_cidrs_on_an_existing_subnet(client):
+    """The whole reason this field joined the allowlist: it was previously
+    settable only at create time, and recreating a subnet nulls subnet_id on
+    every attached device."""
+    created = client.post(
+        '/api/network/subnets', json={'label': 'sACN', 'cidr': '10.0.0.0/8'}
+    ).get_json()
+
+    resp = client.patch(f"/api/network/subnets/{created['id']}",
+                        json={'ignoreCidrs': '10.100.0.0/22'})
+
+    assert resp.status_code == 200
+    assert resp.get_json()['ignoreCidrs'] == '10.100.0.0/22'
+
+
+def test_patch_rejects_an_ignore_range_outside_the_subnet(client):
+    created = client.post(
+        '/api/network/subnets', json={'label': 'sACN', 'cidr': '10.0.0.0/8'}
+    ).get_json()
+
+    resp = client.patch(f"/api/network/subnets/{created['id']}",
+                        json={'ignoreCidrs': '192.168.1.0/24'})
+
+    assert resp.status_code == 400
+    assert 'outside' in ' '.join(resp.get_json()['details'])
+
+
+def test_patch_rejects_an_unparseable_ignore_range(client):
+    created = client.post(
+        '/api/network/subnets', json={'label': 'sACN', 'cidr': '10.0.0.0/8'}
+    ).get_json()
+
+    resp = client.patch(f"/api/network/subnets/{created['id']}",
+                        json={'ignoreCidrs': '10.100.0.0/22, nonsense'})
+
+    assert resp.status_code == 400
+    assert 'not a CIDR block' in ' '.join(resp.get_json()['details'])
+
+
+def test_patch_can_clear_ignore_cidrs(client):
+    created = client.post(
+        '/api/network/subnets',
+        json={'label': 'sACN', 'cidr': '10.0.0.0/8', 'ignoreCidrs': '10.100.0.0/22'}
+    ).get_json()
+
+    resp = client.patch(f"/api/network/subnets/{created['id']}",
+                        json={'ignoreCidrs': ''})
+
+    assert resp.status_code == 200
+    assert resp.get_json()['ignoreCidrs'] is None

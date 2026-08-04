@@ -1,3 +1,4 @@
+import ipaddress
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from . import db
@@ -52,12 +53,46 @@ def create_subnet():
 #: subnet being scanned — neither should ride in on a convenience route added to
 #: set sweep hints. Widen this only alongside validation and tests for each
 #: field added.
-_PATCHABLE = {'sweepHints': 'sweep_hints'}
+_PATCHABLE = {'sweepHints': 'sweep_hints', 'ignoreCidrs': 'ignore_cidrs'}
+
+
+def _reject_bad_ignores(raw, subnet_cidr):
+    """400 with a reason per bad entry, or None.
+
+    Same contract as `_reject_bad_hints`: a stored value the scanner will
+    silently ignore is worse than a rejected one, because the API would be
+    claiming a setting was applied while the code did something else.
+    """
+    if raw is None or not str(raw).strip():
+        return None
+    errors = []
+    try:
+        subnet = ipaddress.ip_network(subnet_cidr, strict=False)
+    except (ValueError, TypeError):
+        return jsonify({'error': f'the subnet CIDR {subnet_cidr!r} is not a network'}), 400
+    for piece in str(raw).split(','):
+        piece = piece.strip()
+        if not piece:
+            continue
+        try:
+            entry = ipaddress.ip_network(piece, strict=False)
+        except ValueError:
+            errors.append(f'{piece!r} is not a CIDR block')
+            continue
+        if entry.version != subnet.version:
+            errors.append(f'{entry} is IPv{entry.version} but {subnet} is '
+                          f'IPv{subnet.version}')
+            continue
+        if not entry.subnet_of(subnet):
+            errors.append(f'{entry} is outside {subnet}')
+    if errors:
+        return jsonify({'error': 'invalid ignoreCidrs', 'details': errors}), 400
+    return None
 
 
 @net.patch('/subnets/<int:subnet_id>')
 def update_subnet(subnet_id):
-    """Partial update, restricted to `sweepHints`.
+    """Partial update, restricted to `sweepHints` and `ignoreCidrs`.
 
     Exists because sweep hints are most needed on the subnets that already
     exist, and without this the only way to add them was to delete and
@@ -82,6 +117,11 @@ def update_subnet(subnet_id):
 
     if 'sweepHints' in data:
         bad = _reject_bad_hints(data.get('sweepHints'), subnet.cidr)
+        if bad:
+            return bad
+
+    if 'ignoreCidrs' in data:
+        bad = _reject_bad_ignores(data.get('ignoreCidrs'), subnet.cidr)
         if bad:
             return bad
 
