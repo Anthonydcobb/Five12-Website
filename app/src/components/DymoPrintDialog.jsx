@@ -349,7 +349,9 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                   <div className="text-center px-2" title={String(previewError.message || previewError)}>
                     <div className="text-warn text-xs font-medium">Preview unavailable</div>
                     <div className="text-text-muted text-[11px] mt-1 leading-snug">
-                      DYMO Connect could not render this label. Printing is unaffected.
+                      Quit and relaunch DYMO Connect, then reopen this dialog —
+                      its render service gets into a state where it fails every
+                      label until restarted. Printing is unaffected.
                     </div>
                   </div>
                 ) : (

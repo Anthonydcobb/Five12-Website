@@ -51,10 +51,10 @@ afterEach(() => vi.restoreAllMocks())
 
 describe('DymoPrintDialog preview pane', () => {
   it('shows the render failure instead of the "not mapped yet" placeholder', async () => {
-    // DYMO Connect Web Service 1.6.1.7's RenderLabel endpoint throws before it
-    // ever reads the request (missing System.Xml.XmlSerializer assembly), so it
-    // answers HTTP 500 for every label. Swallowing that left the pane showing
-    // "preview appears when mapped", which blames the user for a service fault.
+    // A DYMO.WebApi.Win.Host process can go bad and then answer RenderLabel
+    // with HTTP 500 for every label until it is restarted (see lib/dymo.js).
+    // Swallowing that left the pane showing "preview appears when mapped",
+    // which blames the user for a service fault.
     renderPreview.mockRejectedValue(new Error('renderLabel failed: 500'))
     await renderMapped()
 
