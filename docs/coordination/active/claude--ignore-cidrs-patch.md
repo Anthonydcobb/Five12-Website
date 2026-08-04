@@ -4,7 +4,7 @@
 - **Branch:** `fix/claude/ignore-cidrs-patch`
 - **Workspace:** local Windows worktree, `C:\dev\five12-wt\ignore-cidrs`
 - **Base SHA:** `900f613` (`origin/main`)
-- **Status:** complete, pushed for review
+- **Status:** complete — merged to `main` at `c2920ea986a0216584283d00060a59e859ea4323`
 - **Last updated:** 2026-07-30
 
 ## Why
@@ -113,3 +113,12 @@ scanner quietly ignores.
 is `10.100.0.0/22` — wider than the `/24` the sweep would target. Ignoring the
 `/22` covers the target; ignoring only `10.100.0.0/24` would work today but not
 if the tunnel address moved within its own /22.
+
+
+## Merged to `main` — 2026-07-30
+
+Clean fast-forward; `main` had not moved, so the merged tree is exactly the one
+the checks ran against. Tenth merge today at Anthony's direction without
+independent review.
+
+The live-database step above is still **not done**. Code on `main`, value unset.
