@@ -111,3 +111,53 @@ class AndroidMirrorAdapter(DeviceAdapter):
             return {'found': False, 'address': serial,
                     'detail': 'tablet not in `adb devices` — is Wireless debugging on?'}
         return {'found': False, 'address': serial, 'detail': f'tablet {state}'}
+
+    def screen_size(self):
+        """(width, height) in device pixels, read once and cached. Coordinate
+        validation depends on this, so an unparseable answer must read as
+        unknown rather than as a guess."""
+        if self._screen is not None:
+            return self._screen
+        ok, out, _detail = _run_adb(['shell', 'wm', 'size'], ADB_TIMEOUT)
+        if not ok:
+            return None
+        for token in out.split():
+            if 'x' in token:
+                w, _sep, h = token.partition('x')
+                if w.isdigit() and h.isdigit():
+                    self._screen = (int(w), int(h))
+                    return self._screen
+        return None
+
+    def _getprop(self, prop):
+        ok, out, _detail = _run_adb(['shell', 'getprop', prop], ADB_TIMEOUT)
+        return out.strip() if ok and out.strip() else None
+
+    def get_status(self):
+        if not _tools_enabled():
+            return {'available': False, 'disabled': True, 'alerts': [],
+                    'reason': DISABLED_DETAIL}
+        if not _serial():
+            return {'available': False, 'disabled': False, 'alerts': [],
+                    'reason': NO_SERIAL_DETAIL}
+        found = self.detect()
+        if not found['found']:
+            self.history.record({'online': 0})
+            return {'available': False, 'disabled': False, 'alerts': [],
+                    'reason': found['detail']}
+        size = self.screen_size()
+        age = None
+        if self._last_frame_at is not None:
+            age = round(time.monotonic() - self._last_frame_at, 1)
+        self.history.record({'online': 1})
+        return {
+            'available': True,
+            'disabled': False,
+            'alerts': [],
+            'deviceModel': self._getprop('ro.product.model'),
+            'androidVersion': self._getprop('ro.build.version.release'),
+            'screenW': size[0] if size else None,
+            'screenH': size[1] if size else None,
+            'mirrorRunning': self._last_frame is not None,
+            'lastFrameAgeSec': age,
+        }
