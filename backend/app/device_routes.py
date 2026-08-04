@@ -11,7 +11,7 @@ ever taken from request input.
 
 from datetime import datetime
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, make_response, request
 
 from . import db
 from .integrations import ALL_DEVICE_IDS, get_adapter, sim_enabled
@@ -129,3 +129,28 @@ def stardust_reconcile(patch_id):
     result = adapter.reconcile(rows)
     result['patchSheetId'] = patch_id
     return jsonify(result)
+
+
+@devices.get('/astera/frame')
+def astera_frame():
+    """One PNG of the tablet screen. The device is chosen by configuration,
+    never by the request — see integrations/android_mirror.py."""
+    adapter = get_adapter('astera', sim_enabled(request.args))
+    png, age, detail = adapter.get_frame()
+    if png is None:
+        return jsonify({'reason': detail}), 503
+    resp = make_response(png)
+    resp.headers['Content-Type'] = 'image/png'
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['X-Frame-Age-Ms'] = str(int((age or 0) * 1000))
+    return resp
+
+
+@devices.post('/astera/input')
+def astera_input():
+    """Tap / swipe / key on the configured tablet. The body is untrusted: the
+    adapter matches the action against a closed set and validates coordinates
+    against the cached screen bounds. No field of it selects a device."""
+    adapter = get_adapter('astera', sim_enabled(request.args))
+    ok, detail = adapter.send_input(request.get_json(silent=True) or {})
+    return jsonify({'ok': ok, 'detail': detail}), (200 if ok else 400)
