@@ -133,6 +133,44 @@ class AndroidMirrorAdapter(DeviceAdapter):
         ok, out, _detail = _run_adb(['shell', 'getprop', prop], ADB_TIMEOUT)
         return out.strip() if ok and out.strip() else None
 
+    def _age(self):
+        if self._last_frame_at is None:
+            return None
+        return round(time.monotonic() - self._last_frame_at, 1)
+
+    def get_frame(self):
+        """-> (png bytes|None, age in seconds|None, detail).
+
+        Single-flight: a capture already running returns the cached frame
+        rather than spawning another. Without this a slow tablet plus a ~350ms
+        poll interval stacks subprocesses until something falls over.
+
+        A failed capture never discards the last good frame — it ages it, so
+        the panel can show a stale badge instead of going blank.
+        """
+        if not _tools_enabled():
+            return None, None, DISABLED_DETAIL
+        if not _serial():
+            return None, None, NO_SERIAL_DETAIL
+
+        if not self._capture_lock.acquire(blocking=False):
+            return self._last_frame, self._age(), 'capture already in progress'
+        try:
+            ok, out, detail = _run_adb(
+                ['exec-out', 'screencap', '-p'], CAPTURE_TIMEOUT, binary=True)
+            if not ok:
+                self._last_reason = detail
+                return self._last_frame, self._age(), detail
+            if not out:
+                self._last_reason = 'screencap returned an empty image'
+                return self._last_frame, self._age(), self._last_reason
+            self._last_frame = out
+            self._last_frame_at = time.monotonic()
+            self._last_reason = None
+            return self._last_frame, 0.0, ''
+        finally:
+            self._capture_lock.release()
+
     def get_status(self):
         if not _tools_enabled():
             return {'available': False, 'disabled': True, 'alerts': [],
