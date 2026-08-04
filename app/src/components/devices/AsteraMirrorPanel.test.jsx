@@ -11,6 +11,16 @@ function statusOf(overrides) {
                    mirrorRunning: true, lastFrameAgeSec: 0.2, ...overrides } };
 }
 
+// vi.advanceTimersByTimeAsync(bigMs) in one shot does not reliably cascade
+// through a chain of promise -> state update -> newly-scheduled setTimeout
+// more than one level deep (the React scheduler and the mocked clock both
+// need a turn). Stepping in small increments lets every level catch up.
+async function advanceStepped(totalMs, step = 50) {
+  for (let t = 0; t < totalMs; t += step) {
+    await vi.advanceTimersByTimeAsync(step);
+  }
+}
+
 beforeEach(() => {
   global.URL.createObjectURL = vi.fn(() => 'blob:fake');
   global.URL.revokeObjectURL = vi.fn();
@@ -113,4 +123,169 @@ describe('AsteraMirrorPanel', () => {
     expect(maxInFlight).toBe(1);
     vi.useRealTimers();
   });
+
+  // --- object-URL lifecycle -------------------------------------------
+  // These give /status and /frame independent responses (a blanket
+  // mockResolvedValue would make /frame resolve with status-shaped data,
+  // which hides everything below).
+
+  it('renders the frame image with the created object URL', async () => {
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        return Promise.resolve({ data: new Blob(['frame-bytes'], { type: 'image/png' }) });
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+
+    const img = await screen.findByAltText('tablet screen');
+    expect(img).toHaveAttribute('src', 'blob:fake');
+    expect(URL.createObjectURL).toHaveBeenCalled();
+  });
+
+  it('revokes every superseded frame URL as new frames arrive', async () => {
+    // Distinct URLs per creation so "superseded" is actually observable —
+    // with the beforeEach's constant 'blob:fake' stub, deleting every
+    // revoke call would still leave the test unable to tell.
+    let n = 0;
+    URL.createObjectURL = vi.fn(() => `blob:${n++}`);
+
+    vi.useFakeTimers();
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        return Promise.resolve({ data: new Blob(['x']) });
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+    await advanceStepped(3000);
+    vi.useRealTimers();
+
+    const created = URL.createObjectURL.mock.calls.length;
+    const revoked = URL.revokeObjectURL.mock.calls.length;
+    expect(created).toBeGreaterThan(2);
+    // Every creation but the one currently on screen must have been
+    // revoked. Deleting the revoke call collapses this to 0 and fails.
+    expect(revoked).toBe(created - 1);
+  });
+
+  it('revokes the outstanding frame URL on unmount', async () => {
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        return Promise.resolve({ data: new Blob(['x']) });
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    const { unmount } = render(<AsteraMirrorPanel />);
+    await screen.findByAltText('tablet screen');
+    const lastUrl = URL.createObjectURL.mock.results.at(-1).value;
+
+    unmount();
+
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith(lastUrl);
+  });
+
+  // --- Finding 1: the real backend reason must survive a Blob error body ---
+  it('surfaces the backend reason when the frame request fails with a Blob error body', async () => {
+    const reasonBlob = new Blob([JSON.stringify({ reason: 'capture already in progress' })],
+                                { type: 'application/json' });
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        const err = new Error('Request failed with status code 503');
+        err.response = { status: 503, data: reasonBlob };
+        return Promise.reject(err);
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+
+    expect(await screen.findByText(/capture already in progress/)).toBeInTheDocument();
+  });
+
+  it('falls back to the generic message when the Blob error body is unparseable', async () => {
+    const badBlob = new Blob(['not json'], { type: 'application/json' });
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        const err = new Error('Request failed with status code 503');
+        err.response = { status: 503, data: badBlob };
+        return Promise.reject(err);
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+
+    expect(await screen.findByText(/frame unavailable/)).toBeInTheDocument();
+  });
+
+  // --- Finding 2: an out-of-order resolution must not clobber a newer frame ---
+  // Real timers throughout: driving this through STATUS_MS-spaced live
+  // transitions with vi.advanceTimersByTimeAsync proved unreliable here —
+  // a single large advance does not reliably cascade through more than one
+  // level of promise -> state update -> newly-scheduled timer, and the
+  // deterministic part of this test (which of two responses wins) comes
+  // from the explicit promise resolvers below, not from timing.
+  //
+  // Reproduces the race the only way this component's public behaviour
+  // allows: a live -> offline -> live flip tears down the frame-polling
+  // effect while its request is still in flight, then starts a fresh one.
+  // NOTE: with the current "chain from completion" scheduling (see
+  // FRAME_MS above), a single effect instance can never have two frame
+  // requests in flight at once, so this cross-instance path is the only
+  // reachable trigger — and it is *also* fully covered by the pre-existing
+  // per-instance `alive` flag on its own. Verified by temporarily reverting
+  // only the `generation !== generationRef.current` check (leaving `alive`
+  // intact): this test still passed. So this test guards the required
+  // observable behaviour (a stale frame must never replace a newer one),
+  // but does not, by itself, prove the generation token is load-bearing in
+  // the current codebase — see the fix-pass report for detail.
+  it('does not let a stale frame response replace a newer one that already resolved', async () => {
+    let n = 0;
+    URL.createObjectURL = vi.fn(() => `blob:${n++}`);
+
+    let frameCalls = 0;
+    const frameResolvers = [];
+    let statusCalls = 0;
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        frameCalls += 1;
+        return new Promise((resolve) => { frameResolvers.push(resolve); });
+      }
+      statusCalls += 1;
+      // available -> briefly offline (tears down the in-flight frame poll,
+      // leaving its promise still unsettled) -> available again (starts a
+      // second, independent frame poll). The first poll's promise is then
+      // resolved last, out of order, once the second is already on screen.
+      if (statusCalls === 2) {
+        return Promise.resolve(statusOf({ available: false, disabled: false,
+                                          reason: 'tablet offline' }));
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+    await waitFor(() => expect(frameCalls).toBe(1));
+
+    // Two more real STATUS_MS (3000ms) ticks: offline, then online again.
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() => expect(statusCalls).toBeGreaterThanOrEqual(3), { timeout: 4000 });
+    await waitFor(() => expect(frameCalls).toBe(2));
+
+    // Resolve the newer (second) request first.
+    frameResolvers[1]({ data: new Blob(['second']) });
+    const img = await screen.findByAltText('tablet screen');
+    const newerUrl = img.getAttribute('src');
+    expect(newerUrl).toBeTruthy();
+
+    // The stale first request resolves late, after the newer frame is
+    // already displayed.
+    frameResolvers[0]({ data: new Blob(['first']) });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(screen.getByAltText('tablet screen')).toHaveAttribute('src', newerUrl);
+  }, 15000);
 });
