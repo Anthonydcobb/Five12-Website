@@ -54,12 +54,6 @@ class DevelopmentConfig:
     # Bluetooth fully enabled. Set FIVE12_BLE_WRITE=1.
     ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
 
-    # Gates the Astera ART7/AsteraNext integration. OFF by default like the
-    # BLE tools, and stricter in kind: with this unset/0 the adapter makes NO
-    # network request at all (no DNS, no probe, no HTTP) -- see
-    # app/integrations/astera.py for the full contract. Set FIVE12_ASTERA_TOOLS=1.
-    ENABLE_ASTERA_TOOLS = os.getenv("FIVE12_ASTERA_TOOLS", "0") == "1"
-
 
 class DesktopConfig:
     DEBUG = False
@@ -85,9 +79,3 @@ class DesktopConfig:
 
     # Writes stay opt-in on desktop too — same reasoning as the dev config.
     ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
-
-    # Gates the Astera ART7/AsteraNext integration. OFF by default like the
-    # BLE tools, and stricter in kind: with this unset/0 the adapter makes NO
-    # network request at all (no DNS, no probe, no HTTP) -- see
-    # app/integrations/astera.py for the full contract. Set FIVE12_ASTERA_TOOLS=1.
-    ENABLE_ASTERA_TOOLS = os.getenv("FIVE12_ASTERA_TOOLS", "0") == "1"
