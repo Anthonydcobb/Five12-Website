@@ -4,7 +4,7 @@
 - **Branch:** `docs/claude/astera-bench-capture`
 - **Workspace:** `C:\dev\five12-wt\astera-bench-plan`
 - **Base SHA:** `8ba2457`
-- **Status:** review
+- **Status:** merged — PR #2, rebased onto `main` as `bf7e6ec` + `20c911d` (2026-08-04)
 - **Last updated:** 2026-08-04
 
 ## Goal
