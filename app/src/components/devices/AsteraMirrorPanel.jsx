@@ -2,14 +2,37 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 
 const STATUS_MS = 3000;
-const FRAME_MS = 400;
+// Gap between captures, measured from the completion of the previous one.
+// On the SM-T290 a screencap round-trip is 514-644 ms (mean 529), so anything
+// below that guarantees a backlog. 750 leaves headroom without feeling slower
+// than the ~1.9 fps the device can actually deliver.
+const FRAME_MS = 750;
 const STALE_AFTER_SEC = 3;
+
+// axios delivers the *error* response body as a Blob too when the request
+// was made with responseType: 'blob', so err.response.data is a Blob, not
+// the parsed JSON. Read it as text and parse out {"reason": "..."}. Never
+// throw — a malformed or empty body just falls back to the generic message.
+async function frameErrorReason(err) {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const text = await data.text();
+      const parsed = JSON.parse(text);
+      return parsed?.reason || 'frame unavailable';
+    } catch {
+      return 'frame unavailable';
+    }
+  }
+  return data?.reason || 'frame unavailable';
+}
 
 export default function AsteraMirrorPanel() {
   const [status, setStatus] = useState(null);
   const [frameUrl, setFrameUrl] = useState(null);
   const [frameError, setFrameError] = useState(null);
   const urlRef = useRef(null);
+  const generationRef = useRef(0);
 
   const pollStatus = useCallback(async () => {
     try {
@@ -33,25 +56,41 @@ export default function AsteraMirrorPanel() {
   useEffect(() => {
     if (!live) return undefined;
     let alive = true;
+    let timer = null;
     const grab = async () => {
+      const generation = ++generationRef.current;
       try {
         const resp = await axios.get('/api/devices/astera/frame',
                                      { responseType: 'blob' });
         if (!alive) return;
+        if (generation !== generationRef.current) {
+          // A later request already resolved and is now displayed; this
+          // result is stale. We haven't created an object URL for it yet,
+          // so there is nothing to revoke but the currently displayed one
+          // — leave it alone and drop this frame silently.
+          return;
+        }
         const next = URL.createObjectURL(resp.data);
         if (urlRef.current) URL.revokeObjectURL(urlRef.current);
         urlRef.current = next;
         setFrameUrl(next);
         setFrameError(null);
       } catch (err) {
-        if (alive) setFrameError(err?.response?.data?.reason || 'frame unavailable');
+        if (alive && generation === generationRef.current) {
+          setFrameError(await frameErrorReason(err));
+        }
+      } finally {
+        // Chain from completion rather than firing on a fixed interval. A
+        // capture routinely outlives any interval short enough to feel live,
+        // and setInterval would stack a new request on top of every one still
+        // in flight until the backlog took the panel down with it.
+        if (alive) timer = setTimeout(grab, FRAME_MS);
       }
     };
     grab();
-    const i = setInterval(grab, FRAME_MS);
     return () => {
       alive = false;
-      clearInterval(i);
+      if (timer) clearTimeout(timer);
       if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
     };
   }, [live]);
@@ -91,7 +130,7 @@ export default function AsteraMirrorPanel() {
       </div>
 
       <div className="text-[9px] font-mono text-text-muted">
-        still frames at 2–3 fps · live video and smooth dragging coming soon
+        still frames at about 2 fps · live video and smooth dragging coming soon
       </div>
 
       {frameError && (

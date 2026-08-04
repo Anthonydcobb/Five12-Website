@@ -30,7 +30,11 @@ from collections import deque
 from . import DeviceAdapter
 
 ADB_TIMEOUT = 6
-CAPTURE_TIMEOUT = 8
+# A screencap on the SM-T290 measures 514-644 ms over USB. 8s was ~15x that,
+# so a wedged capture froze the panel for eight seconds before the stale badge
+# could appear. 3s is still five times the worst observed round-trip and fails
+# visibly while the operator is still looking at it.
+CAPTURE_TIMEOUT = 3
 MAX_TAPS_PER_SECOND = 8
 
 # The COMPLETE set of key events this module may send. Anything not here is
