@@ -9,9 +9,14 @@
 
 ## What changed
 
-No production code. This handoff records **measurements taken on the real
-mirror tablet**, which answer the three items the spec left unverified and
-which contradict one of the spec's pinned numbers.
+**Measurements taken on the real mirror tablet**, which answer the three items
+the spec left unverified and contradict one of its pinned numbers — plus the
+two timing corrections those measurements forced:
+
+- `CAPTURE_TIMEOUT` 8s -> 3s in `backend/app/integrations/android_mirror.py`
+- The frame poll in `AsteraMirrorPanel.jsx` re-chained to chain from capture
+  completion instead of `setInterval`, and its gap raised 400 ms -> 750 ms
+- Panel copy corrected from "2–3 fps" to "about 2 fps"
 
 The dedicated device is now chosen, paired, and cabled:
 
@@ -144,14 +149,22 @@ the state is confirmed, not assumed. USB debugging is on
 
 ## Files and contracts affected
 
-None in this commit. Downstream, the corrections above touch:
+Changed here:
+
+- `backend/app/integrations/android_mirror.py` — `CAPTURE_TIMEOUT` 8 -> 3
+- `app/src/components/devices/AsteraMirrorPanel.jsx` — `FRAME_MS` 400 -> 750,
+  `setInterval` replaced by a completion-chained `setTimeout`, copy corrected
+- `app/src/components/devices/AsteraMirrorPanel.test.jsx` — new regression test
+
+No API, schema, or contract change. `ADB_TIMEOUT` left at 6.
+
+Still outstanding, not done here:
 
 - `docs/superpowers/specs/2026-08-04-astera-tablet-mirror-design.md` lines 51–55
-  (the 200–400 ms / 2–3 fps claim)
+  still claim 200–400 ms / 2–3 fps
 - `docs/superpowers/plans/2026-08-04-astera-tablet-mirror.md` lines 180–181
-  (`ADB_TIMEOUT`, `CAPTURE_TIMEOUT`) and the poll interval
-- `backend/app/integrations/android_mirror.py` — poll scheduling, and the
-  `wm size` last-line preference noted above
+  still show `CAPTURE_TIMEOUT = 8`
+- the `wm size` last-line preference noted above
 
 Outside the repo, the operator launcher `~/OneDrive/Desktop/AsteraNext.bat` was
 repointed from the S21 to `R9WR90CBTMH` over USB. That file is not tracked
@@ -186,9 +199,29 @@ adb push 4 MB      -> 0.22 s  = 18.18 MB/s  (USB)
                    -> 82.5 s  =  0.05 MB/s  (wireless, for comparison)
 ```
 
-Not run: the backend suite. This handoff changes no code, so
-`pytest -q backend/tests` was not re-run and its last known state (576 passing
-on this branch) is unchanged by anything here. Reported rather than implied.
+Test suites, run after the changes:
+
+```text
+# backend, on the interpreter start.ps1 launches the app with (Python 3.12)
+python -m pytest -q backend/tests
+  -> 631 passed, 7 skipped, 130 warnings in 14.30s
+
+# frontend
+npx vitest run
+  -> Test Files 8 passed (8) | Tests 82 passed (82)
+```
+
+The new regression test was confirmed to fail before the fix, not merely to
+pass after it. Against the old `setInterval`, with a capture mocked to outlive
+the interval, it reported **4 concurrent captures in flight** — the stacking
+this change removes.
+
+Worth recording: the first version of that test passed against the broken
+code. React mounted the frame effect *during* the fake-timer advance, after
+the queue had drained, so only one capture ever ran and the concurrency
+assertion was vacuous. It needed a zero-length advance to let the status
+request settle and the effect register first, plus a `frameCalls > 1` sanity
+assertion so it cannot silently go vacuous again.
 
 ## Operator acceptance test
 
@@ -232,14 +265,17 @@ on this branch) is unchanged by anything here. Reported rather than implied.
 
 ## Next action
 
-Hermes to review the poll-interval correction. If accepted, the change is small
-and self-contained:
+Items 1 and 2 are **done** in this branch; 3 and 4 are not.
 
-1. Raise the poll to >=750 ms and make it self-pacing from capture completion.
-2. Lower `CAPTURE_TIMEOUT` to 3 s.
+1. ~~Raise the poll to >=750 ms and make it self-pacing.~~ Done.
+2. ~~Lower `CAPTURE_TIMEOUT` to 3 s.~~ Done.
 3. Amend the design doc's 200–400 ms / 2–3 fps claim to the measured
-   514–644 ms / ~1.9 fps, labelled `verified on actual gear`.
-4. Prefer the last line of `wm size` output.
+   514–644 ms / ~1.9 fps, labelled `verified on actual gear`. **Open.**
+4. Prefer the last line of `wm size` output. **Open.**
+
+Hermes to review 1 and 2 independently per rule 5 — particularly whether 750 ms
+is the right gap, since it was chosen from idle-tablet measurements and the
+tablet will be busier in use.
 
 Task 4 is unblocked and can proceed in parallel — its blocker was the
 `Override size:` question, which is answered.

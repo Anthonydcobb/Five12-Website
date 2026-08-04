@@ -75,4 +75,42 @@ describe('AsteraMirrorPanel', () => {
     await screen.findByText(/SM-X200/);
     expect(screen.queryByText(/stale/i)).not.toBeInTheDocument();
   });
+
+  // Measured on the real tablet (SM-T290): screencap round-trip is 514-644 ms,
+  // mean 529. A fixed interval shorter than that stacks requests forever. The
+  // next capture must be scheduled from the completion of the last one, not
+  // from a timer that keeps firing regardless.
+  it('never runs two captures at once when a capture outlives the interval', async () => {
+    vi.useFakeTimers();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let frameCalls = 0;
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/frame')) {
+        frameCalls += 1;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve({ data: new Blob(['x']) });
+          }, 1200);
+        });
+      }
+      return Promise.resolve(statusOf({}));
+    });
+
+    render(<AsteraMirrorPanel />);
+    // Let the status request settle so the frame effect actually mounts and
+    // registers its schedule. Without this the advance below drains its queue
+    // before the effect exists, and the assertions pass vacuously.
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(6000);
+
+    // Sanity: the panel must really be polling, or the concurrency
+    // assertion proves nothing.
+    expect(frameCalls).toBeGreaterThan(1);
+    expect(maxInFlight).toBe(1);
+    vi.useRealTimers();
+  });
 });
