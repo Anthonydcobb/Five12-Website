@@ -115,11 +115,21 @@ async function fetchQueue(printerName) {
   return res.json();
 }
 
+const PAPER_FAULT = /PaperOut|PaperProblem|PaperJam/;
+const ERROR_FAULT = /Error|Offline/;
+
+// Both the printer and the individual job can report trouble, and they don't
+// agree: Windows PrintJobStatus is a FLAGS enum whose ToString() yields names
+// like "Printing, PaperOut", so a job can carry a paper-out while Get-Printer
+// still says Normal. Checking only the printer there let a run keep feeding an
+// empty printer and finish reporting success. So both sources get both tests,
+// and paper is checked before error in both — a job reporting "Error, PaperOut"
+// should tell the operator the actionable half.
 function faultFrom(q) {
   const ps = q.printerStatus || '';
-  if (/PaperOut|PaperProblem|PaperJam/.test(ps)) return 'Paper out';
-  if (/Error|Offline/.test(ps)) return 'Printer error';
-  if ((q.jobs || []).some((j) => /Error/.test(j.status || ''))) return 'Printer error';
+  const jobs = (q.jobs || []).map((j) => j.status || '');
+  if (PAPER_FAULT.test(ps) || jobs.some((s) => PAPER_FAULT.test(s))) return 'Paper out';
+  if (ERROR_FAULT.test(ps) || jobs.some((s) => ERROR_FAULT.test(s))) return 'Printer error';
   return null;
 }
 

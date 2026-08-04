@@ -259,6 +259,16 @@ describe('printMerge', () => {
       [{ jobCount: 1, printerStatus: 'Offline', jobs: [] }, 'Printer error'],
       // any job status containing 'Error' → 'Printer error'
       [{ jobCount: 1, printerStatus: '', jobs: [{ id: 1, status: 'PrintingError' }] }, 'Printer error'],
+      // A paper-out can surface on the JOB while Get-Printer still says Normal:
+      // Windows PrintJobStatus is a flags enum whose ToString() names PaperOut,
+      // Offline, Blocked. Missing these fed the rest of a run into an empty
+      // printer and still reported success.
+      [{ jobCount: 1, printerStatus: 'Normal', jobs: [{ id: 1, status: 'PaperOut' }] }, 'Paper out'],
+      [{ jobCount: 1, printerStatus: 'Normal', jobs: [{ id: 1, status: 'Printing, PaperOut' }] }, 'Paper out'],
+      [{ jobCount: 1, printerStatus: 'Normal', jobs: [{ id: 1, status: 'Offline' }] }, 'Printer error'],
+      // paper beats error when a job reports both — the operator needs the
+      // actionable one
+      [{ jobCount: 1, printerStatus: '', jobs: [{ id: 1, status: 'Error, PaperOut' }] }, 'Paper out'],
     ]
     for (const [state, reason] of cases) {
       resetDymo() // drop the cached framework so the new fake is picked up
@@ -267,5 +277,19 @@ describe('printMerge', () => {
       const res = await printMerge('LW450', LABEL_XML, [rec(601)])
       expect(res).toEqual({ printed: 0, total: 1, stopped: true, reason })
     }
+  })
+
+  it('a healthy in-flight job status does not fault the run', async () => {
+    // guards the job-status regexes against over-matching: 'Printing' must not
+    // trip the paper or error branch, or every normal run would abort
+    const { printLabelAsync, events } = fakeFramework()
+    fakeQueue(printLabelAsync, events, {
+      0: [
+        { jobCount: 1, printerStatus: 'Normal', jobs: [{ id: 1, status: 'Printing' }] },
+        { jobCount: 0, printerStatus: 'Normal', jobs: [] },
+      ],
+    })
+    const res = await printMerge('LW450', LABEL_XML, [rec(601)])
+    expect(res).toEqual({ printed: 1, total: 1, stopped: false, reason: null })
   })
 })
