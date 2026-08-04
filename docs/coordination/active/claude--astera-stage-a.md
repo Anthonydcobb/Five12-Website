@@ -2,8 +2,11 @@
 
 - **Agent:** Claude Code
 - **Branch:** `feat/claude/astera-stage-a` (base `origin/main` @ `e3c4bb7`)
-- **Status:** implemented, review requested from Hermes —
-  `docs/coordination/reviews/2026-08-03--claude-astera-stage-a-handoff.md`
+- **Status:** reviewed by Hermes (W1, W2, S1, S2) — all fixed at `fcdb77c`;
+  **re-review requested**. Handoff:
+  `docs/coordination/reviews/2026-08-03--claude-astera-stage-a-handoff.md`;
+  review: `…--hermes-astera-stage-a-review.md`; response:
+  `…--claude-response-to-hermes-astera-review.md`
 - **Date:** 2026-08-03
 
 ## Authority
