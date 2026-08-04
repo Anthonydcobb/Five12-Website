@@ -54,6 +54,12 @@ class DevelopmentConfig:
     # Bluetooth fully enabled. Set FIVE12_BLE_WRITE=1.
     ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
 
+    # Gates the Android tablet mirror. OFF by default: this feature executes
+    # processes, so it stays dark on machines that do not need it. With this
+    # unset/0 no subprocess is spawned at all -- see
+    # app/integrations/android_mirror.py. Set FIVE12_MIRROR_TOOLS=1.
+    ENABLE_MIRROR_TOOLS = os.getenv("FIVE12_MIRROR_TOOLS", "0") == "1"
+
 
 class DesktopConfig:
     DEBUG = False
@@ -79,3 +85,9 @@ class DesktopConfig:
 
     # Writes stay opt-in on desktop too — same reasoning as the dev config.
     ENABLE_BLE_WRITE = os.getenv("FIVE12_BLE_WRITE", "0") == "1"
+
+    # Gates the Android tablet mirror. OFF by default: this feature executes
+    # processes, so it stays dark on machines that do not need it. With this
+    # unset/0 no subprocess is spawned at all -- see
+    # app/integrations/android_mirror.py. Set FIVE12_MIRROR_TOOLS=1.
+    ENABLE_MIRROR_TOOLS = os.getenv("FIVE12_MIRROR_TOOLS", "0") == "1"
