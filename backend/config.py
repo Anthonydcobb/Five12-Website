@@ -1,11 +1,26 @@
 import os
+import secrets
 import urllib.parse
 
 basedir = os.path.abspath(os.path.dirname(__file__))
 
 class DevelopmentConfig:
     DEBUG = True
-    SECRET_KEY = os.getenv("SECRET_KEY", "five12-development")
+    # The signing key for the fixture-import preview token, which is its only
+    # consumer -- the app uses no Flask sessions. An unconfigured key is GENERATED
+    # per process rather than defaulting to a constant: a shipped literal is a known
+    # key, and this file's recent history is fix/hermes/credential-config removing
+    # exactly that shape for the database password.
+    #
+    # The only consequence is that a preview token does not survive a backend
+    # restart, which is correct: the operator should re-preview rather than import
+    # against a catalog snapshot taken before a restart.
+    #
+    # Keep the two-argument os.getenv form. scripts/doctor_probe.py derives the .env
+    # key list by parsing this file: os.getenv(K, default) is optional, bare
+    # os.getenv(K) is REQUIRED. A helper call would make the key invisible to that
+    # check and dropping the default would make the doctor demand an optional key.
+    SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
     MAX_CONTENT_LENGTH = 26 * 1024 * 1024
 
     DB_USER = os.getenv("DB_USER", "root")
@@ -42,7 +57,8 @@ class DevelopmentConfig:
 
 class DesktopConfig:
     DEBUG = False
-    SECRET_KEY = 'five12-desktop'
+    # Generated per process, same reasoning as DevelopmentConfig above.
+    SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
     MAX_CONTENT_LENGTH = 26 * 1024 * 1024
 
     # Store the database in ~/Five12Data/five12.db
