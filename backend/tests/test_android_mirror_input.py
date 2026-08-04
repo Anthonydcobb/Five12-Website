@@ -81,6 +81,114 @@ def test_unknown_keycode_is_refused(adapter, sent):
     assert sent == []
 
 
+@pytest.mark.parametrize('keycode', [
+    ['BACK'],
+    {},
+    {'k': 'BACK'},
+    5,
+    None,
+])
+def test_unhashable_or_non_str_keycode_is_refused(adapter, sent, keycode):
+    """A JSON-supplied keycode can be a list or object. dict.get hashes its
+    key, so an unguarded lookup raises TypeError instead of refusing — this
+    boundary must never throw on untrusted input."""
+    ok, detail = adapter.send_input({'action': 'key', 'keycode': keycode})
+    assert ok is False
+    assert 'keycode' in detail
+    assert sent == []
+
+
+@pytest.mark.parametrize('keycode,expected', [
+    ('HOME', 'KEYCODE_HOME'),
+    ('APP_SWITCH', 'KEYCODE_APP_SWITCH'),
+])
+def test_key_maps_home_and_app_switch(adapter, sent, keycode, expected):
+    ok, _detail = adapter.send_input({'action': 'key', 'keycode': keycode})
+    assert ok is True
+    assert sent == [('shell', 'input', 'keyevent', expected)]
+
+
+@pytest.mark.parametrize('payload', [
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': -1, 'y2': 40},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 1080, 'y2': 40},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': -1},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 2400},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': '30', 'y2': 40},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30.5, 'y2': 40},
+    {'action': 'swipe', 'x': 10, 'y': 20, 'x2': True, 'y2': 40},
+])
+def test_swipe_bad_end_point_is_refused(adapter, sent, payload):
+    ok, detail = adapter.send_input(payload)
+    assert ok is False
+    assert 'coordinate' in detail
+    assert sent == []
+
+
+def test_swipe_duration_bool_is_refused(adapter, sent):
+    ok, detail = adapter.send_input(
+        {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 40, 'durationMs': True})
+    assert ok is False
+    assert sent == []
+
+
+def test_swipe_duration_above_max_is_clamped(adapter, sent):
+    ok, _detail = adapter.send_input(
+        {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 40,
+         'durationMs': android_mirror.MAX_SWIPE_MS + 10000})
+    assert ok is True
+    assert sent == [('shell', 'input', 'swipe', '10', '20', '30', '40',
+                      str(android_mirror.MAX_SWIPE_MS))]
+
+
+@pytest.mark.parametrize('duration', [0, -50])
+def test_swipe_duration_non_positive_is_clamped_to_one(adapter, sent, duration):
+    ok, _detail = adapter.send_input(
+        {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 40, 'durationMs': duration})
+    assert ok is True
+    assert sent == [('shell', 'input', 'swipe', '10', '20', '30', '40', '1')]
+
+
+@pytest.mark.parametrize('payload', [
+    ['action', 'tap'],
+    'tap',
+    None,
+    42,
+])
+def test_non_dict_payload_is_refused(adapter, sent, payload):
+    ok, detail = adapter.send_input(payload)
+    assert ok is False
+    assert sent == []
+
+
+def test_offline_tablet_flood_bounds_adb_spawns(monkeypatch):
+    """screen_size() only caches on success, so an offline tablet re-spawns
+    an adb subprocess on every call unless the rate limiter runs first. This
+    proves a flood of requests can't spawn more than MAX_TAPS_PER_SECOND adb
+    processes within one simulated second."""
+    monkeypatch.setenv('FIVE12_MIRROR_TOOLS', '1')
+    monkeypatch.setenv('FIVE12_MIRROR_SERIAL', 'TESTSERIAL')
+    a = android_mirror.AndroidMirrorAdapter()  # _screen left unset
+
+    clock = [0.0]
+    monkeypatch.setattr(android_mirror.time, 'monotonic', lambda: clock[0])
+
+    calls = []
+
+    def failing_run_adb(args, timeout, binary=False):
+        calls.append(tuple(args))
+        return False, '' if not binary else b'', 'device offline'
+
+    monkeypatch.setattr(android_mirror, '_run_adb', failing_run_adb)
+
+    for _ in range(50):
+        ok, _detail = a.send_input({'action': 'tap', 'x': 1, 'y': 1})
+        assert ok is False
+
+    assert len(calls) == android_mirror.MAX_TAPS_PER_SECOND, (
+        'adb spawns must be bounded by the rate limiter even when the '
+        'tablet is offline and screen_size() keeps failing')
+
+
 def test_input_refused_when_screen_size_unknown(monkeypatch, sent):
     monkeypatch.setenv('FIVE12_MIRROR_TOOLS', '1')
     monkeypatch.setenv('FIVE12_MIRROR_SERIAL', 'TESTSERIAL')

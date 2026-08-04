@@ -245,14 +245,27 @@ class AndroidMirrorAdapter(DeviceAdapter):
             return False, f'unknown action {action!r}'
 
         if action == 'key':
-            keycode = ALLOWED_KEYCODES.get(payload.get('keycode'))
+            keycode_value = payload.get('keycode')
+            # Only a str may be looked up — dict.get hashes its key, and a
+            # request-supplied list/dict for 'keycode' would otherwise raise
+            # TypeError instead of producing the intended refusal.
+            keycode = (ALLOWED_KEYCODES.get(keycode_value)
+                       if isinstance(keycode_value, str) else None)
             if keycode is None:
-                return False, f'keycode {payload.get("keycode")!r} not allowed'
+                return False, f'keycode {keycode_value!r} not allowed'
             if not self._rate_ok():
                 return False, 'rate limit exceeded'
             ok, _out, detail = _run_adb(
                 ['shell', 'input', 'keyevent', keycode], ADB_TIMEOUT)
             return ok, detail
+
+        # Rate-limit BEFORE any adb work, including screen_size(). screen_size()
+        # only caches on success — on failure (offline tablet) it re-spawns an
+        # adb subprocess (6s timeout) on every call. If it ran ahead of
+        # _rate_ok(), a flood of requests against an offline tablet would
+        # spawn unboundedly many adb processes with no limiter ever reached.
+        if not self._rate_ok():
+            return False, 'rate limit exceeded'
 
         bounds = self.screen_size()
         if bounds is None:
@@ -263,8 +276,6 @@ class AndroidMirrorAdapter(DeviceAdapter):
             return False, 'coordinate out of bounds or not an integer'
 
         if action == 'tap':
-            if not self._rate_ok():
-                return False, 'rate limit exceeded'
             ok, _out, detail = _run_adb(
                 ['shell', 'input', 'tap', str(start[0]), str(start[1])], ADB_TIMEOUT)
             return ok, detail
@@ -276,8 +287,6 @@ class AndroidMirrorAdapter(DeviceAdapter):
         if not isinstance(duration, int) or isinstance(duration, bool):
             return False, 'coordinate out of bounds or not an integer'
         duration = max(1, min(duration, MAX_SWIPE_MS))
-        if not self._rate_ok():
-            return False, 'rate limit exceeded'
         ok, _out, detail = _run_adb(
             ['shell', 'input', 'swipe', str(start[0]), str(start[1]),
              str(end[0]), str(end[1]), str(duration)], ADB_TIMEOUT)
