@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import axios from 'axios';
 import AsteraMirrorPanel from './AsteraMirrorPanel';
@@ -288,4 +288,64 @@ describe('AsteraMirrorPanel', () => {
 
     expect(screen.getByAltText('tablet screen')).toHaveAttribute('src', newerUrl);
   }, 15000);
+
+  // --- tap, swipe and navigation control -------------------------------
+  // jsdom does not implement the PointerEvent constructor, so these use
+  // Testing Library's fireEvent.pointerDown/pointerUp (which synthesizes a
+  // real pointer event) rather than `new PointerEvent(...)`.
+
+  function mockImageBox(el, box) {
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+      left: box.left, top: box.top, width: box.width, height: box.height,
+      right: box.left + box.width, bottom: box.top + box.height, x: box.left, y: box.top,
+    });
+  }
+
+  it('converts a click to device pixels at a non-1:1 display scale', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    // displayed at 270x600 for a 1080x2400 device — exactly quarter scale
+    mockImageBox(img, { left: 10, top: 20, width: 270, height: 600 });
+
+    fireEvent.pointerDown(img, { clientX: 10 + 135, clientY: 20 + 300 });
+    fireEvent.pointerUp(img, { clientX: 10 + 135, clientY: 20 + 300 });
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    expect(axios.post).toHaveBeenCalledWith('/api/devices/astera/input',
+      { action: 'tap', x: 540, y: 1200 });
+  });
+
+  it('sends a swipe when the pointer moves far enough', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    const img = await screen.findByAltText('tablet screen');
+    mockImageBox(img, { left: 0, top: 0, width: 270, height: 600 });
+
+    fireEvent.pointerDown(img, { clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(img, { clientX: 100, clientY: 200 });
+
+    await waitFor(() => expect(axios.post).toHaveBeenCalled());
+    const [, body] = axios.post.mock.calls[0];
+    expect(body.action).toBe('swipe');
+    expect(body).toMatchObject({ x: 40, y: 40, x2: 400, y2: 800 });
+    expect(typeof body.durationMs).toBe('number');
+  });
+
+  it('sends allowed keycodes from the nav buttons', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    (await screen.findByRole('button', { name: /back/i })).click();
+    await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
+      '/api/devices/astera/input', { action: 'key', keycode: 'BACK' }));
+  });
+
+  it('has no controls at all when the tablet is offline', async () => {
+    axios.get.mockResolvedValue(statusOf({ available: false, disabled: false,
+                                           reason: 'tablet offline' }));
+    render(<AsteraMirrorPanel />);
+    await screen.findByText(/tablet offline/i);
+    expect(screen.queryByRole('button', { name: /back/i })).not.toBeInTheDocument();
+    expect(screen.queryByAltText('tablet screen')).not.toBeInTheDocument();
+  });
 });

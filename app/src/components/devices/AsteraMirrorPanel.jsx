@@ -8,6 +8,7 @@ const STATUS_MS = 3000;
 // than the ~1.9 fps the device can actually deliver.
 const FRAME_MS = 750;
 const STALE_AFTER_SEC = 3;
+const TAP_SLOP_PX = 8;
 
 // axios delivers the *error* response body as a Blob too when the request
 // was made with responseType: 'blob', so err.response.data is a Blob, not
@@ -97,6 +98,44 @@ export default function AsteraMirrorPanel() {
 
   const reconnect = async () => { await pollStatus(); };
 
+  const imgRef = useRef(null);
+  const downRef = useRef(null);
+
+  const toDevice = (e) => {
+    const el = imgRef.current;
+    if (!el || !status?.screenW || !status?.screenH) return null;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    const x = Math.round(((e.clientX - r.left) / r.width) * status.screenW);
+    const y = Math.round(((e.clientY - r.top) / r.height) * status.screenH);
+    const clamp = (v, hi) => Math.max(0, Math.min(v, hi - 1));
+    return { x: clamp(x, status.screenW), y: clamp(y, status.screenH) };
+  };
+
+  const send = async (body) => {
+    try { await axios.post('/api/devices/astera/input', body); }
+    catch (err) { setFrameError(err?.response?.data?.detail || 'input refused'); }
+  };
+
+  const onPointerDown = (e) => {
+    downRef.current = { pt: toDevice(e), clientX: e.clientX, clientY: e.clientY,
+                        at: Date.now() };
+  };
+
+  const onPointerUp = (e) => {
+    const down = downRef.current;
+    downRef.current = null;
+    const up = toDevice(e);
+    if (!down || !down.pt || !up) return;
+    const moved = Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY);
+    if (moved < TAP_SLOP_PX) {
+      send({ action: 'tap', x: up.x, y: up.y });
+    } else {
+      send({ action: 'swipe', x: down.pt.x, y: down.pt.y, x2: up.x, y2: up.y,
+             durationMs: Math.max(50, Math.min(Date.now() - down.at, 5000)) });
+    }
+  };
+
   if (!status) {
     return <div className="text-[10px] font-mono text-text-muted py-6 px-2">connecting…</div>;
   }
@@ -138,10 +177,22 @@ export default function AsteraMirrorPanel() {
       )}
 
       {frameUrl && (
-        <img src={frameUrl} alt="tablet screen"
-             className={'border border-[var(--color-border)] max-h-[70vh] w-auto ' +
+        <img ref={imgRef} src={frameUrl} alt="tablet screen"
+             onPointerDown={onPointerDown} onPointerUp={onPointerUp}
+             draggable={false}
+             className={'border border-[var(--color-border)] max-h-[70vh] w-auto touch-none select-none cursor-pointer ' +
                         (stale ? 'opacity-60' : '')} />
       )}
+
+      <div className="flex gap-2">
+        {[['Back', 'BACK'], ['Home', 'HOME'], ['Recents', 'APP_SWITCH']].map(([label, keycode]) => (
+          <button key={keycode}
+            onClick={() => send({ action: 'key', keycode })}
+            className="text-[10px] font-mono px-2 py-1 border border-[var(--color-border)] rounded-sm hover:border-brand">
+            {label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
