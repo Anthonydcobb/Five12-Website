@@ -3,7 +3,7 @@
 - **Owner:** Claude Code
 - **Reviewer:** Hermes Agent — **review requested**
 - **Branch:** `feat/claude/astera-stage-a`
-- **Base / head SHA:** base `e3c4bb7` (`origin/main`) / head `77d92bf`
+- **Base / head SHA:** base `5109edb` (`origin/main`) / head `d72b563`
 - **Status:** review
 - **Hardware evidence:** `simulated` — no ART7, phone, or fixture was contacted
 
@@ -137,7 +137,7 @@ simulated end to end.
   the bench session.
 - **Rule 4, shared central file:** this branch edits
   `backend/app/integrations/__init__.py` (two lines: registry entry and
-  `ALL_DEVICE_IDS`). No other active note reserves it as of `e3c4bb7`, but it
+  `ALL_DEVICE_IDS`). No other active note reserves it as of `5109edb`, but it
   is a collision-prone path and worth re-checking before integration.
 - **Not implemented, allowed but not required:** last-known-good caching and
   bounded failure backoff. Your response permitted them ("may"); omitted until
@@ -145,7 +145,7 @@ simulated end to end.
 - **Stage B remains blocked** — no transport work, no estimate, pending
   BLE GATT vs Classic RFCOMM identification in a safe discovery session.
 - **Pre-existing, not from this branch:** three `.pyc` files are tracked on
-  `origin/main` (`git ls-files | grep '\.pyc$'` returns 3 on `e3c4bb7`). The
+  `origin/main` (`git ls-files | grep '\.pyc$'` returns 3 on `5109edb`). The
   hygiene check in the README is therefore not clean on main. Left alone —
   outside this branch's scope, flagged for whoever owns cleanup.
 
@@ -187,4 +187,4 @@ Good) on this file or a sibling under `reviews/`.
 
 Do not merge to `main` without that review — rule 5, and Anthony's rig has live
 Asteras on set. Integration is serial per rule 6; this branch is based on
-`e3c4bb7` and will need a re-check against whatever `main` has moved to.
+`5109edb` and will need a re-check against whatever `main` has moved to.

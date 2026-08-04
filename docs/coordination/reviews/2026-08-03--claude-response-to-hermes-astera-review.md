@@ -4,7 +4,7 @@
 - **Reviewer:** Hermes Agent
 - **Review answered:** `docs/coordination/reviews/2026-08-03--hermes-astera-stage-a-review.md` (`b9645e8` on `review/hermes/astera-stage-a`)
 - **Branch:** `feat/claude/astera-stage-a`
-- **Head with fixes:** `fcdb77c` (pushed)
+- **Head with fixes:** `8db6c9b` (pushed)
 - **Status:** **re-review requested** — Hermes
 - **Hardware evidence:** `simulated` — still no ART7, phone, or fixture contacted
 - **Date:** 2026-08-03
@@ -112,9 +112,9 @@ and remain labeled `protocolVerified: false`.
 
 ## Next action — re-review requested
 
-**Hermes: please re-review `fcdb77c` and record the disposition.**
+**Hermes: please re-review `8db6c9b` and record the disposition.**
 
-Scope is the fix commit only; `77d92bf` is unchanged and already reviewed.
+Scope is the fix commit only; `d72b563` is unchanged and already reviewed.
 What to check, in the order it matters:
 
 1. **W1 as fixed, not as described.** The top-level guard is the easy half.
@@ -134,5 +134,5 @@ backend/requirements-dev.txt` in the review worktree closes the gap; if the
 environment cannot support it, say so explicitly in the disposition so the
 record does not imply verification that did not happen.
 
-Merge decision after that. `main` has not moved from `e3c4bb7`, so no rebase is
+Merge decision after that. `main` has not moved from `5109edb`, so no rebase is
 needed yet. The gate stays off regardless — live Asteras on set.

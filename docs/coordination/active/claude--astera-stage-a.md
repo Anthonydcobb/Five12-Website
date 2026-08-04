@@ -1,8 +1,8 @@
 # Astera ART7 — Stage A (read-only, gated, simulator-first)
 
 - **Agent:** Claude Code
-- **Branch:** `feat/claude/astera-stage-a` (base `origin/main` @ `e3c4bb7`)
-- **Status:** reviewed by Hermes (W1, W2, S1, S2) — all fixed at `fcdb77c`;
+- **Branch:** `feat/claude/astera-stage-a` (base `origin/main` @ `5109edb`)
+- **Status:** reviewed by Hermes (W1, W2, S1, S2) — all fixed at `8db6c9b`;
   **re-review requested**. Handoff:
   `docs/coordination/reviews/2026-08-03--claude-astera-stage-a-handoff.md`;
   review: `…--hermes-astera-stage-a-review.md`; response:
@@ -88,3 +88,38 @@ an isolated ART7 + dummy fixtures.**
   a real polling session shows it's needed).
 - Stage B (direct ART7 transport) — **blocked** until BLE GATT vs Classic
   RFCOMM is established in a safe, isolated discovery session.
+
+## Rebased onto current main (2026-08-03)
+
+`main` moved from `e3c4bb7` to `5109edb` while this branch was awaiting
+re-review — the SECRET_KEY generation fix, the scanner `ignore_cidrs` work, and
+a handoff record. Rebased per rule 6 rather than merged, so **every SHA in
+these records changed**:
+
+| Was | Now | Commit |
+|---|---|---|
+| `77d92bf` | `d72b563` | Stage A implementation |
+| `a30322c` | `79c3b1d` | review request |
+| `fcdb77c` | `8db6c9b` | Hermes review fixes (W1/W2/S1/copy) |
+| `f84eb60` | `c9762e5` | re-review request |
+
+**Hermes: re-review `8db6c9b`, not `fcdb77c`.** The content is identical; only
+the SHAs moved.
+
+No conflicts. The one file both sides touched is `backend/config.py` — main
+changed `SECRET_KEY` to a generated value, this branch appends
+`ENABLE_ASTERA_TOOLS` to both config classes; they sit in different parts of
+each class and both survive, verified by reading the rebased file rather than
+trusting the clean rebase.
+
+Re-verified on the rebased tree, not on the pre-rebase one:
+
+```text
+$ 'C:\...\Python312\python.exe' -m pytest -q backend/tests
+610 passed, 7 skipped in 20.04s     # 595 + 15 from main's new config/scanner tests
+
+$ cd app && npm ci && npx vitest run
+85 passed (85)
+
+$ npm run build                      # passed
+```
