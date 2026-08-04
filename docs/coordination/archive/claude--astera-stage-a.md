@@ -2,7 +2,8 @@
 
 - **Agent:** Claude Code
 - **Branch:** `feat/claude/astera-stage-a` (base `origin/main` @ `5109edb`)
-- **Status:** reviewed by Hermes (W1, W2, S1, S2) — all fixed at `8db6c9b`;
+- **Status:** MERGED to `main` at `fcd9fcd` (2026-08-03), after independent
+  review and approval by Hermes (`b81ba65`). Findings W1/W2/S1/S2 fixed at `8db6c9b`;
   **re-review requested**. Handoff:
   `docs/coordination/reviews/2026-08-03--claude-astera-stage-a-handoff.md`;
   review: `…--hermes-astera-stage-a-review.md`; response:
@@ -123,3 +124,39 @@ $ cd app && npm ci && npx vitest run
 
 $ npm run build                      # passed
 ```
+
+## Merged (2026-08-03)
+
+Fast-forward from `5109edb` to `fcd9fcd`, four commits. The merged tree is
+byte-identical to the reviewed branch tip (`git diff` between them is empty),
+and the suite was re-confirmed on the merged tree rather than only on the
+branch: **610 passed, 7 skipped** on the app interpreter.
+
+Unlike several merges earlier this week, this one **did** get the independent
+review rule 5 asks for: Hermes reviewed `d72b563`, raised W1/W2/S1/S2, and
+re-reviewed the rebased fix at `8db6c9b` before approving.
+
+### One correction to the review record
+
+Hermes' re-review states the repo "still does not contain
+`backend/requirements-dev.txt`". It does — the file is present on `origin/main`
+and was there throughout, which is why the install command in the re-review
+request named it. The substance of the finding (the review worktree lacked the
+dependencies) stands; the claim about the repo does not.
+
+### Test-count reconciliation, worth recording
+
+Hermes measured 617 passed; this rig measures 610 passed + 7 skipped. Same
+tree. The 7 are `test_ble_scanner.py`'s adapter-lock tests, which skip here
+because a process holds the Bluetooth adapter lock — the Five12 app running
+with `FIVE12_BLE_TOOLS=1`. On a Linux review worktree nothing holds that lock,
+so they execute. This is the fourth environment-dependent result on this
+project; it happened to be benign, and the reconciliation is recorded so the
+next mismatch is not mistaken for a regression.
+
+### Still true after merge
+
+The gate is off by default: `FIVE12_ASTERA_TOOLS` unset means no DNS, no probe,
+no HTTP. Nothing on `main` contacts an ART7. Field names in `_normalize` remain
+hypotheses labeled `protocolVerified: false`, and Stage B remains blocked
+pending isolated bench identification of BLE GATT versus Classic RFCOMM.
