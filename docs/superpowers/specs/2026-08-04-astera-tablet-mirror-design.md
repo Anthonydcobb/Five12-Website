@@ -49,10 +49,33 @@ Three options were weighed:
 | **C** | `ws-scrcpy` as a Node sidecar | Rejected — adds a runtime and an uncontrolled dependency to a show machine |
 
 **A ships inside the existing Flask + React shape with no new runtime.** Its
-ceiling is roughly **2–3 fps**, set by on-device `screencap` latency of about
-200–400 ms — not by the network, which never leaves loopback. Tapping presets and
-reading status work well at that rate. Dragging a colour wheel does not: you see
-the result, not the motion.
+ceiling is **~1.9 fps**, set by on-device `screencap` latency — not by the
+network. Tapping presets and reading status work well at that rate. Dragging a
+colour wheel does not: you see the result, not the motion.
+
+> **Measured 2026-08-04 — `verified on actual gear`.** On the mirror tablet
+> (Samsung SM-T290, Android 11, over USB) a `screencap -p` round-trip is
+> **514–644 ms, mean 529** across ten consecutive samples, giving **1.89 fps**.
+> An `adb shell true` no-op costs 55 ms of that, so ~474 ms is on-device
+> capture and PNG encode. The 20 KB PNG crosses an 18 MB/s USB link in about a
+> millisecond, which confirms this design's central claim: the cost is the
+> capture, not the transport.
+>
+> An earlier estimate here said 200–400 ms and 2–3 fps. That came from an S21;
+> this tablet's MediaTek MT8768 is slower, so the dedicated device is
+> marginally *worse* per frame than the phone it replaces. Accepted knowingly —
+> it buys a device that stays mounted, cabled, and powered.
+>
+> Two consequences followed. A 400 ms poll is shorter than a single capture, so
+> the panel now chains each capture from the completion of the last rather than
+> firing on a fixed interval; and `CAPTURE_TIMEOUT` dropped from 8 s to 3 s,
+> since 8 s was ~15x the real figure and froze the panel before the stale badge
+> could appear.
+>
+> Caveat: measured with the tablet idle. `screencap` will be slower while
+> AsteraNext is driving fixtures over Bluetooth, which is exactly when the
+> mirror matters. Re-measure during a bench session with real gear before
+> treating 750 ms as settled.
 
 That limit is accepted deliberately. B is the fix and it is a materially larger
 build — stream demuxing in Python, a WebSocket path Five12 does not have, and an
@@ -112,9 +135,16 @@ becoming the weak point.
 1. **The backend is loopback-only.** Verified 2026-08-04: Flask listens on
    `127.0.0.1:5000`. Nothing on the venue network can reach these endpoints.
    Coordination rule 11 already requires this and it holds today.
-2. **adb pairing.** Only devices paired with this PC are reachable, and pairing
-   requires a code displayed on the tablet. Android 11+ wireless debugging is
-   TLS-encrypted and authenticated — not the old open `adb tcpip 5555`.
+2. **adb authorisation.** Only devices authorised to this PC are reachable.
+   **As of 2026-08-04 the transport is USB, and wireless debugging is turned
+   off on the tablet** — so this layer is now physical: an attacker needs the
+   cable. Wireless was measured at 0.05 MB/s against 18.18 MB/s on USB and
+   abandoned; see the handoff for why. Should it ever be re-enabled, Android
+   11+ wireless debugging is TLS-encrypted and authenticated, and pairing
+   requires a code displayed on the tablet — not the old open `adb tcpip 5555`.
+   It would also reintroduce a hazard on this rig: the `sACN` NIC owns an
+   on-link `10.0.0.0/8` route, so a tablet on any `10.x` address is ARP'd out
+   the lighting segment first.
 3. **The device serial comes from configuration, never from request input.**
    `FIVE12_MIRROR_SERIAL`. A request cannot name a target. This is the same
    invariant `device_routes.py` states in its own docstring, and the same reason
@@ -157,7 +187,7 @@ Each is a normal state with its own copy, never an exception:
 | Gate off | "Tablet mirror disabled — set `FIVE12_MIRROR_TOOLS=1`" |
 | No serial configured | Names `FIVE12_MIRROR_SERIAL` explicitly |
 | adb binary missing | Says so, with the path it looked for |
-| Tablet offline | "Tablet offline — check Wireless debugging is on", plus **Reconnect** |
+| Tablet offline | Names the USB cable first, then unlocked screen and USB debugging, plus **Reconnect** |
 | Capture timeout | Last frame retained, **stale badge showing age in seconds** |
 
 The stale badge is load-bearing. The link dropped without warning during the
@@ -185,7 +215,7 @@ disconnected.
 ## Staging
 
 **v1 — this spec.** Embedded screen, tap and key control, honest states. The
-panel states plainly that live video and smooth dragging are coming, so 2–3 fps
+panel states plainly that live video and smooth dragging are coming, so ~2 fps
 reads as a known stage rather than a defect.
 
 **v2 — approach B.** Replaces the transport underneath the same tab. Triggered

@@ -178,7 +178,7 @@ from collections import deque
 from . import DeviceAdapter
 
 ADB_TIMEOUT = 6
-CAPTURE_TIMEOUT = 8
+CAPTURE_TIMEOUT = 3   # was 8; see the frame-rate note above
 MAX_TAPS_PER_SECOND = 8
 
 DISABLED_DETAIL = 'tablet mirror disabled — set FIVE12_MIRROR_TOOLS=1 to enable'
