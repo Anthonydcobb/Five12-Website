@@ -102,6 +102,12 @@ class DeviceAdapter:
     id = 'base'
     name = 'Device'
 
+    # Whether ?sim=1 / FIVE12_DEVICE_SIM fabricates telemetry for this
+    # adapter. Default True so every existing adapter keeps its behaviour.
+    # An adapter that sets this False is resolved to a single instance
+    # regardless of the query string — see get_adapter().
+    supports_sim = True
+
     def detect(self):
         """-> {'found': bool, 'address': str|None, 'detail': str}"""
         raise NotImplementedError
@@ -123,7 +129,16 @@ _registry_lock = threading.Lock()
 
 
 def get_adapter(device_id, sim):
-    """Adapters are cached per (device, sim) so history accumulates."""
+    """Adapters are cached per (device, sim) so history accumulates.
+
+    `sim` is normalised to False for any adapter that declares
+    `supports_sim = False`. Without that, ?sim=1 mints a *second* instance of
+    an adapter with no sim behaviour, and every piece of per-instance state
+    — rate-limit windows, single-flight locks, caches — is silently doubled:
+    a client alternating between the two query strings gets twice the rate
+    limit and two concurrent captures. Adapters that do implement sim are
+    untouched and keep their separate instance.
+    """
     from .starlink import StarlinkAdapter
     from .bolero import BoleroAdapter
     from .stardust import StardustAdapter
@@ -139,10 +154,11 @@ def get_adapter(device_id, sim):
     cls = classes.get(device_id)
     if cls is None:
         return None
-    key = (device_id, bool(sim))
+    sim = bool(sim) and getattr(cls, 'supports_sim', True)
+    key = (device_id, sim)
     with _registry_lock:
         if key not in _registry:
-            _registry[key] = cls(sim=bool(sim))
+            _registry[key] = cls(sim=sim)
         return _registry[key]
 
 
