@@ -1,3 +1,6 @@
+import threading
+from collections import deque
+
 import pytest
 
 from app.integrations import android_mirror
@@ -124,10 +127,17 @@ def test_swipe_bad_end_point_is_refused(adapter, sent, payload):
     assert sent == []
 
 
-def test_swipe_duration_bool_is_refused(adapter, sent):
+@pytest.mark.parametrize('duration', [True, '250', 250.5, None, [250]])
+def test_swipe_duration_bad_type_is_refused_by_its_own_name(adapter, sent, duration):
+    """A bad durationMs used to be refused as 'coordinate out of bounds or
+    not an integer' — actively misleading during a live failure, because the
+    coordinates were fine and the operator goes looking at the wrong thing."""
     ok, detail = adapter.send_input(
-        {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 40, 'durationMs': True})
+        {'action': 'swipe', 'x': 10, 'y': 20, 'x2': 30, 'y2': 40,
+         'durationMs': duration})
     assert ok is False
+    assert 'durationMs' in detail
+    assert 'coordinate' not in detail
     assert sent == []
 
 
@@ -227,3 +237,70 @@ def test_rate_limit_trips(monkeypatch, adapter, sent):
     clock[0] = 1.5
     ok, _detail = adapter.send_input({'action': 'tap', 'x': 1, 'y': 1})
     assert ok is True, 'the window must slide, not latch'
+
+
+def test_rate_limit_is_atomic_under_concurrent_input(monkeypatch, adapter, sent):
+    """_rate_ok() was a check-then-append with no lock, while the rest of the
+    module uses threading.Lock. Under a threaded worker two requests can both
+    see room for the last slot and both take it.
+
+    The window is filled to one slot short, then the deque is instrumented so
+    the two racing threads rendezvous at exactly the point the unlocked code
+    was interruptible. With a lock only one thread ever reaches the barrier,
+    so it times out and the calls serialise; without one, both pass.
+    """
+    clock = [0.0]
+    monkeypatch.setattr(android_mirror.time, 'monotonic', lambda: clock[0])
+
+    for _ in range(android_mirror.MAX_TAPS_PER_SECOND - 1):
+        assert adapter.send_input({'action': 'tap', 'x': 1, 'y': 1})[0] is True
+
+    barrier = threading.Barrier(2, timeout=0.5)
+
+    class Interleaved(deque):
+        armed = False
+
+        def __len__(self):
+            n = deque.__len__(self)
+            if self.armed:
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    pass
+            return n
+
+    interleaved = Interleaved(list(adapter._tap_times))
+    interleaved.armed = True          # armed only after construction
+    adapter._tap_times = interleaved
+
+    results = []
+
+    def hammer():
+        results.append(adapter.send_input({'action': 'tap', 'x': 1, 'y': 1})[0])
+
+    threads = [threading.Thread(target=hammer) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+
+    assert results.count(True) == 1, (
+        'two concurrent taps must not both take the last slot in the window')
+
+
+def test_missing_adb_names_the_path_it_looked_for(monkeypatch):
+    """The design requires the adb-missing state to say which path it tried,
+    and _adb_path() is right there. 'not found — set FIVE12_ADB_PATH' leaves
+    the operator guessing whether the variable was even read."""
+    monkeypatch.setenv('FIVE12_MIRROR_TOOLS', '1')
+    monkeypatch.setenv('FIVE12_MIRROR_SERIAL', 'TESTSERIAL')
+    monkeypatch.setenv('FIVE12_ADB_PATH', 'D:/platform-tools/adb.exe')
+
+    def missing(*args, **kwargs):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(android_mirror.subprocess, 'run', missing)
+    ok, _out, detail = android_mirror._run_adb(['devices'], 1)
+    assert ok is False
+    assert 'D:/platform-tools/adb.exe' in detail
+    assert 'FIVE12_ADB_PATH' in detail
