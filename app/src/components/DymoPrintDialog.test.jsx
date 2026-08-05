@@ -177,6 +177,18 @@ describe('DymoPrintDialog run control', () => {
     expect(printMerge.mock.calls[0][3].roll).toBeUndefined()
   })
 
+  // A label the engine submitted but never saw finish must not be folded into
+  // the printed count. The operator has to know which ones to check by hand.
+  it('reports unconfirmed labels separately instead of claiming they printed', async () => {
+    printMerge.mockResolvedValue({ printed: 7, unconfirmed: 3, total: 10, stopped: false, reason: null })
+    await renderMapped()
+    await userEvent.click(await screen.findByRole('button', { name: /Print all/ }))
+    const msg = await screen.findByText(/unconfirmed/i)
+    expect(msg).toHaveTextContent('7')
+    expect(msg).toHaveTextContent('3')
+    expect(screen.queryByText('Printed 10 labels.')).not.toBeInTheDocument()
+  })
+
   it('disables closing while a run is active', async () => {
     let resolvePrint
     printMerge.mockReturnValue(new Promise((res) => { resolvePrint = res }))

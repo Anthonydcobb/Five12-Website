@@ -106,6 +106,11 @@ export async function renderPreview(labelXml, values) {
 const QUEUE_POLL_MS = 400;
 const APPEAR_GRACE_MS = 2000;
 const JOB_CEILING_MS = 15000;
+// When a label could not be confirmed — the queue never drained, or the job
+// never showed up in the spooler at all — we have no evidence the feed has
+// finished. Submitting immediately is what causes the printer to start a new
+// job mid-feed. Wait out a conservative feed's worth before the next label.
+const UNCONFIRMED_SETTLE_MS = 2000;
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
@@ -146,32 +151,40 @@ function faultFrom(q) {
 async function awaitQueueDrain(printerName, signal) {
   const deadline = Date.now() + JOB_CEILING_MS;
   const appearDeadline = Date.now() + APPEAR_GRACE_MS;
+  let sawJob = false;
 
   // Phase 1: APPEAR
   for (;;) {
-    if (signal?.aborted) return { fault: null };
-    if (Date.now() >= deadline) return { fault: null };
+    if (signal?.aborted) return { fault: null, confirmed: true };
+    if (Date.now() >= deadline) return { fault: null, confirmed: false };
     let q;
     try { q = await fetchQueue(printerName); } catch { q = null; }
     if (q) {
       const fault = faultFrom(q);
-      if (fault) return { fault };
-      if (q.jobCount > 0) break;
+      if (fault) return { fault, confirmed: false };
+      if (q.jobCount > 0) { sawJob = true; break; }
     }
-    if (Date.now() >= appearDeadline) break; // proceed regardless — may have already drained
+    if (Date.now() >= appearDeadline) break;
     await sleep(QUEUE_POLL_MS);
   }
 
+  // The grace expired without the job ever showing up. That is "no job seen",
+  // which is NOT the same as "the job came and went" — and the two are
+  // indistinguishable from here. Falling into DRAIN would read the empty queue
+  // as a completed drain and release the next label on top of a feed that may
+  // still be running. Report it unconfirmed instead and let the caller settle.
+  if (!sawJob) return { fault: null, confirmed: false };
+
   // Phase 2: DRAIN
   for (;;) {
-    if (signal?.aborted) return { fault: null };
-    if (Date.now() >= deadline) return { fault: null };
+    if (signal?.aborted) return { fault: null, confirmed: true };
+    if (Date.now() >= deadline) return { fault: null, confirmed: false };
     let q;
     try { q = await fetchQueue(printerName); } catch { q = null; }
     if (q) {
       const fault = faultFrom(q);
-      if (fault) return { fault };
-      if (q.jobCount === 0) return { fault: null };
+      if (fault) return { fault, confirmed: false };
+      if (q.jobCount === 0) return { fault: null, confirmed: true };
     }
     await sleep(QUEUE_POLL_MS);
   }
@@ -185,13 +198,21 @@ export async function printMerge(printerName, labelXml, records, opts = {}) {
     : '';
   const total = records.length;
   let printed = 0;
+  let unconfirmed = 0;
   for (const rec of records) {
-    if (signal?.aborted) return { printed, total, stopped: true, reason: null };
+    if (signal?.aborted) return { printed, unconfirmed, total, stopped: true, reason: null };
     await f.printLabelAsync(printerName, paramsXml, mergeLabel(labelXml, rec), '');
-    const { fault } = await awaitQueueDrain(printerName, signal);
-    if (fault) return { printed, total, stopped: true, reason: fault };
-    printed += 1;
-    if (onProgress) onProgress({ printed, total });
+    const { fault, confirmed } = await awaitQueueDrain(printerName, signal);
+    if (fault) return { printed, unconfirmed, total, stopped: true, reason: fault };
+    if (confirmed) {
+      printed += 1;
+    } else {
+      // Submitted, never seen to finish. Counting it as printed would be a
+      // claim we cannot support; the operator needs to check these by hand.
+      unconfirmed += 1;
+      await sleep(UNCONFIRMED_SETTLE_MS);
+    }
+    if (onProgress) onProgress({ printed, unconfirmed, total });
   }
-  return { printed, total, stopped: false, reason: null };
+  return { printed, unconfirmed, total, stopped: false, reason: null };
 }

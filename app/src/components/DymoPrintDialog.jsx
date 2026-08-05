@@ -224,7 +224,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
         onProgress: setProgress,
       });
       localStorage.setItem(LAST_PRINTER_KEY, printer);
-      if (res.printed > 0) {
+      const unconfirmed = res.unconfirmed || 0;
+      if (res.printed + unconfirmed > 0) {
         // labels came out — worth remembering the mapping even on a stopped run
         try {
           const srcKey = source === 'csv' ? 'csv' : 'patch';
@@ -237,6 +238,13 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       }
       if (res.reason) {
         setError(`${res.reason} — stopped after ${res.printed} of ${res.total}.`);
+      } else if (unconfirmed > 0) {
+        // Deliberately not the green "printed" banner. These labels were
+        // submitted but the print queue never reported them finishing, so
+        // claiming them would be a claim we cannot support.
+        setError(`${res.stopped ? 'Stopped' : 'Finished'} — ${res.printed} of ${res.total} printed, ` +
+                 `${unconfirmed} unconfirmed. The print queue never reported ` +
+                 `${unconfirmed === 1 ? 'it' : 'them'} finishing — check ${unconfirmed === 1 ? 'it' : 'them'} by hand.`);
       } else if (res.stopped) {
         setPrintedMsg(`Stopped — ${res.printed} of ${res.total} printed.`);
       } else {

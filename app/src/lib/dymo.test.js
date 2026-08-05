@@ -121,7 +121,7 @@ describe('printMerge', () => {
     expect(printLabelAsync.mock.calls[0][2]).toContain('601')
     expect(printLabelAsync.mock.calls[0][2]).not.toContain('602')
     expect(printLabelAsync.mock.calls[1][2]).toContain('602')
-    expect(res).toEqual({ printed: 2, total: 2, stopped: false, reason: null })
+    expect(res).toEqual({ printed: 2, unconfirmed: 0, total: 2, stopped: false, reason: null })
   })
 
   it('clears the embedded DataRows so the template cannot drive the label count', async () => {
@@ -168,7 +168,7 @@ describe('printMerge', () => {
     const p = printMerge('LW450', LABEL_XML, [rec(601), rec(602)])
     await vi.advanceTimersByTimeAsync(5000)
     const res = await p
-    expect(res).toEqual({ printed: 2, total: 2, stopped: false, reason: null })
+    expect(res).toEqual({ printed: 2, unconfirmed: 0, total: 2, stopped: false, reason: null })
     expect(events).toEqual([
       'submit:0',
       'poll:0:0:jobCount=1', 'poll:0:1:jobCount=1', 'poll:0:2:jobCount=1', 'poll:0:3:jobCount=0',
@@ -186,9 +186,9 @@ describe('printMerge', () => {
       signal: ac.signal,
       onProgress: (p) => { seen.push(p); if (p.printed === 1) ac.abort() },
     })
-    expect(res).toEqual({ printed: 1, total: 3, stopped: true, reason: null })
+    expect(res).toEqual({ printed: 1, unconfirmed: 0, total: 3, stopped: true, reason: null })
     expect(printLabelAsync).toHaveBeenCalledTimes(1)
-    expect(seen).toEqual([{ printed: 1, total: 3 }])
+    expect(seen).toEqual([{ printed: 1, unconfirmed: 0, total: 3 }])
   })
 
   it("abort during a label's queue wait counts that label and stops before the next", async () => {
@@ -206,7 +206,7 @@ describe('printMerge', () => {
     const res = await p
     // the in-flight label completes physically (no cancel endpoint) so it COUNTS;
     // label 2 must never be submitted
-    expect(res).toEqual({ printed: 1, total: 2, stopped: true, reason: null })
+    expect(res).toEqual({ printed: 1, unconfirmed: 0, total: 2, stopped: true, reason: null })
     expect(printLabelAsync).toHaveBeenCalledTimes(1)
   })
 
@@ -216,21 +216,45 @@ describe('printMerge', () => {
       1: [{ jobCount: 1, printerStatus: 'PaperOut', jobs: [] }],
     })
     const res = await printMerge('LW450', LABEL_XML, [rec(601), rec(602), rec(603)])
-    expect(res).toEqual({ printed: 1, total: 3, stopped: true, reason: 'Paper out' })
+    expect(res).toEqual({ printed: 1, unconfirmed: 0, total: 3, stopped: true, reason: 'Paper out' })
     expect(printLabelAsync).toHaveBeenCalledTimes(2) // the faulted label is not retried
   })
 
-  it('a queue stuck non-empty hits the 15s ceiling and the run continues instead of hanging', async () => {
+  // Not hanging is right. Claiming a print nobody saw finish is not: the code
+  // knows it never observed the queue drain, so the run must say so rather
+  // than fold the label into the printed count.
+  it('a queue stuck non-empty hits the ceiling and reports the label unconfirmed, not printed', async () => {
     vi.useFakeTimers()
     const { printLabelAsync, events } = fakeFramework()
     fakeQueue(printLabelAsync, events, {
       0: [{ jobCount: 1, printerStatus: '', jobs: [] }], // never drains
     })
     const p = printMerge('LW450', LABEL_XML, [rec(601), rec(602)])
-    await vi.advanceTimersByTimeAsync(40000)
+    await vi.advanceTimersByTimeAsync(60000)
     const res = await p
-    expect(res).toEqual({ printed: 2, total: 2, stopped: false, reason: null })
+    expect(res).toEqual({ printed: 1, unconfirmed: 1, total: 2, stopped: false, reason: null })
     expect(printLabelAsync).toHaveBeenCalledTimes(2)
+  })
+
+  // The appear grace expiring means "no job seen", which is not the same as
+  // "the job came and went". Treating it as a drain submits the next label on
+  // top of a feed still in progress — the buzz and misregistration this whole
+  // module exists to prevent.
+  it('does not treat a job that never reached the spooler as a completed drain', async () => {
+    vi.useFakeTimers()
+    const { printLabelAsync, events } = fakeFramework()
+    fakeQueue(printLabelAsync, events, {
+      0: [{ jobCount: 0, printerStatus: '', jobs: [] }], // never appears
+    })
+    const p = printMerge('LW450', LABEL_XML, [rec(601), rec(602)])
+
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(printLabelAsync).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(60000)
+    const res = await p
+    expect(res.unconfirmed).toBe(1)
+    expect(res.printed).toBe(1)
   })
 
   it('a transient fetch failure keeps polling instead of ending the run', async () => {
@@ -241,12 +265,17 @@ describe('printMerge', () => {
       call += 1
       events.push(`poll:${call}`)
       if (call <= 2) throw new Error('network blip')
-      return { ok: true, status: 200, json: async () => ({ jobCount: 0, printerStatus: '', jobs: [] }) }
+      // The job appears once the blip clears, then drains. Keeping a real
+      // appear/drain here isolates this test to its stated intent — a
+      // transient failure must not end the run — rather than also asserting
+      // what happens when a job is never seen at all, which is covered above.
+      const jobCount = call === 3 ? 1 : 0
+      return { ok: true, status: 200, json: async () => ({ jobCount, printerStatus: '', jobs: [] }) }
     })
     const p = printMerge('LW450', LABEL_XML, [rec(601)])
     await vi.advanceTimersByTimeAsync(5000)
     const res = await p
-    expect(res).toEqual({ printed: 1, total: 1, stopped: false, reason: null })
+    expect(res).toEqual({ printed: 1, unconfirmed: 0, total: 1, stopped: false, reason: null })
   })
 
   it('maps each fault source to its exact reason copy', async () => {
@@ -275,7 +304,7 @@ describe('printMerge', () => {
       const { printLabelAsync, events } = fakeFramework()
       fakeQueue(printLabelAsync, events, { 0: [state] })
       const res = await printMerge('LW450', LABEL_XML, [rec(601)])
-      expect(res).toEqual({ printed: 0, total: 1, stopped: true, reason })
+      expect(res).toEqual({ printed: 0, unconfirmed: 0, total: 1, stopped: true, reason })
     }
   })
 
@@ -290,6 +319,6 @@ describe('printMerge', () => {
       ],
     })
     const res = await printMerge('LW450', LABEL_XML, [rec(601)])
-    expect(res).toEqual({ printed: 1, total: 1, stopped: false, reason: null })
+    expect(res).toEqual({ printed: 1, unconfirmed: 0, total: 1, stopped: false, reason: null })
   })
 })
