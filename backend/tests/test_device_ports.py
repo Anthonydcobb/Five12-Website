@@ -48,6 +48,21 @@ def test_a_reachable_node_is_read_live(client, node):
     assert body['ports'][0]['universe'] == 77
 
 
+def test_a_live_read_reports_asof_as_now(client, node):
+    """The contract is {'ports', 'live', 'asOf'} on every response. A live
+    read has a well-defined 'as of': the moment it was just taken. Consumers
+    should never see the field vanish on this branch while the fallback
+    branch sends null for the equivalent 'no timestamp' case."""
+    fresh = [dict(PORTS[0], universe=77), PORTS[1]]
+    with patch('app.vendors.read_port_status', return_value={'ports': fresh}):
+        res = client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    body = res.get_json()
+    assert 'asOf' in body
+    assert body['asOf'] is not None
+    assert body['asOf'].endswith('Z')
+
+
 def test_a_live_read_does_not_overwrite_stored_vendor_data(client, db, node):
     """Read path only. A live value disagreeing with the sweep is not evidence
     the sweep was wrong, and writing here would race the scanner."""
@@ -57,6 +72,22 @@ def test_a_live_read_does_not_overwrite_stored_vendor_data(client, db, node):
 
     db.session.refresh(node)
     assert node.vendor_data['ports'][0]['universe'] == 21
+
+
+def test_a_live_read_never_commits(client, db, node):
+    """The stronger version of the invariant above: this route runs against a
+    row the scanner sweep is concurrently updating, so it must never write or
+    commit at all, not just leave one field untouched. A later 'helpful'
+    addition — e.g. bumping last_seen on a successful probe — would race the
+    scanner and must fail this test even though it wouldn't touch vendor_data.
+    """
+    fresh = [dict(PORTS[0], universe=77), PORTS[1]]
+    with patch('app.vendors.read_port_status', return_value={'ports': fresh}), \
+            patch.object(db.session, 'commit') as mock_commit:
+        res = client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    assert res.status_code == 200
+    mock_commit.assert_not_called()
 
 
 def test_an_unreachable_node_falls_back_to_the_stored_patch(client, node):

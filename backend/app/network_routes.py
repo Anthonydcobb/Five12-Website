@@ -218,7 +218,15 @@ def device_ports(mac):
     if device.last_ip:
         live = vendors.read_port_status(device.last_ip)
         if live.get('ports'):
-            return jsonify({'ports': live['ports'], 'live': True})
+            # A live read has a well-defined "as of": right now. Always
+            # returning asOf keeps the shape identical to the fallback
+            # branch below instead of leaving consumers to treat a missing
+            # key and an explicit null as two different kinds of "no value".
+            return jsonify({
+                'ports': live['ports'],
+                'live': True,
+                'asOf': _utc_iso(datetime.utcnow()),
+            })
 
     return jsonify({
         'ports': (device.vendor_data or {}).get('ports') or [],
