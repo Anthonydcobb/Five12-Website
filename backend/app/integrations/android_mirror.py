@@ -30,6 +30,15 @@ from collections import deque
 from . import DeviceAdapter
 
 ADB_TIMEOUT = 6
+# One status probe is `adb devices` + `wm size` + (first time) two getprops,
+# each its own ADB_TIMEOUT subprocess — so a wedged adbd can hold a WSGI
+# worker for ~24s. The panel polls status every 3s, so the TTL is set just
+# under that: a lone panel is never served a cached answer and stays as live
+# as it was, while bursts (several open tabs, a Reconnect click landing on a
+# poll, a retry storm against a half-connected tablet) collapse onto one
+# probe instead of stacking workers and adb children. Frame freshness is
+# stamped at return time and never served from this cache — see get_status.
+STATUS_TTL_SEC = 2.0
 # A screencap on the SM-T290 measures 514-644 ms over USB. 8s was ~15x that,
 # so a wedged capture froze the panel for eight seconds before the stale badge
 # could appear. 3s is still five times the worst observed round-trip and fails
@@ -48,7 +57,18 @@ MAX_SWIPE_MS = 5000
 DISABLED_DETAIL = 'tablet mirror disabled — set FIVE12_MIRROR_TOOLS=1 to enable'
 NO_SERIAL_DETAIL = ('set FIVE12_MIRROR_SERIAL to the adb serial of the tablet '
                     '(see `adb devices`)')
-NO_ADB_DETAIL = 'adb binary not found — set FIVE12_ADB_PATH'
+UNKNOWN_SIZE_DETAIL = 'screen size unknown — cannot validate coordinates'
+
+# The exact key set of GET /api/devices/astera/status, declared once. Every
+# status is built from it (see _status()), so a rename here changes the wire
+# and the route-level contract test catches any drift — the panel reads
+# these names directly and the stale badge is load-bearing.
+STATUS_KEYS = ('available', 'disabled', 'alerts', 'reason', 'deviceModel',
+               'androidVersion', 'screenW', 'screenH', 'mirrorRunning',
+               'lastFrameAgeSec')
+# device_routes.py stamps this one: only the request knows whether sim was
+# asked for, so the adapter cannot report it (see supports_sim below).
+WIRE_STATUS_KEYS = STATUS_KEYS + ('simIgnored',)
 
 
 def _tools_enabled():
@@ -77,7 +97,10 @@ def _run_adb(args, timeout, binary=False):
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=timeout)
     except FileNotFoundError:
-        return False, b'' if binary else '', NO_ADB_DETAIL
+        # Name the path actually tried: 'set FIVE12_ADB_PATH' alone leaves the
+        # operator unable to tell whether the variable was read at all.
+        return False, b'' if binary else '', (
+            f'adb binary not found at {_adb_path()!r} — set FIVE12_ADB_PATH')
     except subprocess.TimeoutExpired:
         return False, b'' if binary else '', f'adb timed out after {timeout}s'
     if proc.returncode != 0:
@@ -92,14 +115,28 @@ class AndroidMirrorAdapter(DeviceAdapter):
     id = 'astera'
     name = 'Astera (tablet mirror)'
 
+    # This adapter has NO sim mode, deliberately: a fabricated screenshot of
+    # a lighting console is exactly the plausible-but-false artifact this
+    # project's hardware record warns against (see the module docstring).
+    # Declaring it here makes get_adapter() resolve ?sim=1 and ?sim=0 to the
+    # same instance — one rate-limit window, one capture lock, one status
+    # cache — and lets device_routes.py tell the operator that sim was asked
+    # for and not honoured, instead of silently driving the real tablet.
+    supports_sim = False
+
     def __init__(self, sim=False):
         super().__init__()
+        # Always False: get_adapter() normalises it, because supports_sim is
+        # False. Kept for uniformity with the sibling adapters' signature.
         self.sim = bool(sim)
         self._screen = None
+        self._props = {}
         self._last_frame = None
         self._last_frame_at = None
-        self._last_reason = None
         self._capture_lock = threading.Lock()
+        self._status_lock = threading.Lock()
+        self._status_cache = None        # (monotonic_at, status dict)
+        self._rate_lock = threading.Lock()
         self._tap_times = deque()
 
     def detect(self):
@@ -125,25 +162,49 @@ class AndroidMirrorAdapter(DeviceAdapter):
         return {'found': False, 'address': serial, 'detail': f'tablet {state}'}
 
     def screen_size(self):
-        """(width, height) in device pixels, read once and cached. Coordinate
-        validation depends on this, so an unparseable answer must read as
-        unknown rather than as a guess."""
+        """(width, height) in device pixels, read once and cached on success.
+
+        Coordinate validation depends on this, so an unparseable answer must
+        read as unknown rather than as a guess. Failures are deliberately NOT
+        cached — a negative cache would keep the panel broken after the
+        tablet came back. The status single-flight/TTL bounds the re-probing.
+
+        `wm size` prints two lines once Settings -> Display -> Display size
+        has been touched:
+
+            Physical size: 1080x2400
+            Override size: 810x1800
+
+        `input tap` coordinates live in the OVERRIDE space, so the LAST valid
+        WxH wins. Taking the first scales every coordinate wrong and gets
+        taps near the right/bottom edge refused as out of bounds.
+        """
         if self._screen is not None:
             return self._screen
         ok, out, _detail = _run_adb(['shell', 'wm', 'size'], ADB_TIMEOUT)
         if not ok:
             return None
+        found = None
         for token in out.split():
             if 'x' in token:
                 w, _sep, h = token.partition('x')
                 if w.isdigit() and h.isdigit():
-                    self._screen = (int(w), int(h))
-                    return self._screen
-        return None
+                    found = (int(w), int(h))
+        if found is not None:
+            self._screen = found
+        return found
 
     def _getprop(self, prop):
+        """Cached for process life: ro.product.model and
+        ro.build.version.release are immutable, and two extra spawns every
+        status poll is ~28,800 over a six-hour show, per open tab."""
+        if prop in self._props:
+            return self._props[prop]
         ok, out, _detail = _run_adb(['shell', 'getprop', prop], ADB_TIMEOUT)
-        return out.strip() if ok and out.strip() else None
+        value = out.strip() if ok and out.strip() else None
+        if value is not None:
+            self._props[prop] = value
+        return value
 
     def _age(self):
         if self._last_frame_at is None:
@@ -171,55 +232,108 @@ class AndroidMirrorAdapter(DeviceAdapter):
             ok, out, detail = _run_adb(
                 ['exec-out', 'screencap', '-p'], CAPTURE_TIMEOUT, binary=True)
             if not ok:
-                self._last_reason = detail
                 return self._last_frame, self._age(), detail
             if not out:
-                self._last_reason = 'screencap returned an empty image'
-                return self._last_frame, self._age(), self._last_reason
+                return (self._last_frame, self._age(),
+                        'screencap returned an empty image')
             self._last_frame = out
             self._last_frame_at = time.monotonic()
-            self._last_reason = None
             return self._last_frame, 0.0, ''
         finally:
             self._capture_lock.release()
 
+    def _status(self, **fields):
+        """Every status has the same shape, built from STATUS_KEYS, so the
+        panel never has to ask whether a key is missing or merely null."""
+        out = dict.fromkeys(STATUS_KEYS)
+        out.update({'available': False, 'disabled': False, 'alerts': []})
+        out.update(fields)
+        return self._stamp_freshness(out)
+
+    def _stamp_freshness(self, status):
+        """Frame age is computed at return time, never served from the status
+        cache. The stale badge is load-bearing: a frozen image that looks live
+        is the failure that has someone pressing buttons at a tablet which
+        stopped listening two minutes ago."""
+        status['mirrorRunning'] = self._last_frame is not None
+        status['lastFrameAgeSec'] = self._age()
+        return status
+
     def get_status(self):
+        """Single-flight + short TTL, for the same reason get_frame() has
+        them. One probe is up to four ADB_TIMEOUT subprocesses, and a tablet
+        that is still listed as `device` but has stopped answering shell
+        (asleep, half-connected USB, wedged adbd) turns a 3s poll into ~8
+        concurrent requests, each holding a WSGI worker and up to four adb
+        children. On sync workers that exhausts the pool and the WHOLE
+        backend stops responding mid-show, not just the mirror.
+        """
+        # Config checks are free and must never be served from the cache:
+        # flipping the gate off has to read as off immediately.
         if not _tools_enabled():
-            return {'available': False, 'disabled': True, 'alerts': [],
-                    'reason': DISABLED_DETAIL}
+            return self._status(disabled=True, reason=DISABLED_DETAIL)
         if not _serial():
-            return {'available': False, 'disabled': False, 'alerts': [],
-                    'reason': NO_SERIAL_DETAIL}
+            return self._status(reason=NO_SERIAL_DETAIL)
+
+        cached = self._status_cache
+        if cached is not None and time.monotonic() - cached[0] < STATUS_TTL_SEC:
+            return self._stamp_freshness(dict(cached[1]))
+
+        if not self._status_lock.acquire(blocking=False):
+            # A probe is already running. Prefer the last answer we had over
+            # blinking the panel offline for one tick.
+            if cached is not None:
+                return self._stamp_freshness(dict(cached[1]))
+            return self._status(reason='status check already in progress')
+        try:
+            # Another thread may have filled the cache while we were acquiring.
+            cached = self._status_cache
+            if cached is not None and time.monotonic() - cached[0] < STATUS_TTL_SEC:
+                return self._stamp_freshness(dict(cached[1]))
+            status = self._probe_status()
+            self._status_cache = (time.monotonic(), status)
+            return self._stamp_freshness(dict(status))
+        finally:
+            self._status_lock.release()
+
+    def _probe_status(self):
+        """The adb work behind get_status(). Called under _status_lock."""
         found = self.detect()
         if not found['found']:
             self.history.record({'online': 0})
-            return {'available': False, 'disabled': False, 'alerts': [],
-                    'reason': found['detail']}
+            return self._status(reason=found['detail'])
+
         size = self.screen_size()
-        age = None
-        if self._last_frame_at is not None:
-            age = round(time.monotonic() - self._last_frame_at, 1)
+        if size is None:
+            # detect() can succeed while `wm size` is unreadable. Reporting
+            # available:true here renders the header as 'null x null', makes
+            # the panel's toDevice() return null, and every tap is swallowed
+            # with no request, no error and no explanation. Unknown bounds
+            # are not a live mirror — say so and let the offline state,
+            # Reconnect button included, do the work.
+            self.history.record({'online': 0})
+            return self._status(reason=UNKNOWN_SIZE_DETAIL)
+
         self.history.record({'online': 1})
-        return {
-            'available': True,
-            'disabled': False,
-            'alerts': [],
-            'deviceModel': self._getprop('ro.product.model'),
-            'androidVersion': self._getprop('ro.build.version.release'),
-            'screenW': size[0] if size else None,
-            'screenH': size[1] if size else None,
-            'mirrorRunning': self._last_frame is not None,
-            'lastFrameAgeSec': age,
-        }
+        return self._status(
+            available=True,
+            deviceModel=self._getprop('ro.product.model'),
+            androidVersion=self._getprop('ro.build.version.release'),
+            screenW=size[0],
+            screenH=size[1],
+        )
 
     def _rate_ok(self):
-        now = time.monotonic()
-        while self._tap_times and now - self._tap_times[0] >= 1.0:
-            self._tap_times.popleft()
-        if len(self._tap_times) >= MAX_TAPS_PER_SECOND:
-            return False
-        self._tap_times.append(now)
-        return True
+        """Atomic: an unlocked check-then-append lets two threaded requests
+        both see room for the last slot and both take it."""
+        with self._rate_lock:
+            now = time.monotonic()
+            while self._tap_times and now - self._tap_times[0] >= 1.0:
+                self._tap_times.popleft()
+            if len(self._tap_times) >= MAX_TAPS_PER_SECOND:
+                return False
+            self._tap_times.append(now)
+            return True
 
     def _valid_point(self, payload, xk, yk, bounds):
         w, h = bounds
@@ -273,7 +387,7 @@ class AndroidMirrorAdapter(DeviceAdapter):
 
         bounds = self.screen_size()
         if bounds is None:
-            return False, 'screen size unknown — cannot validate coordinates'
+            return False, UNKNOWN_SIZE_DETAIL
 
         start = self._valid_point(payload, 'x', 'y', bounds)
         if start is None:
@@ -289,7 +403,10 @@ class AndroidMirrorAdapter(DeviceAdapter):
             return False, 'coordinate out of bounds or not an integer'
         duration = payload.get('durationMs', 200)
         if not isinstance(duration, int) or isinstance(duration, bool):
-            return False, 'coordinate out of bounds or not an integer'
+            # Its own message: reporting a bad duration as a coordinate
+            # problem sends the operator looking at the wrong thing during a
+            # live failure, when the coordinates were fine all along.
+            return False, 'durationMs must be an integer'
         duration = max(1, min(duration, MAX_SWIPE_MS))
         ok, _out, detail = _run_adb(
             ['shell', 'input', 'swipe', str(start[0]), str(start[1]),

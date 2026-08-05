@@ -53,7 +53,23 @@ def device_status(device_id):
     mac = request.args.get('mac')
     if device_id == 'stardust' and mac:
         return jsonify(adapter.get_status(mac=mac.strip().upper()))
-    return jsonify(adapter.get_status())
+    return jsonify(_with_sim_honesty(adapter, adapter.get_status()))
+
+
+def _with_sim_honesty(adapter, status):
+    """An adapter that declines sim (supports_sim = False) drives REAL
+    hardware even with FIVE12_DEVICE_SIM=1 / ?sim=1 set. That is the
+    documented way to demo the Devices page without hardware, so with it on
+    every other panel fabricates telemetry while this one sends real input to
+    real gear. The operator has to be able to see that sim was asked for and
+    not honoured — so say so on the wire rather than failing silently.
+
+    Adapters that do implement sim are untouched and gain no key.
+    """
+    if getattr(adapter, 'supports_sim', True) or not isinstance(status, dict):
+        return status
+    status['simIgnored'] = sim_enabled(request.args)
+    return status
 
 
 @devices.get('/<device_id>/history')
