@@ -257,6 +257,9 @@ class AndroidMirrorAdapter(DeviceAdapter):
         stopped listening two minutes ago."""
         status['mirrorRunning'] = self._last_frame is not None
         status['lastFrameAgeSec'] = self._age()
+        # dict() is shallow, so give every returned status its own alerts
+        # list rather than one aliased to the cached dict.
+        status['alerts'] = list(status['alerts'] or [])
         return status
 
     def get_status(self):
