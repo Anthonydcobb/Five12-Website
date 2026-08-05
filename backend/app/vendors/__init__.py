@@ -32,6 +32,15 @@ _OUI_MAP = {
     # Swisson — DMX nodes
     '00:27:22': 'swisson',
     '28:36:38': 'swisson',          # confirmed on rig
+    # ACPD (AC Power Distribution) — PDXND-4-1 Ethernet/DMX nodes.
+    # [VERIFIED 2026-08-05] 15 units on the sACN segment (10.9.15.101-.121).
+    # This OUI is NOT in the IEEE registry snapshot Wireshark/scapy ship — a
+    # lookup returns nothing, while known OUIs in this table resolve fine. The
+    # identification is the devices' own report: GET /model/device answers
+    # modelName 'PDXND-4-1' and longArtNetName 'ACPD NODE ENET/DMX (PDXND-4-1)',
+    # identically on all fifteen. Do not "correct" this against a registry
+    # lookup that comes back empty.
+    '04:11:19': 'acpd',             # confirmed on rig
     # Starlink
     '20:B0:01': 'starlink',
     # Riedel — Bolero antennas. [VERIFIED 2026-07-21] both rig antennas
@@ -77,6 +86,24 @@ def is_randomized_mac(mac: str) -> bool:
         return False
 
 
+# Types whose display form is not str.capitalize(). Only acronyms belong here —
+# anything absent keeps the old behaviour, so adding an entry cannot restyle a
+# label somewhere else by accident.
+_TYPE_DISPLAY = {
+    'acpd': 'ACPD',
+}
+
+
+def display_name(device_type: str) -> str:
+    """Human form of a device type, for auto-generated labels.
+
+    The scanner builds a label as f"{type} {model}" when a device has none.
+    str.capitalize() renders 'acpd' as 'Acpd', which is wrong for an acronym
+    and shows up on fifteen nodes in the Network tab.
+    """
+    return _TYPE_DISPLAY.get(device_type, device_type.capitalize())
+
+
 def detect_vendor_type(mac: str) -> str:
     # CHANGE: normalize '-' to ':' before lookup. _arp_fallback already converts,
     # but scapy and any future caller may pass dash-form; a dash-form MAC used to
@@ -91,8 +118,12 @@ def enrich_device(ip: str, mac: str, device_type: str) -> dict:
         return _enrich_netgear(ip)
     if device_type == 'ubiquiti':
         return _enrich_ubiquiti(ip)
-    if device_type == 'swisson':
-        return _enrich_swisson(ip)
+    # Swisson and ACPD serve the same /model/device contract — same field
+    # names, same shapes. [VERIFIED 2026-08-05] against 15 PDXND-4-1 units.
+    # The PDXND appears to be that API's node design carrying ACPD's badge;
+    # whatever the provenance, one reader covers both.
+    if device_type in ('swisson', 'acpd'):
+        return _enrich_model_device_api(ip)
     if device_type == 'starlink':
         return _enrich_starlink(ip)
     # 'stardust' is enriched by Art-Net discovery in scanner._scan_artnet, which
@@ -223,7 +254,13 @@ def _enrich_ubiquiti(ip: str) -> dict:
     return {}
 
 
-def _enrich_swisson(ip: str) -> dict:
+def _enrich_model_device_api(ip: str) -> dict:
+    """Read the /model/device report served by Swisson and ACPD nodes alike.
+
+    Named for the contract rather than a vendor, because two vendors' hardware
+    answers it with identical field names. portCount is derived from the RDM
+    UID list — a PDXND-4-1 reports four, one per DMX port.
+    """
     try:
         r = requests.get(f'http://{ip}/model/device', timeout=3)
         if r.status_code == 200:
