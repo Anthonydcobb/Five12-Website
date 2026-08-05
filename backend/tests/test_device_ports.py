@@ -1,0 +1,106 @@
+"""Live per-port read with a cached fallback.
+
+The universe on a port changes exactly when somebody is standing at the node
+repatching it, and enrichment only runs on the 300s discovery sweep. A table
+that is five minutes behind is wrong at the one moment it is being read, so
+this route re-reads the node on demand — but keeps showing the last known
+patch when the node has gone away, rather than blanking.
+"""
+
+from datetime import datetime, timedelta
+from unittest.mock import patch
+
+import pytest
+
+from app.models import NetworkDevice
+
+
+PORTS = [
+    {'port': 1, 'universe': 21, 'protocol': 'sACN', 'direction': 'Output', 'status': 'OK'},
+    {'port': 2, 'universe': 42, 'protocol': 'sACN', 'direction': 'Output', 'status': 'OK'},
+]
+
+
+@pytest.fixture
+def node(db):
+    row = NetworkDevice(
+        mac_address='28:36:38:C0:39:C0',
+        device_type='swisson',
+        last_ip='10.31.8.51',
+        last_seen=datetime.utcnow() - timedelta(seconds=30),
+        vendor_data={'model': 'XND-8', 'ports': PORTS},
+    )
+    db.session.add(row)
+    db.session.commit()
+    yield row
+    db.session.delete(row)
+    db.session.commit()
+
+
+def test_a_reachable_node_is_read_live(client, node):
+    fresh = [dict(PORTS[0], universe=77), PORTS[1]]
+    with patch('app.vendors.read_port_status', return_value={'ports': fresh}):
+        res = client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body['live'] is True
+    assert body['ports'][0]['universe'] == 77
+
+
+def test_a_live_read_does_not_overwrite_stored_vendor_data(client, db, node):
+    """Read path only. A live value disagreeing with the sweep is not evidence
+    the sweep was wrong, and writing here would race the scanner."""
+    fresh = [dict(PORTS[0], universe=77), PORTS[1]]
+    with patch('app.vendors.read_port_status', return_value={'ports': fresh}):
+        client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    db.session.refresh(node)
+    assert node.vendor_data['ports'][0]['universe'] == 21
+
+
+def test_an_unreachable_node_falls_back_to_the_stored_patch(client, node):
+    """The last known patch is still useful — better than an empty panel."""
+    with patch('app.vendors.read_port_status', return_value={}):
+        res = client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    body = res.get_json()
+    assert body['live'] is False
+    assert body['ports'][0]['universe'] == 21
+    assert body['asOf'].endswith('Z')
+
+
+def test_an_unreachable_node_with_nothing_stored_returns_an_empty_list(client, db):
+    row = NetworkDevice(mac_address='AA:BB:CC:00:00:09', last_ip='10.0.0.9')
+    db.session.add(row)
+    db.session.commit()
+    try:
+        with patch('app.vendors.read_port_status', return_value={}):
+            res = client.get('/api/network/devices/AA:BB:CC:00:00:09/ports')
+        assert res.status_code == 200
+        assert res.get_json() == {'ports': [], 'live': False, 'asOf': None}
+    finally:
+        db.session.delete(row)
+        db.session.commit()
+
+
+def test_a_device_with_no_ip_is_not_probed(client, db):
+    """Never call requests.get(None) — a device known only by MAC has no
+    address to read."""
+    row = NetworkDevice(mac_address='AA:BB:CC:00:00:0A', vendor_data={'ports': PORTS})
+    db.session.add(row)
+    db.session.commit()
+    try:
+        with patch('app.vendors.read_port_status') as reader:
+            res = client.get('/api/network/devices/AA:BB:CC:00:00:0A/ports')
+        reader.assert_not_called()
+        assert res.get_json()['live'] is False
+        assert res.get_json()['ports'][0]['universe'] == 21
+    finally:
+        db.session.delete(row)
+        db.session.commit()
+
+
+def test_an_unknown_mac_is_404(client):
+    res = client.get('/api/network/devices/FF:FF:FF:FF:FF:FF/ports')
+    assert res.status_code == 404

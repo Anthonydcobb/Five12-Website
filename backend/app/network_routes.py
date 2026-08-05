@@ -2,7 +2,7 @@ import ipaddress
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from . import db
-from .models import NetworkSubnet, NetworkDevice, LocationSnapshot, LocationDevice
+from .models import NetworkSubnet, NetworkDevice, LocationSnapshot, LocationDevice, _utc_iso
 from .scanner import validate_sweep_hints
 
 net = Blueprint('network', __name__, url_prefix='/api/network')
@@ -194,6 +194,37 @@ def update_device(mac):
         device.notes = data['notes']
     db.session.commit()
     return jsonify(device.to_dict())
+
+
+@net.get('/devices/<mac>/ports')
+def device_ports(mac):
+    """Per-port patch for a DMX node, read live, falling back to the sweep.
+
+    Enrichment only runs on the 300s discovery sweep, so the stored copy can be
+    five minutes behind — and it is out of date at exactly the moment an
+    operator is repatching the node and looking at this panel. So the node is
+    re-read on demand.
+
+    Strictly read-only: it never writes vendor_data. A live value that
+    disagrees with the stored one is not evidence the sweep was wrong, and
+    writing here would race the scanner.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    if device.last_ip:
+        live = vendors.read_port_status(device.last_ip)
+        if live.get('ports'):
+            return jsonify({'ports': live['ports'], 'live': True})
+
+    return jsonify({
+        'ports': (device.vendor_data or {}).get('ports') or [],
+        'live': False,
+        'asOf': _utc_iso(device.last_seen),
+    })
 
 
 @net.delete('/devices/<mac>')
