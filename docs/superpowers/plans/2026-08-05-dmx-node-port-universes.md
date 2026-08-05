@@ -484,9 +484,10 @@ git commit -m "feat(network): add live per-port read endpoint"
 ### Task 3: The PortTable component
 
 **Files:**
+- Create: `app/src/utils/timeAgo.js`
 - Create: `app/src/components/PortTable.jsx`
 - Create: `app/src/components/PortTable.test.jsx`
-- Modify: `app/src/pages/NetworkMonitor.jsx` (import at line 3; render inside `DeviceDetail`)
+- Modify: `app/src/pages/NetworkMonitor.jsx` (remove the local UTC helpers at lines 14-26, import from the new util, render `<PortTable>` inside `DeviceDetail`)
 
 **Interfaces:**
 - Consumes: `GET /api/network/devices/<mac>/ports` from Task 2.
@@ -581,24 +582,59 @@ npx vitest run src/components/PortTable.test.jsx
 
 Expected: FAIL — `Failed to resolve import "./PortTable"`.
 
-- [ ] **Step 3: Write the component**
+- [ ] **Step 3: Extract the shared UTC helpers**
+
+`NetworkMonitor.jsx` holds `parseUtc` and `timeAgo` as module-private functions at lines 14-26. `PortTable` needs `timeAgo` too. Extract rather than copy: the UTC guard exists because of a real bug — a timestamp with no offset was parsed as local, putting every device four hours in the future and making `elapsed < 90_000` permanently true, so nothing was ever offline. Two copies of that guard can be half-fixed later.
+
+Create `app/src/utils/timeAgo.js`, moving both functions **verbatim, comments included**:
+
+```js
+// Every timestamp this API serves is UTC. The backend now says so explicitly
+// (a trailing `Z`), but a string with NO offset must still be read as UTC and
+// never as local: `new Date("2026-07-21T20:57:05")` is parsed as LOCAL time per
+// spec, which put every device 4h in the future, made elapsed time negative,
+// and left `elapsed < 90_000` permanently true — so nothing was ever offline.
+// This repo has a documented habit of leaving stale backends running, so the
+// guard stays even though the serialization is fixed at the source.
+export function parseUtc(iso) {
+  if (!iso) return null;
+  const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso);
+  return new Date(hasZone ? iso : `${iso}Z`);
+}
+
+export function timeAgo(iso) {
+  if (!iso) return 'never';
+  const secs = Math.floor((Date.now() - parseUtc(iso)) / 1000);
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  return `${Math.floor(secs / 3600)}h ago`;
+}
+```
+
+In `NetworkMonitor.jsx`, delete both function definitions (lines 14-26, including the comment block, which moves with `parseUtc`) and add to the imports:
+
+```jsx
+import { parseUtc, timeAgo } from '../utils/timeAgo';
+```
+
+`parseUtc` is still used by `isOnline` and `formatDate`, and `timeAgo` by `DeviceRow` and `DeviceDetail` — all four call sites stay exactly as they are. This is a move, not a rewrite: no behaviour changes.
+
+Run the frontend suite now to prove the move was clean, before adding anything new:
+
+```bash
+npm test
+```
+
+Expected: same pass count as before the move.
+
+- [ ] **Step 4: Write the component**
 
 Create `app/src/components/PortTable.jsx`:
 
 ```jsx
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-
-// Same UTC handling as NetworkMonitor.jsx: a timestamp with no offset must be
-// read as UTC, never as local, or the elapsed time comes out negative.
-function timeAgo(iso) {
-  if (!iso) return 'unknown';
-  const hasZone = /[Zz]$|[+-]\d{2}:?\d{2}$/.test(iso);
-  const secs = Math.floor((Date.now() - new Date(hasZone ? iso : `${iso}Z`)) / 1000);
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  return `${Math.floor(secs / 3600)}h ago`;
-}
+import { timeAgo } from '../utils/timeAgo';
 
 const CELL = { padding: '3px 8px', fontSize: 12, textAlign: 'left' };
 const HEAD = { ...CELL, color: 'var(--color-text-muted)', fontSize: 10, letterSpacing: 1 };
@@ -673,7 +709,7 @@ export default function PortTable({ device }) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 ```bash
 npx vitest run src/components/PortTable.test.jsx
@@ -681,9 +717,9 @@ npx vitest run src/components/PortTable.test.jsx
 
 Expected: 6 PASS.
 
-- [ ] **Step 5: Wire it into the Network tab**
+- [ ] **Step 6: Wire it into the Network tab**
 
-In `app/src/pages/NetworkMonitor.jsx`, add the import after line 3:
+In `app/src/pages/NetworkMonitor.jsx`, add alongside the imports:
 
 ```jsx
 import PortTable from '../components/PortTable';
@@ -697,7 +733,7 @@ Then in `DeviceDetail`, insert the component between the `universes` block and t
 
 Do not alter the `universes` block itself. Stardust reports a flat universe list with no port mapping and keeps that panel.
 
-- [ ] **Step 6: Run the full frontend suite for regressions**
+- [ ] **Step 7: Run the full frontend suite for regressions**
 
 ```bash
 npm test
@@ -705,10 +741,10 @@ npm test
 
 Expected: no new failures.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/src/components/PortTable.jsx app/src/components/PortTable.test.jsx app/src/pages/NetworkMonitor.jsx
+git add app/src/utils/timeAgo.js app/src/components/PortTable.jsx app/src/components/PortTable.test.jsx app/src/pages/NetworkMonitor.jsx
 git commit -m "feat(network): show per-port universe table on DMX nodes"
 ```
 
