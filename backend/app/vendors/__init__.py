@@ -41,7 +41,23 @@ _OUI_MAP = {
     # identically on all fifteen. Do not "correct" this against a registry
     # lookup that comes back empty.
     '04:11:19': 'acpd',             # confirmed on rig
-    # Starlink
+    # Starlink. UNVERIFIED — this entry is not registry-sourced, despite the
+    # header above. [CHECKED 2026-08-05] the IEEE/Wireshark OUI database
+    # attributes 20:B0:01 to "Technicolor Delivery Technologies Belgium NV",
+    # and contains no SpaceX entry at all (the only "StarLink" match is Star
+    # Link Communication Pvt. Ltd., an unrelated company). The mapping traces
+    # to a line in docs/2026-05-21-network-monitoring-dashboard.md, i.e. it was
+    # planned rather than observed.
+    #
+    # Left in place deliberately: consumer CPE routinely ships the ODM's OUI
+    # rather than the brand owner's, and Technicolor builds exactly that class
+    # of hardware, so a Starlink router on a Technicolor OUI is plausible. It
+    # could equally be wrong. No dish has been on the network to check.
+    #
+    # TO SETTLE: when the dish is up, read its MAC. If it starts 20:B0:01,
+    # replace this block with "confirmed on rig". If it does not, delete the
+    # entry — a wrong OUI is worse than an absent one, because it labels
+    # somebody else's Technicolor hardware as a satellite terminal.
     '20:B0:01': 'starlink',
     # Riedel — Bolero antennas. [VERIFIED 2026-07-21] both rig antennas
     # (192.168.1.11, .12) share this OUI.
