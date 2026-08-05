@@ -204,3 +204,70 @@ def test_enrichment_attaches_ports_to_vendor_data():
         data = vendors.enrich_device('10.31.8.51', '28:36:38:C0:39:C0', 'swisson')
 
     assert [p['universe'] for p in data['ports']] == [21, 42, 91, 104, 44, 41, 41, 1]
+
+
+def test_port_status_survives_a_non_dict_port_entry():
+    """A node answering HTTP 200 with a `ports` array that has a malformed
+    element (a bare string instead of a port object) used to raise
+    AttributeError from `p.get(...)` — the comprehension ran outside the
+    try/except, so a single bad element aborted the whole subnet sweep,
+    including its stale-device prune, every cycle until the node was fixed."""
+    payload = {
+        'ports': [
+            {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 21},
+            'garbage-not-a-dict',
+        ],
+    }
+    with patch('app.vendors.requests.get', return_value=_Resp(payload)):
+        assert vendors.read_port_status('10.31.8.51') == {}
+
+
+def test_port_status_survives_an_unhashable_enum_value():
+    """`table.get(code, ...)` raises TypeError when `code` is unhashable (a
+    node reporting a list where an int enum code is expected). Same failure
+    mode as the non-dict element above: it must yield {} rather than raise,
+    so one malformed node cannot take down the rest of the subnet sweep."""
+    payload = {'ports': [{'status': [], 'direction': 1, 'protocol': 2, 'universe': 21}]}
+    with patch('app.vendors.requests.get', return_value=_Resp(payload)):
+        assert vendors.read_port_status('10.31.8.51') == {}
+
+
+def _model_device_only(url, **kwargs):
+    """URL-discriminating mock: /model/device answers, /model/status fails."""
+    if url.endswith('/model/device'):
+        return _Resp(ACPD_MODEL_DEVICE)
+    raise OSError('unreachable')
+
+
+def _model_status_only(url, **kwargs):
+    """URL-discriminating mock: /model/status answers, /model/device fails."""
+    if url.endswith('/model/status'):
+        return _Resp(ACPD_MODEL_STATUS)
+    raise OSError('unreachable')
+
+
+def test_enrichment_keeps_device_fields_when_status_endpoint_fails():
+    """/model/device and /model/status are merged independently so a node
+    answering one but not the other still contributes what it has. Every
+    existing test mocks both endpoints with the same body, so this behaviour
+    was never actually pinned — a node with /model/status down (but /model/device
+    up) must still surface model/firmware/hwVersion/portCount/longName."""
+    with patch('app.vendors.requests.get', side_effect=_model_device_only):
+        data = vendors._enrich_model_device_api('10.9.15.101')
+
+    assert data['model'] == 'PDXND-4-1'
+    assert data['firmware'] == 'V01.06.2.ee8877.992774699'
+    assert data['hwVersion'] == 'V01.00-b'
+    assert data['portCount'] == 4
+    assert data['longName'] == 'ACPD NODE ENET/DMX (PDXND-4-1)'
+    assert 'ports' not in data
+
+
+def test_enrichment_keeps_ports_when_device_endpoint_fails():
+    """Mirror of the above: a node with /model/device down (but /model/status
+    up) must still surface the per-port table."""
+    with patch('app.vendors.requests.get', side_effect=_model_status_only):
+        data = vendors._enrich_model_device_api('10.9.15.101')
+
+    assert [p['universe'] for p in data['ports']] == [1, 2, 3, 4]
+    assert 'model' not in data

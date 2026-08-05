@@ -312,16 +312,28 @@ def read_port_status(ip: str) -> dict:
         return {}
     if not isinstance(ports, list) or not ports:
         return {}
-    return {'ports': [
-        {
-            'port': i + 1,
-            'universe': p.get('universe'),
-            'protocol': _port_enum(_PORT_PROTOCOL, p.get('protocol')),
-            'direction': _port_enum(_PORT_DIRECTION, p.get('direction')),
-            'status': _port_enum(_PORT_STATUS, p.get('status')),
-        }
-        for i, p in enumerate(ports)
-    ]}
+    # A node answering HTTP 200 with a `ports` array does not guarantee each
+    # element is a well-formed port object. A non-dict element raises
+    # AttributeError on `p.get(...)`, and an unhashable enum value (a list or
+    # dict where an int code is expected) raises TypeError from
+    # `table.get(code, ...)`. Either used to escape uncaught, propagate out of
+    # enrich_device, and abort the rest of that subnet's sweep — including its
+    # stale-device prune — every cycle until the node was fixed. Per-port
+    # parsing is best-effort like the request above it: any failure here is
+    # just as much "this node can't be trusted right now" as a timeout is.
+    try:
+        return {'ports': [
+            {
+                'port': i + 1,
+                'universe': p.get('universe'),
+                'protocol': _port_enum(_PORT_PROTOCOL, p.get('protocol')),
+                'direction': _port_enum(_PORT_DIRECTION, p.get('direction')),
+                'status': _port_enum(_PORT_STATUS, p.get('status')),
+            }
+            for i, p in enumerate(ports)
+        ]}
+    except Exception:
+        return {}
 
 
 def _enrich_model_device_api(ip: str) -> dict:
