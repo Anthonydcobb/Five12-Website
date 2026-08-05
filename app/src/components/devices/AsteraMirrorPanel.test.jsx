@@ -5,10 +5,16 @@ import AsteraMirrorPanel from './AsteraMirrorPanel';
 
 vi.mock('axios');
 
+// Mirrors the wire contract of GET /api/devices/astera/status exactly. The
+// backend declares that key set once (android_mirror.WIRE_STATUS_KEYS) and
+// pins it with test_status_route_key_set_is_the_declared_contract — if that
+// test fails, this fixture is the other half that has to be updated.
 function statusOf(overrides) {
-  return { data: { available: true, disabled: false, alerts: [], deviceModel: 'SM-X200',
-                   androidVersion: '14', screenW: 1080, screenH: 2400,
-                   mirrorRunning: true, lastFrameAgeSec: 0.2, ...overrides } };
+  return { data: { available: true, disabled: false, alerts: [], reason: null,
+                   deviceModel: 'SM-X200', androidVersion: '14',
+                   screenW: 1080, screenH: 2400,
+                   mirrorRunning: true, lastFrameAgeSec: 0.2,
+                   simIgnored: false, ...overrides } };
 }
 
 // vi.advanceTimersByTimeAsync(bigMs) in one shot does not reliably cascade
@@ -27,7 +33,11 @@ beforeEach(() => {
   axios.post.mockResolvedValue({ data: { ok: true, detail: '' } });
 });
 
-afterEach(() => { vi.clearAllMocks(); });
+// Restore real timers unconditionally: a fake-timer test that fails at an
+// assertion never reaches its own vi.useRealTimers(), and the leaked fake
+// clock then times out every test after it — hiding the real failure behind
+// a wall of unrelated ones.
+afterEach(() => { vi.useRealTimers(); vi.clearAllMocks(); });
 
 describe('AsteraMirrorPanel', () => {
   it('names the env var when the gate is off', async () => {
@@ -122,6 +132,72 @@ describe('AsteraMirrorPanel', () => {
     expect(frameCalls).toBeGreaterThan(1);
     expect(maxInFlight).toBe(1);
     vi.useRealTimers();
+  });
+
+  // The frame poll got completion-chained scheduling; the status poll never
+  // did. One status request is up to four 6s adb subprocesses on the
+  // backend, so a half-connected tablet leaves several in flight at once,
+  // each holding a sync WSGI worker — enough to take the whole backend down
+  // mid-show, not just the mirror.
+  it('never runs two status polls at once when one outlives the interval', async () => {
+    vi.useFakeTimers();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let statusCalls = 0;
+    axios.get.mockImplementation((url) => {
+      if (String(url).includes('/status')) {
+        statusCalls += 1;
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            inFlight -= 1;
+            resolve(statusOf({ available: false, disabled: false,
+                               reason: 'tablet offline' }));
+          }, 8000);
+        });
+      }
+      return Promise.resolve({ data: new Blob(['x']) });
+    });
+
+    render(<AsteraMirrorPanel />);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(30000);
+
+    // Sanity: it must really be polling, or the concurrency assertion
+    // proves nothing.
+    expect(statusCalls).toBeGreaterThan(1);
+    expect(maxInFlight).toBe(1);
+    vi.useRealTimers();
+  });
+
+  // --- sim was requested and not honoured ------------------------------
+  // FIVE12_DEVICE_SIM=1 is the documented way to demo the Devices page
+  // without hardware. This adapter has no sim mode by deliberate design, so
+  // with sim on every other panel fabricates telemetry while this one sends
+  // real taps to a real tablet. That gap has to be visible.
+
+  it('says sim was not honoured when the backend reports simIgnored', async () => {
+    axios.get.mockResolvedValue(statusOf({ simIgnored: true }));
+    render(<AsteraMirrorPanel />);
+    expect(await screen.findByText(/sim/i)).toBeInTheDocument();
+    expect(screen.getByText(/real tablet/i)).toBeInTheDocument();
+  });
+
+  it('shows the sim warning in the offline state too', async () => {
+    axios.get.mockResolvedValue(statusOf({ available: false, disabled: false,
+                                           reason: 'tablet offline',
+                                           simIgnored: true }));
+    render(<AsteraMirrorPanel />);
+    await screen.findByText(/tablet offline/i);
+    expect(screen.getByText(/real tablet/i)).toBeInTheDocument();
+  });
+
+  it('says nothing about sim when it was not requested', async () => {
+    axios.get.mockResolvedValue(statusOf({}));
+    render(<AsteraMirrorPanel />);
+    await screen.findByText(/SM-X200/);
+    expect(screen.queryByText(/real tablet/i)).not.toBeInTheDocument();
   });
 
   // --- object-URL lifecycle -------------------------------------------

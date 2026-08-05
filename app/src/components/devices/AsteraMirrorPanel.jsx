@@ -44,26 +44,46 @@ export default function AsteraMirrorPanel() {
   const urlRef = useRef(null);
   const generationRef = useRef(0);
   const inputErrorTimerRef = useRef(null);
+  const statusInFlightRef = useRef(false);
 
   useEffect(() => () => {
     if (inputErrorTimerRef.current) clearTimeout(inputErrorTimerRef.current);
   }, []);
 
+  // One status request costs the backend up to four adb subprocesses at a 6s
+  // timeout each, so a half-connected tablet makes them slow rather than
+  // failing fast. The guard covers the manual Reconnect landing on top of a
+  // scheduled poll; the completion-chained schedule below covers the rest.
   const pollStatus = useCallback(async () => {
+    if (statusInFlightRef.current) return;
+    statusInFlightRef.current = true;
     try {
       const { data } = await axios.get('/api/devices/astera/status');
       setStatus(data);
     } catch {
       setStatus({ available: false, disabled: false, reason: 'backend unreachable' });
+    } finally {
+      statusInFlightRef.current = false;
     }
   }, []);
 
   useEffect(() => {
     let alive = true;
-    const tick = async () => { if (alive) await pollStatus(); };
+    let timer = null;
+    // Chain from completion, exactly as the frame poll does. setInterval
+    // stacks a new request on top of every one still in flight, and each of
+    // those holds a synchronous WSGI worker — enough of them and the whole
+    // backend stops responding mid-show, not just the mirror.
+    const tick = async () => {
+      if (!alive) return;
+      try {
+        await pollStatus();
+      } finally {
+        if (alive) timer = setTimeout(tick, STATUS_MS);
+      }
+    };
     tick();
-    const i = setInterval(tick, STATUS_MS);
-    return () => { alive = false; clearInterval(i); };
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [pollStatus]);
 
   const live = status?.available === true;
@@ -220,6 +240,19 @@ export default function AsteraMirrorPanel() {
     };
   };
 
+  // Sim was asked for (?sim=1 or FIVE12_DEVICE_SIM=1) and this panel cannot
+  // honour it. There is deliberately no sim mode here — a fabricated
+  // screenshot of a lighting console is exactly the plausible-but-false
+  // artifact this project's hardware record warns against — so the gap is
+  // made visible instead: with sim on, every other Devices panel fabricates
+  // telemetry while this one sends real taps to real gear.
+  const simNotice = status?.simIgnored ? (
+    <div className="text-[10px] font-mono text-warn">
+      sim requested, but this panel has no sim mode — it is showing and
+      controlling the real tablet
+    </div>
+  ) : null;
+
   if (!status) {
     return <div className="text-[10px] font-mono text-text-muted py-6 px-2">connecting…</div>;
   }
@@ -227,6 +260,7 @@ export default function AsteraMirrorPanel() {
   if (!status.available) {
     return (
       <div className="text-[10px] font-mono text-text-muted py-6 px-2 space-y-2">
+        {simNotice}
         <div>{status.reason || 'tablet unavailable'}</div>
         {!status.disabled && (
           <button onClick={reconnect}
@@ -243,6 +277,7 @@ export default function AsteraMirrorPanel() {
 
   return (
     <div className="px-2 py-3 space-y-2">
+      {simNotice}
       <div className="text-[10px] font-mono text-text-muted flex gap-3 flex-wrap items-center">
         <span>{status.deviceModel || 'tablet'}</span>
         <span>Android {status.androidVersion || '?'}</span>
