@@ -100,3 +100,107 @@ def test_display_name_falls_back_to_capitalize():
     assert vendors.display_name('netgear') == 'Netgear'
     assert vendors.display_name('swisson') == 'Swisson'
     assert vendors.display_name('unknown') == 'Unknown'
+
+
+# Verbatim GET http://10.31.8.51/model/status on 2026-08-05, the Swisson
+# XND-8. Universes 21/42/91/104 on ports 1-4 matched the device's own web
+# GUI in a screenshot taken at the same moment.
+XND8_MODEL_STATUS = {
+    'modelName': 'XND-8',
+    'locate': False,
+    'longArtNetName': 'SWISSON XND-8',
+    'artNetMode': 1,
+    'addressDisplayMode': 0,
+    'ports': [
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 21},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 42},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 91},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 104},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 44},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 41},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 41},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 1},
+    ],
+}
+
+# Verbatim GET http://10.9.15.101/model/status on 2026-08-05. Same contract,
+# four ports instead of eight — which is why one reader serves both vendors.
+ACPD_MODEL_STATUS = {
+    'modelName': 'PDXND-4-1',
+    'locate': False,
+    'longArtNetName': 'ACPD NODE ENET/DMX (PDXND-4-1)',
+    'artNetMode': 1,
+    'addressDisplayMode': 0,
+    'ports': [
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 1},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 2},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 3},
+        {'status': 3, 'direction': 1, 'protocol': 2, 'universe': 4},
+    ],
+}
+
+
+def test_port_status_numbers_ports_from_one():
+    """Array index is the port number, zero-based — the operator reads
+    "Port 1" off the node's front panel, so the API must say 1, not 0."""
+    with patch('app.vendors.requests.get', return_value=_Resp(XND8_MODEL_STATUS)):
+        ports = vendors.read_port_status('10.31.8.51')['ports']
+
+    assert len(ports) == 8
+    assert [p['port'] for p in ports] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [p['universe'] for p in ports] == [21, 42, 91, 104, 44, 41, 41, 1]
+
+
+def test_port_status_decodes_confirmed_enums():
+    with patch('app.vendors.requests.get', return_value=_Resp(XND8_MODEL_STATUS)):
+        port1 = vendors.read_port_status('10.31.8.51')['ports'][0]
+
+    assert port1['protocol'] == 'sACN'
+    assert port1['direction'] == 'Output'
+    assert port1['status'] == 'OK'
+
+
+def test_port_status_reads_the_acpd_identically():
+    """Both vendors serve this contract, so one reader covers all 16 nodes."""
+    with patch('app.vendors.requests.get', return_value=_Resp(ACPD_MODEL_STATUS)):
+        ports = vendors.read_port_status('10.9.15.101')['ports']
+
+    assert len(ports) == 4
+    assert [p['universe'] for p in ports] == [1, 2, 3, 4]
+
+
+def test_an_unseen_code_is_shown_raw_not_guessed():
+    """Every one of the 68 ports on the rig reads status 3 / direction 1 /
+    protocol 2, so input, disabled and dead ports are genuinely undecoded. A
+    confidently wrong status on a troubleshooting screen is worse than a raw
+    number, because the operator stops looking at it."""
+    payload = {'ports': [{'status': 9, 'direction': 7, 'protocol': 5, 'universe': 12}]}
+    with patch('app.vendors.requests.get', return_value=_Resp(payload)):
+        port1 = vendors.read_port_status('10.31.8.51')['ports'][0]
+
+    assert port1['status'] == 'code 9'
+    assert port1['direction'] == 'code 7'
+    assert port1['protocol'] == 'code 5'
+    assert port1['universe'] == 12       # the row is still emitted
+
+
+def test_port_status_survives_an_unreachable_node():
+    """The scanner enriches inside the sweep; one dead node cannot raise."""
+    with patch('app.vendors.requests.get', side_effect=OSError('unreachable')):
+        assert vendors.read_port_status('10.31.8.51') == {}
+
+
+def test_port_status_ignores_a_body_without_ports():
+    """A node answering some other JSON must yield {} rather than a KeyError,
+    so the caller's `if vendor_data:` guard keeps the last known patch."""
+    with patch('app.vendors.requests.get', return_value=_Resp({'modelName': 'XND-8'})):
+        assert vendors.read_port_status('10.31.8.51') == {}
+
+
+def test_enrichment_attaches_ports_to_vendor_data():
+    """This is what puts the table in the Network tab — reached through the
+    same enricher both vendors already share for /model/device."""
+    with patch('app.vendors.requests.get', return_value=_Resp(XND8_MODEL_STATUS)):
+        data = vendors.enrich_device('10.31.8.51', '28:36:38:C0:39:C0', 'swisson')
+
+    assert [p['universe'] for p in data['ports']] == [21, 42, 91, 104, 44, 41, 41, 1]

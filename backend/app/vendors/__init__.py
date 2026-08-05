@@ -270,27 +270,87 @@ def _enrich_ubiquiti(ip: str) -> dict:
     return {}
 
 
+# /model/status enum codes, decoded ONLY where a value has actually been seen
+# on hardware or confirmed by the operator. [VERIFIED 2026-08-05] all 68 ports
+# across one XND-8 and 15 PDXND-4-1s read status 3 / direction 1 / protocol 2,
+# so there is no second sample of any of these fields anywhere on the rig.
+# Art-Net's protocol code is operator-confirmed, not observed.
+#
+# Do NOT add speculative entries. An unmapped code renders as 'code N', which
+# is what will surface the real value the first time a port is set to input,
+# disabled, or loses signal.
+_PORT_PROTOCOL = {1: 'Art-Net', 2: 'sACN'}
+_PORT_DIRECTION = {1: 'Output'}
+_PORT_STATUS = {3: 'OK'}
+
+
+def _port_enum(table: dict, code) -> str:
+    """Decoded label for `code`, or the literal 'code N' when unmapped."""
+    return table.get(code, f'code {code}')
+
+
+def read_port_status(ip: str) -> dict:
+    """Per-port universe/protocol/direction/status from /model/status.
+
+    Served identically by the Swisson XND-8 (8 ports) and the ACPD PDXND-4-1
+    (4 ports) — the same shared contract as /model/device. Array index is the
+    port number, zero-based, so it is reported here 1-based.
+
+    Note /model/port is NOT a per-port endpoint: it ignores ?index=, ?port=
+    and ?portIndex=, always returns one record, and reports a protocol that
+    contradicts this one. Do not cross-reference the two.
+
+    Returns {} on any failure, so the scanner's `if vendor_data:` guard leaves
+    a previously stored patch intact — one missed poll must not erase it.
+    """
+    try:
+        r = requests.get(f'http://{ip}/model/status', timeout=3)
+        if r.status_code != 200:
+            return {}
+        ports = r.json().get('ports')
+    except Exception:
+        return {}
+    if not isinstance(ports, list) or not ports:
+        return {}
+    return {'ports': [
+        {
+            'port': i + 1,
+            'universe': p.get('universe'),
+            'protocol': _port_enum(_PORT_PROTOCOL, p.get('protocol')),
+            'direction': _port_enum(_PORT_DIRECTION, p.get('direction')),
+            'status': _port_enum(_PORT_STATUS, p.get('status')),
+        }
+        for i, p in enumerate(ports)
+    ]}
+
+
 def _enrich_model_device_api(ip: str) -> dict:
     """Read the /model/device report served by Swisson and ACPD nodes alike.
 
     Named for the contract rather than a vendor, because two vendors' hardware
     answers it with identical field names. portCount is derived from the RDM
     UID list — a PDXND-4-1 reports four, one per DMX port.
+
+    /model/status is read alongside it for the per-port patch. The two are
+    merged independently: a node that answers one and not the other still
+    contributes what it has.
     """
+    data = {}
     try:
         r = requests.get(f'http://{ip}/model/device', timeout=3)
         if r.status_code == 200:
-            data = r.json()
-            return {
-                'model': data.get('modelName'),
-                'firmware': data.get('swVersionStr'),
-                'hwVersion': data.get('hwVersionStr'),
-                'portCount': len(data.get('uids', [])),
-                'longName': data.get('longArtNetName'),
+            body = r.json()
+            data = {
+                'model': body.get('modelName'),
+                'firmware': body.get('swVersionStr'),
+                'hwVersion': body.get('hwVersionStr'),
+                'portCount': len(body.get('uids', [])),
+                'longName': body.get('longArtNetName'),
             }
     except Exception:
         pass
-    return {}
+    data.update(read_port_status(ip))
+    return data
 
 
 def _enrich_starlink(ip: str) -> dict:
