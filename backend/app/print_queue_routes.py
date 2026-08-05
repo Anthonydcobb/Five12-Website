@@ -10,23 +10,36 @@
 #
 # SECURITY: the PowerShell command run here is a fixed literal. The
 # client-supplied printer name is never interpolated into the command line —
-# it is only compared, in Python, against the printer names PowerShell
-# enumerates on its own.
+# it reaches PowerShell only as an environment value, and is otherwise compared
+# in Python against the printer names PowerShell enumerates on its own. An
+# environment value is data, not syntax: nothing in it can be parsed as a
+# command. test_printer_name_never_reaches_the_powershell_command_line pins
+# this; do not "simplify" it into the command string.
 
 import json
+import os
 import subprocess
 
 from flask import Blueprint, jsonify, request
 
 print_queue = Blueprint('print_queue', __name__, url_prefix='/api/print-queue')
 
-# Fixed literal — do not interpolate the printer name into this string.
+# Fixed literal — do not interpolate the printer name into this string. It
+# arrives as $env:FIVE12_PRINTER and is matched against the enumerated names,
+# so the value handed to -PrinterName is one PowerShell produced itself.
+#
+# Jobs are fetched for the requested printer only. The previous version asked
+# every installed printer for its jobs and discarded all but one; measured on
+# the show rig (5 printers) the whole probe cost 791 ms, and it runs once per
+# poll of a label's drain cycle.
 _SPOOLER_SCRIPT = (
+    "$name = $env:FIVE12_PRINTER\n"
     "$printers = Get-Printer | Select-Object Name, "
     "@{n='PrinterStatus';e={$_.PrinterStatus.ToString()}}, JobCount\n"
-    "$jobs = $printers | ForEach-Object { Get-PrintJob -PrinterName $_.Name "
+    "$match = $printers | Where-Object { $_.Name -eq $name } | Select-Object -First 1\n"
+    "$jobs = if ($match) { Get-PrintJob -PrinterName $match.Name "
     "-ErrorAction SilentlyContinue | Select-Object @{n='Printer';e={$_.PrinterName}}, "
-    "Id, @{n='JobStatus';e={$_.JobStatus.ToString()}} }\n"
+    "Id, @{n='JobStatus';e={$_.JobStatus.ToString()}} } else { @() }\n"
     "@{ printers = @($printers); jobs = @($jobs) } | ConvertTo-Json -Depth 4"
 )
 
@@ -55,6 +68,8 @@ def query_print_queue(printer_name):
         proc = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', _SPOOLER_SCRIPT],
             capture_output=True, text=True, timeout=10,
+            # Inherited and extended, not replaced — PowerShell needs PATH.
+            env={**os.environ, 'FIVE12_PRINTER': printer_name},
         )
     except (subprocess.TimeoutExpired, OSError):
         return {'error': 'spooler query failed', 'status': 502}

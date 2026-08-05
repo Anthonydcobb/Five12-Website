@@ -103,7 +103,13 @@ export async function renderPreview(labelXml, values) {
 // the roll via LabelWriterPrintParams. opts.signal stops the run between
 // labels (the service has no cancel endpoint, so the label in flight always
 // completes). opts.onProgress fires after each label finishes.
-const QUEUE_POLL_MS = 400;
+// A GAP between polls, not a period: the backend probe spawns PowerShell and
+// enumerates printers, measured at ~736 ms on the show rig, so the real cycle
+// is that plus this — about 1.1 s, not 400 ms. The loop awaits each probe
+// before sleeping, so polls cannot stack; the number below only controls how
+// long we idle between them. Budget accordingly when reading JOB_CEILING_MS:
+// 15 s is roughly a dozen polls, not thirty-seven.
+const QUEUE_POLL_GAP_MS = 400;
 const APPEAR_GRACE_MS = 2000;
 const JOB_CEILING_MS = 15000;
 // When a label could not be confirmed — the queue never drained, or the job
@@ -140,14 +146,27 @@ function faultFrom(q) {
 
 // Wait for one submitted label to leave the spooler queue, reading status
 // from the backend's spooler probe rather than the (nonexistent) DYMO job
-// status. Two phases: APPEAR (the job may not have reached the spooler yet —
-// a brief service-ACK-to-spooler race — so wait up to APPEAR_GRACE_MS for
-// jobCount > 0, then proceed regardless in case it already drained between
-// polls) and DRAIN (poll until jobCount === 0). A fetch rejection or non-200
-// response is treated as a transient backend hiccup and just keeps polling,
-// subject to the overall ceiling — it must never abort the run. An abort
-// stops the WAIT (not the label) so Stop needn't outlast a slow label; the
-// caller counts the label as printed either way.
+// status.
+//
+// Returns {fault, confirmed}. CONFIRMED is the load-bearing part: it means a
+// job was actually observed in the queue and then observed to leave it. Only
+// that is evidence the label finished feeding.
+//
+// Two phases. APPEAR waits up to APPEAR_GRACE_MS for jobCount > 0, because the
+// service ACKs before the job reaches the spooler. If the grace expires with
+// no job ever seen, that is NOT a drain — "no job seen" and "the job came and
+// went" are indistinguishable from here, and treating them alike released the
+// next label on top of a feed still running. It reports unconfirmed instead.
+// DRAIN then polls until jobCount === 0.
+//
+// A fetch rejection or non-200 is treated as a transient backend hiccup and
+// just keeps polling, subject to the ceiling — it must never abort the run.
+// Hitting the ceiling reports unconfirmed: the code knows it never saw the
+// queue drain, so claiming the label would be a claim it cannot support.
+//
+// An abort stops the WAIT, not the label, so Stop needn't outlast a slow
+// label. That case stays confirmed — the service has no cancel endpoint, so
+// the in-flight label genuinely completes.
 async function awaitQueueDrain(printerName, signal) {
   const deadline = Date.now() + JOB_CEILING_MS;
   const appearDeadline = Date.now() + APPEAR_GRACE_MS;
@@ -165,7 +184,7 @@ async function awaitQueueDrain(printerName, signal) {
       if (q.jobCount > 0) { sawJob = true; break; }
     }
     if (Date.now() >= appearDeadline) break;
-    await sleep(QUEUE_POLL_MS);
+    await sleep(QUEUE_POLL_GAP_MS);
   }
 
   // The grace expired without the job ever showing up. That is "no job seen",
@@ -186,7 +205,7 @@ async function awaitQueueDrain(printerName, signal) {
       if (fault) return { fault, confirmed: false };
       if (q.jobCount === 0) return { fault: null, confirmed: true };
     }
-    await sleep(QUEUE_POLL_MS);
+    await sleep(QUEUE_POLL_GAP_MS);
   }
 }
 

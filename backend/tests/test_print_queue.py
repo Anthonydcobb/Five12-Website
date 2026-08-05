@@ -92,3 +92,34 @@ def test_single_printer_single_job_shape_is_normalized(client):
     assert body['jobCount'] == 1
     assert body['printerStatus'] == 'Normal'
     assert body['jobs'] == [{'id': 5, 'status': 'Printing'}]
+
+
+# The module's SECURITY block claims the client-supplied printer name is never
+# interpolated into the PowerShell command line. Until now that claim was
+# asserted in a comment and proven by nothing: every test above patches
+# subprocess.run and inspects only the response, so appending the name to the
+# script would keep the whole suite green while turning a fixed literal into a
+# command-injection vector. These two pin the mechanism.
+HOSTILE_NAME = "'; Write-Output PWNED #"
+
+
+def test_printer_name_never_reaches_the_powershell_command_line(client):
+    with patch('app.print_queue_routes.subprocess.run',
+               return_value=_run(json.dumps(TWO_PRINTER_DATA))) as run:
+        client.get('/api/print-queue', query_string={'printer': HOSTILE_NAME})
+
+    argv = run.call_args[0][0]
+    assert all(HOSTILE_NAME not in part for part in argv), argv
+    # Not even a fragment — a partial interpolation is still injection.
+    assert all('PWNED' not in part for part in argv), argv
+
+
+def test_printer_name_is_passed_as_an_environment_value(client):
+    with patch('app.print_queue_routes.subprocess.run',
+               return_value=_run(json.dumps(TWO_PRINTER_DATA))) as run:
+        client.get('/api/print-queue', query_string={'printer': 'DYMO LabelWriter 450'})
+
+    env = run.call_args.kwargs.get('env') or {}
+    assert env.get('FIVE12_PRINTER') == 'DYMO LabelWriter 450'
+    # Inherited, not replaced — PowerShell needs PATH.
+    assert 'PATH' in {k.upper() for k in env}
