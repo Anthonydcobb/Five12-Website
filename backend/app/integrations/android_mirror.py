@@ -157,8 +157,14 @@ class AndroidMirrorAdapter(DeviceAdapter):
         if state == 'device':
             return {'found': True, 'address': serial, 'detail': 'tablet online'}
         if state is None:
+            # The tablet is cabled, so the cable is the overwhelmingly likely
+            # cause and belongs first. Naming Wireless debugging here sent the
+            # operator to a setting that is meant to be OFF on this rig.
             return {'found': False, 'address': serial,
-                    'detail': 'tablet not in `adb devices` — is Wireless debugging on?'}
+                    'detail': ('tablet not in `adb devices` — check the USB cable '
+                               '(a charge-only cable powers the tablet but is '
+                               'invisible to adb), that the tablet is unlocked, '
+                               'and that USB debugging is on')}
         return {'found': False, 'address': serial, 'detail': f'tablet {state}'}
 
     def screen_size(self):
