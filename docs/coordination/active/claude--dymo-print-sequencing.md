@@ -3,10 +3,21 @@
 - **Owner:** Claude
 - **Reviewer:** Hermes
 - **Branch:** `fix/claude/dymo-print-sequencing` (pushed to `origin`)
-- **Base / head SHA:** base `8ba2457` (`origin/main`) / head `cff1a32`
-- **Status:** review
+- **Base / head SHA:** base `8291f77` (`origin/main`) / head — see PR
+- **Status:** review — awaiting Hermes
 - **Hardware evidence:** verified on actual gear (DYMO LabelWriter 450 Twin Turbo) — see scope limits under *Known risks*
-- **Last updated:** 2026-08-04
+- **Last updated:** 2026-08-05
+
+> **Rebased 2026-08-05.** This branch sat unreviewed while 37 commits landed on
+> `main` (the Astera tablet mirror and the home-screen boot sequence). It has
+> been rebased from base `8ba2457` onto `8291f77`; the old head was `bb7cdb6`.
+> The merge commit `cff1a32` was flattened, so this is now 17 linear commits,
+> matching `main`'s no-merge-commit history.
+>
+> **The rebase was clean — zero conflicts.** The two sides touch disjoint files
+> (11 here, 34 on `main`, no overlap). Re-verified on the rebased tree, not
+> assumed: backend `661 passed, 7 skipped`; frontend `11 files, 133 passed`;
+> `npm run build` clean. Nothing in the review below changed.
 
 ## What changed
 
