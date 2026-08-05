@@ -431,7 +431,7 @@ def _arp_scan(cidr: str, known_ips=(), sweep_hints=None,
 
 def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
     from .models import NetworkDevice
-    from .vendors import detect_vendor_type, enrich_device
+    from .vendors import detect_vendor_type, display_name, enrich_device
     from . import db
 
     with app.app_context():
@@ -463,7 +463,8 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         # operator-typed label is still never overwritten.
         if not device.label and device_type != 'unknown':
             model = vendor_data.get('model') if vendor_data else None
-            device.label = f"{device_type.capitalize()} {model}".strip() if model else device_type.capitalize()
+            shown = display_name(device_type)
+            device.label = f"{shown} {model}".strip() if model else shown
 
         try:
             db.session.commit()
