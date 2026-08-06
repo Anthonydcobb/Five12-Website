@@ -1172,7 +1172,10 @@ describe('NetgearPortTable', () => {
       netgearPortHostsAvailable: true,
       snapshotAsOf: new Date().toISOString(),
     })} />)
-    expect(screen.getByText(/snapshot/i)).toBeTruthy()
+    // Anchored: the panel header is "SWITCH PORTS (SNAPSHOT)", so a bare
+    // /snapshot/i matches two elements. Only the capture-age footer begins
+    // with the word, and the footer is what this test is about.
+    expect(screen.getByText(/^snapshot /i)).toBeTruthy()
   })
 })
 ```
