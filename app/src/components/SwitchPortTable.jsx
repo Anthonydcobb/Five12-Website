@@ -92,15 +92,29 @@ export default function SwitchPortTable({ device, devices }) {
                 {p.deviceCount === 0 && <span style={{ color: 'var(--color-text-muted)' }}>—</span>}
                 {/* Exactly one MAC is the ONLY case that proves direct
                     attachment, so it is the only case that gets to read like
-                    a plain statement of what is plugged in. */}
-                {p.deviceCount === 1 && nameFor(p.macs[0])}
+                    a plain statement of what is plugged in. A stored row can
+                    be half-written (deviceCount: 1 with an empty macs array)
+                    since the cached path serves raw stored JSON with no
+                    revalidation — say plainly that the MAC is not recorded
+                    rather than crashing or rendering nothing. The port and
+                    its link state are still real information. */}
+                {p.deviceCount === 1 && (
+                  p.macs[0]
+                    ? nameFor(p.macs[0])
+                    : <span style={{ color: 'var(--color-text-muted)' }}>not recorded</span>
+                )}
                 {p.deviceCount > 1 && (
                   <>
                     <div style={{ color: 'var(--color-warn)', fontSize: 11 }}>
                       {p.deviceCount} devices behind this port
                     </div>
-                    {p.macs.slice(0, NAME_CAP).map(m => (
-                      <div key={m} style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>{nameFor(m)}</div>
+                    {/* Same half-written-row exposure as above, guarded the
+                        same way: a corrupt element in macs must not crash
+                        the whole row. */}
+                    {p.macs.slice(0, NAME_CAP).map((m, i) => (
+                      <div key={m || `unrecorded-${i}`} style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>
+                        {m ? nameFor(m) : 'not recorded'}
+                      </div>
                     ))}
                     {p.deviceCount > NAME_CAP && (
                       <div style={{ color: 'var(--color-text-muted)', fontSize: 11 }}>
