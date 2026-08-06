@@ -87,14 +87,27 @@ function DeviceCard({ device, onConfigure, selected }) {
     amber: selected ? 'border-amber-500' : 'border-gray-700 hover:border-amber-700',
     gray:  selected ? 'border-gray-500'  : 'border-gray-700',
   };
-  // GigaCores are deliberately NOT configurable here. They are Ethernet
-  // switches: their twelve ports are RJ45 and carry no DMX, so the universe /
-  // protocol / merge-mode panel this button opens has nothing to act on. The
-  // backend branch behind it was removed for the same reason. They stay listed
-  // — the Network tab shows what is plugged into each of their ports — and if
-  // real GigaCore configuration arrives (Groups, PoE, port enable) this is
-  // where it would go.
-  const canConfigure = device.type === 'swisson';
+  // NOTHING is configurable from this page today, and the button is gone
+  // rather than disabled — a greyed-out control still reads as "this will work
+  // once you find the right credentials", which is not true for any device
+  // here. [VERIFIED on the rig 2026-08-06:]
+  //
+  //   GigaCore — an Ethernet switch. Twelve RJ45 ports, no DMX, so there is no
+  //   universe to set. Its backend branch was removed.
+  //
+  //   Swisson XND — genuinely has DMX ports with universes, but the backend
+  //   read scraped `port_N_universe value="..."` out of the device's HTML,
+  //   and the XND is a JS app that renders from /model/* — the values were
+  //   never in the markup. It returns {} every time. The write POSTed a form
+  //   to http://<ip>/config, which answers 404. Both were written against
+  //   guessed contracts; their own docstrings said "verify first".
+  //
+  // The scan above is the working half of this page and is worth having on its
+  // own. Reading a Swisson's ports IS solved — /model/status, which is what
+  // the Network tab's DMX table already runs on. Writing one is the open
+  // problem, and it is a write to a live DMX node, so it needs designing
+  // rather than a guessed form POST.
+  const canConfigure = false;
 
   return (
     <div className={`bg-gray-800 border rounded-lg p-4 transition-colors ${colorMap[m.color]}`}>
@@ -119,6 +132,15 @@ function DeviceCard({ device, onConfigure, selected }) {
       )}
       {device.mac && (
         <p className="text-xs text-gray-700 mt-1 font-mono">{device.mac}</p>
+      )}
+
+      {/* Say where the working answer lives, rather than leaving a node card
+          looking like it lost a feature. The Network tab reads a Swisson's
+          live universes over /model/status on every selection. */}
+      {device.type === 'swisson' && (
+        <p className="text-xs text-gray-600 mt-3 italic">
+          Port config not supported yet — the Network tab shows live universes
+        </p>
       )}
 
       {canConfigure && (

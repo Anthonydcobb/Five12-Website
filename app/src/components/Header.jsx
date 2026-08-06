@@ -13,6 +13,7 @@ const NAV = [
   { to: '/labels', label: 'Labels' },
   { to: '/network', label: 'Network' },
   { to: '/devices', label: 'Devices' },
+  { to: '/nodes', label: 'Nodes' },
   { to: '/ip-config', label: 'IP Config' },
 ];
 
