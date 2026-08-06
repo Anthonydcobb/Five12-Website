@@ -248,6 +248,67 @@ def device_ports(mac):
     })
 
 
+@net.get('/devices/<mac>/switch-ports')
+def device_switch_ports(mac):
+    """Which MACs are behind each port of a managed switch, live then cached.
+
+    Read-only in both directions: SNMP GET/WALK only toward the switch (the
+    rig is live), and no database write here — the scanner updates this row
+    concurrently.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    if device.last_ip:
+        live = vendors.read_switch_ports(device.last_ip)
+        if live.get('switchPorts'):
+            return jsonify({
+                'switchPorts': live['switchPorts'],
+                'live': True,
+                'asOf': _utc_iso(datetime.utcnow()),
+            })
+
+    # The map's own timestamp, never last_seen — last_seen is the ICMP clock
+    # that quick_reprobe refreshes every 20s without walking SNMP.
+    stored = device.vendor_data or {}
+    return jsonify({
+        'switchPorts': stored.get('switchPorts') or [],
+        'live': False,
+        'asOf': stored.get('switchPortsAsOf'),
+    })
+
+
+@net.get('/devices/<mac>/uplink')
+def device_uplink(mac):
+    """Which switch port this device sits behind.
+
+    Pure computation over stored maps — issues no SNMP at all. Answering this
+    live would mean walking every switch on every device selection.
+
+    `deviceCount` is part of the answer, not decoration: only a count of one
+    proves direct attachment, and the caller must word itself accordingly.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    switches = [
+        {'mac': s.mac_address, 'label': s.label,
+         'switchPorts': (s.vendor_data or {}).get('switchPorts')}
+        for s in NetworkDevice.query.filter(NetworkDevice.mac_address != mac).all()
+        if (s.vendor_data or {}).get('switchPorts')
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    if hit is None:
+        return jsonify({'found': False})
+    return jsonify({'found': True, **hit})
+
+
 @net.delete('/devices/<mac>')
 def delete_device(mac):
     device = db.session.get(NetworkDevice, mac)
