@@ -316,12 +316,32 @@ def find_switch_port(mac: str, switches: list) -> dict | None:
     """
     want = (mac or '').upper()
     best = None
+    best_key = None
     for sw in switches:
         for port in sw.get('switchPorts') or []:
-            if want not in {m.upper() for m in port.get('macs') or []}:
+            macs = port.get('macs') or []
+            # A stored macs list is JSON from the database column: a
+            # malformed element (e.g. a null slipped in by a half-written
+            # row) must be skipped, not crash the lookup for every device
+            # behind this port.
+            seen = {m.upper() for m in macs if isinstance(m, str)}
+            if want not in seen:
                 continue
-            count = port.get('deviceCount', len(port.get('macs') or []))
-            if best is None or count < best['deviceCount']:
+            count = port.get('deviceCount')
+            # A deviceCount that is present but not a genuine int (None from
+            # a nullable/half-written column, or a bool — True/False are
+            # technically ints in Python but nonsense counts here) is
+            # treated as absent, not trusted at face value.
+            if not isinstance(count, int) or isinstance(count, bool):
+                count = len(macs)
+            # Tie-break deterministically on switch MAC then port number.
+            # Without this, which port wins a tie depends on the order rows
+            # came back from the database query in the route above, and a
+            # device would appear to hop between switches on a refresh
+            # where nothing was physically rewired.
+            key = (count, sw.get('mac') or '', port.get('port'))
+            if best is None or key < best_key:
+                best_key = key
                 best = {
                     'switchMac': sw.get('mac'),
                     'switchLabel': sw.get('label'),

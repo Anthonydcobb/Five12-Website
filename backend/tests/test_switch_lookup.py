@@ -62,3 +62,58 @@ def test_the_lookup_is_case_insensitive():
 def test_a_switch_with_no_stored_map_is_skipped_not_crashed():
     switches = [{'mac': 'D0:69:9E:04:75:B9', 'label': 'Luminex'}] + SWITCHES
     assert vendors.find_switch_port(ANTENNA_1, switches)['port'] == 5
+
+
+def test_a_tie_in_device_count_resolves_the_same_way_regardless_of_input_order():
+    """Two switches report the SAME lowest deviceCount for a MAC. Which one
+    wins must depend only on the data (switch MAC, then port number), never
+    on which switch happened to be queried — or come back from the database
+    — first. A non-deterministic answer here would read as the device having
+    moved between switches on a refresh where nothing physically changed."""
+    mac = '00:11:22:33:44:55'
+    switch_a = {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+        {'port': 3, 'name': 'Port 3', 'link': 'up', 'macs': [mac], 'deviceCount': 1},
+    ]}
+    switch_b = {'mac': 'BB:BB:BB:BB:BB:BB', 'label': 'Switch B', 'switchPorts': [
+        {'port': 1, 'name': 'Port 1', 'link': 'up', 'macs': [mac], 'deviceCount': 1},
+    ]}
+    forward = vendors.find_switch_port(mac, [switch_a, switch_b])
+    reversed_ = vendors.find_switch_port(mac, [switch_b, switch_a])
+    assert forward == reversed_
+    # Switch A's MAC sorts first, so it is the stable, documented winner.
+    assert forward['switchMac'] == 'AA:AA:AA:AA:AA:AA'
+
+
+def test_a_null_device_count_falls_back_to_the_length_of_macs_instead_of_crashing():
+    """deviceCount present but explicitly None is a plausible shape for a
+    nullable or half-written JSON column. It must not blow up the
+    comparison against a genuine integer count from another port."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'port': 3, 'name': 'Port 3', 'link': 'up', 'macs': [mac], 'deviceCount': None},
+        ]},
+        {'mac': 'BB:BB:BB:BB:BB:BB', 'label': 'Switch B', 'switchPorts': [
+            {'port': 1, 'name': 'Port 1', 'link': 'up', 'macs': [mac], 'deviceCount': 5},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    # None falls back to len(macs) == 1, which beats the genuine count of 5.
+    assert hit['deviceCount'] == 1
+    assert hit['switchMac'] == 'AA:AA:AA:AA:AA:AA'
+
+
+def test_a_non_string_entry_in_macs_is_skipped_not_crashed():
+    """macs is a stored JSON list; a malformed element inside it (e.g. a
+    null slipped in by a half-written row) must be skipped, not crash the
+    whole lookup for every device behind that port."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'port': 3, 'name': 'Port 3', 'link': 'up',
+             'macs': [mac, None], 'deviceCount': 2},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    assert hit['port'] == 3
+    assert hit['deviceCount'] == 2
