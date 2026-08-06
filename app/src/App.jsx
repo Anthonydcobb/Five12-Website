@@ -12,6 +12,7 @@ import LabelsPage from './pages/LabelsPage';
 import NetworkMonitor from './pages/NetworkMonitor';
 import IPConfig from './pages/IPConfig';
 import Devices from './pages/Devices';
+import NodesPage from './pages/NodesPage';
 
 // NOTE: Effects Playground was removed — it duplicated the Console.
 // The Console (Hog-style console prototype) is PARKED as of 2026-07-22: its
@@ -39,6 +40,13 @@ export default function App() {
             <Route path="/labels" element={<LabelsPage />} />
             <Route path="/network" element={<NetworkMonitor />} />
             <Route path="/devices" element={<Devices />} />
+            {/* Restored 2026-08-06. NodesPage.jsx existed on disk but was
+                never imported or routed, so its Swisson XND port-config UI
+                was unreachable even though the backend behind it
+                (/api/nodes/scan and /api/nodes/<ip>/config) was live and
+                working. Found while removing the dead GigaCore config path
+                from the same page. */}
+            <Route path="/nodes" element={<NodesPage />} />
             <Route path="/ip-config" element={<IPConfig />} />
           </Routes>
         </main>
