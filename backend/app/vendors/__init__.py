@@ -440,8 +440,14 @@ def _enrich_snmp_switch(ip: str, vendor: str) -> dict:
 def _enrich_luminex(ip: str) -> dict:
     # GigaCore's web GUI is auth-locked (401) and exposes no public REST API,
     # but SNMP v2c is enabled by default. Firmware is not in any MIB GigaCore
-    # implements, so it stays blank.
-    return _enrich_snmp_switch(ip, 'Luminex')
+    # answers, so it stays None.
+    #
+    # The per-port device map is read alongside, from the same SNMP session's
+    # worth of walks. Merged independently: a switch that answers MIB-II but
+    # not the bridge table still contributes its model, and vice versa.
+    data = _enrich_snmp_switch(ip, 'Luminex')
+    data.update(read_switch_ports(ip))
+    return data
 
 
 def _enrich_netgear(ip: str) -> dict:

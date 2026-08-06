@@ -217,3 +217,34 @@ def test_the_vendors_module_issues_no_snmp_writes():
     src = inspect.getsource(vendors)
     for forbidden in ('puresnmp.set', 'puresnmp.multiset', '.bulkset('):
         assert forbidden not in src, f'SNMP write {forbidden!r} in vendors'
+
+
+def test_luminex_enrichment_attaches_the_port_map():
+    """This is what puts the table in the Network tab. It rides on the same
+    sweep that already reads model and port count over SNMP."""
+    with patch('app.vendors._enrich_snmp_switch',
+               return_value={'model': 'GigaCore12 GigaBit Ethernet Switch',
+                             'portCount': 12}), \
+         patch('app.vendors.read_switch_ports',
+               return_value={'switchPorts': [{'port': 5, 'name': 'Port 5',
+                                              'link': 'up', 'macs': ['AA:BB:CC:00:00:01'],
+                                              'deviceCount': 1}],
+                             'switchPortsAsOf': '2026-08-06T13:15:16.000000Z'}):
+        data = vendors.enrich_device('172.16.1.21', 'D0:69:9E:04:78:72', 'luminex')
+
+    assert data['model'] == 'GigaCore12 GigaBit Ethernet Switch'
+    assert data['switchPorts'][0]['port'] == 5
+    assert data['switchPortsAsOf'] == '2026-08-06T13:15:16.000000Z'
+
+
+def test_a_switch_that_answers_snmp_but_not_the_bridge_table_keeps_its_model():
+    """The two reads are independent, exactly as /model/device and
+    /model/status are for the DMX nodes — half a read must not cost the
+    other half."""
+    with patch('app.vendors._enrich_snmp_switch',
+               return_value={'model': 'GigaCore12 GigaBit Ethernet Switch'}), \
+         patch('app.vendors.read_switch_ports', return_value={}):
+        data = vendors.enrich_device('172.16.1.21', 'D0:69:9E:04:78:72', 'luminex')
+
+    assert data['model'] == 'GigaCore12 GigaBit Ethernet Switch'
+    assert 'switchPorts' not in data
