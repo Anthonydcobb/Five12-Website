@@ -262,14 +262,38 @@ def read_switch_ports(ip: str) -> dict:
     try:
         by_port = {int(bp): [] for bp in bp2if}
         for suffix, bridge_port in fdb.items():
+            mac = _mac_from_oid_suffix(suffix)
+            if mac is None:
+                # An undecodable suffix must NOT simply be dropped. `deviceCount`
+                # below is derived AFTER the drop, from len(macs), so a rejected
+                # entry shrinks the count as well as the list: a port genuinely
+                # carrying two devices reports deviceCount 1, and every layer
+                # above renders that as proof of direct attachment. That is the
+                # one direction this feature must never fail in — it turns
+                # "behind" into "on" and sends an operator to the wrong rack.
+                #
+                # WHY refuse the whole read rather than keep the port with an
+                # inflated count: the function's documented contract is already
+                # "returns {} on any failure", and the scanner's carry-forward
+                # keeps the last good map rather than publishing a wrong one.
+                # It also matches the actual trigger. A suffix fails to decode
+                # when the walk's KEY SHAPE is not what we expect — e.g. a
+                # leading-dot OID form from a different puresnmp build makes
+                # `_snmp_walk_suffix` fall back to the full OID for every row —
+                # which is a property of the whole response, not of one entry.
+                # A partial map built from a response we demonstrably cannot
+                # parse is not worth more than no map.
+                log.warning('undecodable FDB suffix %r from %s; discarding port map',
+                            suffix, ip)
+                return {}
             # Bridge ports absent from dot1dBasePortIfIndex are not physical
             # ports — port 0 is the switch's own management MAC. Assigning it
-            # a port number would invent hardware.
+            # a port number would invent hardware. Checked AFTER the decode so
+            # a broken key shape is caught wherever it appears, including on
+            # rows that would have been skipped anyway.
             if str(bridge_port) not in bp2if:
                 continue
-            mac = _mac_from_oid_suffix(suffix)
-            if mac:
-                by_port[int(bridge_port)].append(mac)
+            by_port[int(bridge_port)].append(mac)
 
         ports = []
         for bridge_port in sorted(by_port):
@@ -286,7 +310,14 @@ def read_switch_ports(ip: str) -> dict:
                 'macs': macs,
                 'deviceCount': len(macs),
             })
-    except Exception:
+    except Exception as e:
+        # Logged, unlike the walk-level handler above — there, switches on this
+        # rig legitimately never answer, so silence is correct. Here the walks
+        # already succeeded and the MIB data itself is malformed, which is a
+        # genuine bug signal. Combined with the scanner's carry-forward, a
+        # silent {} leaves the operator looking at a permanently frozen map
+        # with no diagnostic anywhere to explain why it stopped moving.
+        log.warning('switch port map derivation failed for %s: %s', ip, e)
         return {}
 
     return {
@@ -311,6 +342,12 @@ def find_switch_port(mac: str, switches: list) -> dict | None:
     is an uplink with 73 others, and it is plugged into something else
     entirely. So the count is returned, always, and the caller words its
     answer from it.
+
+    The winning switch's `asOf` rides along in the answer. A forwarding
+    database ages — entries expire when a device goes quiet, so absence is not
+    proof of unplugging — and the stored maps have no expiry of their own, so
+    the caller cannot honestly word a present-tense answer without knowing how
+    old the evidence is. Each element of `switches` may carry an `asOf`.
 
     Pure: no I/O, no database, no SNMP. Give it the stored maps.
     """
@@ -342,18 +379,34 @@ def find_switch_port(mac: str, switches: list) -> dict | None:
             # same half-written-row threat as deviceCount and mac above: if
             # it is missing or not a genuine int, a sentinel keeps the tuple
             # comparison well-typed instead of raising mid-lookup.
+            # The sentinel is HIGH, not -1: a malformed row must LOSE a tie, not
+            # win it. With -1 it sorted before every real port number, so a
+            # half-written row beat a perfectly good candidate at equal count —
+            # and the returned raw `port`/`name` then rendered as
+            # "on Luminex (CARL) · undefined". Same reasoning as
+            # `_entity_field`'s 1 << 30 sort key.
             port_num = port.get('port')
             if not isinstance(port_num, int) or isinstance(port_num, bool):
-                port_num = -1
+                port_num = 1 << 30
             key = (count, sw.get('mac') or '', port_num)
             if best is None or key < best_key:
                 best_key = key
                 best = {
                     'switchMac': sw.get('mac'),
                     'switchLabel': sw.get('label'),
-                    'port': port.get('port'),
-                    'portName': port.get('name'),
+                    # The NORMALISED port number and a name that is always a
+                    # string: whatever this returns is rendered verbatim.
+                    'port': port_num,
+                    'portName': port.get('name') or f'Port {port_num}',
                     'deviceCount': count,
+                    # The stored map's own timestamp, carried through. The maps
+                    # have no expiry — `read_switch_ports` returns {} on failure
+                    # and the scanner merges shallowly, so a switch that goes
+                    # dark keeps its map frozen indefinitely, across restarts.
+                    # The switch-side pane already renders that age; this
+                    # consumer states attachment, so it needs the age more, not
+                    # less. None when the row predates stamping.
+                    'asOf': sw.get('asOf'),
                 }
     return best
 

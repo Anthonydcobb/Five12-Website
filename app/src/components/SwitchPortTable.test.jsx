@@ -101,6 +101,26 @@ describe('SwitchPortTable', () => {
     expect(row.textContent).toMatch(/not recorded/)
   })
 
+  // Minor 5: the half-written-row guard above covers `macs: []` but not a row
+  // where the `macs` key is ABSENT — identically likely, since both come from
+  // the same unvalidated stored JSON, and `p.macs[0]` / `p.macs.slice(...)`
+  // throw TypeError on undefined rather than yielding nothing. There is no
+  // ErrorBoundary under app/src, so that throw blanks the whole detail pane
+  // mid-show. The port and its link state are still real information.
+  it('does not crash on a port row whose macs key is absent entirely', () => {
+    const CORRUPT_PORTS = [
+      { port: 3, name: 'Port 3', link: 'up', deviceCount: 1 },
+      { port: 4, name: 'Port 4', link: 'up', deviceCount: 5 },
+    ]
+    axios.get.mockReturnValue(new Promise(() => {}))
+    render(<SwitchPortTable
+      device={{ macAddress: 'D0:69:9E:04:78:72', vendorData: { switchPorts: CORRUPT_PORTS } }}
+      devices={DEVICES}
+    />)
+    expect(screen.getByText('Port 3').closest('tr').textContent).toMatch(/not recorded/)
+    expect(screen.getByText('Port 4').closest('tr').textContent).toMatch(/5 devices behind this port/)
+  })
+
   // Finding 3 coverage: SwitchPortTable persists across device selections
   // (DeviceDetail renders it without a `key`). Both `portsState` and `stale`
   // are tagged with the mac they describe and the render derives `ports`/

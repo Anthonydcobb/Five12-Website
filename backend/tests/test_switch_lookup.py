@@ -138,6 +138,57 @@ def test_a_tie_with_a_missing_port_number_does_not_crash():
     assert hit is not None
 
 
+def test_the_answer_carries_the_maps_own_timestamp():
+    """Critical 1: the stored maps have no expiry — `read_switch_ports`
+    returns {} on failure and the scanner merges shallowly, so a switch that
+    goes dark keeps its map frozen in the database indefinitely. The
+    switch-side pane already renders that age honestly; this lookup fed the
+    other consumer with no timestamp at all, so `UplinkLine` stated
+    present-tense attachment from a map that could be arbitrarily old. The
+    timestamp must ride along for the caller to hedge on."""
+    switches = [dict(SWITCHES[0], asOf='2026-08-06T13:15:16.000000Z')]
+    assert vendors.find_switch_port(ANTENNA_1, switches)['asOf'] == '2026-08-06T13:15:16.000000Z'
+
+
+def test_a_switch_with_no_timestamp_reports_asof_none_rather_than_omitting_it():
+    """Rows swept before this change carry no `switchPortsAsOf`. The key is
+    present and null, so the caller sees "unknown age" rather than a missing
+    field it might read as "not applicable"."""
+    hit = vendors.find_switch_port(ANTENNA_1, SWITCHES)
+    assert 'asOf' in hit and hit['asOf'] is None
+
+
+def test_a_malformed_port_row_loses_a_tie_instead_of_winning_it():
+    """Minor 4: the tie-break sentinel for a missing port number was -1, which
+    sorts BEFORE every real port, so a half-written row beat a perfectly good
+    one at equal count — and then returned its own raw missing values, which
+    rendered as 'on Luminex (CARL) · undefined'."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'link': 'up', 'macs': [mac], 'deviceCount': 1},
+            {'port': 5, 'name': 'Port 5', 'link': 'up', 'macs': [mac], 'deviceCount': 1},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    assert hit['port'] == 5
+    assert hit['portName'] == 'Port 5'
+
+
+def test_a_malformed_port_row_alone_still_returns_something_renderable():
+    """When the malformed row is the ONLY candidate it still has to answer —
+    with a genuine int port and a non-empty name, never None/undefined."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'link': 'up', 'macs': [mac], 'deviceCount': 1},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    assert isinstance(hit['port'], int) and not isinstance(hit['port'], bool)
+    assert isinstance(hit['portName'], str) and hit['portName']
+
+
 def test_unusable_device_count_falls_back_to_the_deduped_seen_count():
     """When deviceCount is unusable, the fallback must count the VETTED set
     of real MAC strings, not the raw macs list. A junk (non-string) entry

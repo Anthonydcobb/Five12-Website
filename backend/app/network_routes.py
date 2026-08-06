@@ -290,6 +290,13 @@ def device_uplink(mac):
 
     `deviceCount` is part of the answer, not decoration: only a count of one
     proves direct attachment, and the caller must word itself accordingly.
+
+    `asOf` is the other half of that. The stored maps never expire — a switch
+    that stops answering keeps its last map in the database indefinitely,
+    across restarts — so a count of one from a three-hour-old map is not
+    present-tense evidence of anything. /switch-ports already serves this
+    timestamp and its pane renders it; this route serves the same stored maps
+    and must not be the one consumer that hides their age.
     """
     from . import vendors
 
@@ -299,7 +306,10 @@ def device_uplink(mac):
 
     switches = [
         {'mac': s.mac_address, 'label': s.label,
-         'switchPorts': (s.vendor_data or {}).get('switchPorts')}
+         'switchPorts': (s.vendor_data or {}).get('switchPorts'),
+         # The map's OWN timestamp, same field /switch-ports serves, so the
+         # answer can be aged. It is None on every row swept before stamping.
+         'asOf': (s.vendor_data or {}).get('switchPortsAsOf')}
         for s in NetworkDevice.query.filter(NetworkDevice.mac_address != mac).all()
         if (s.vendor_data or {}).get('switchPorts')
     ]

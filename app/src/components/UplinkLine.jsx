@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { timeAgo, parseUtc } from '../utils/timeAgo';
+
+// Two discovery sweeps. The scanner re-reads every switch's port map on a 300s
+// cycle, so a map older than 600s means at least one whole sweep produced
+// nothing — the switch has gone quiet. That matters here more than anywhere
+// else in the app because the stored maps have NO expiry: read_switch_ports
+// returns {} on failure by design and the scanner merges shallowly, so a dark
+// switch keeps its last map in the database forever, across restarts. Without
+// this bound the line would keep saying "on Luminex (CARL) · Port 5" long
+// after the device was repatched to another rack.
+const STALE_MS = 600_000;
 
 export default function UplinkLine({ device }) {
   // Tagged with the device it describes: this component persists across
@@ -34,18 +45,41 @@ export default function UplinkLine({ device }) {
     );
   }
 
-  // Exactly one device behind the port proves direct attachment. Anything
-  // more is a path through an uplink — [MEASURED 2026-08-06] Bolero Antenna
-  // #3's best candidate is a port with 73 devices behind it, and it is
-  // plugged into something else entirely. Saying "on Port 12" would send an
-  // operator to the wrong rack.
-  const direct = value.deviceCount === 1;
+  // A forwarding database records where a MAC was LAST SEEN, not what is
+  // plugged in where. Two things have to hold before this line may state
+  // attachment in the present tense:
+  //
+  // 1. Exactly one device behind the port. Anything more is a path through an
+  //    uplink — [MEASURED 2026-08-06] Bolero Antenna #3's best candidate is a
+  //    port with 73 devices behind it, and it is plugged into something else
+  //    entirely. Saying "on Port 12" would send an operator to the wrong rack.
+  // 2. The map it came from is recent. The table also ages: FDB entries expire
+  //    when a device goes quiet, so absence is not proof of unplugging, and a
+  //    stored map that stopped being refreshed is not proof of anything at
+  //    all. A missing asOf — which every row swept before this shipped will
+  //    have — is NOT freshness. No evidence of age is not evidence of youth,
+  //    so it falls to the hedged branch.
+  const ageMs = value.asOf ? Date.now() - parseUtc(value.asOf) : null;
+  const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs < STALE_MS;
+  const direct = value.deviceCount === 1 && fresh;
   const where = `${value.switchLabel || value.switchMac} · ${value.portName}`;
 
+  // Staleness has to be said in WORDS, not signalled only by the switch from
+  // "on" to "behind" — the sibling switch-side pane renders "switch did not
+  // answer · as of 3h ago", and an operator reading these two panes should
+  // never get a confident answer from one and a hedged one from the other with
+  // no explanation of the difference.
+  const ageNote = !value.asOf
+    ? 'age unknown, so this may already have changed'
+    : fresh
+      ? `as of ${timeAgo(value.asOf)}`
+      : `last confirmed ${timeAgo(value.asOf)}; the switch has not reported since, so this may already have changed`;
+
   // deviceCount can arrive malformed (0, missing, non-numeric) from a stored
-  // row that was never revalidated. `direct` above stays a strict `=== 1`
-  // check regardless, so malformed counts always fail safe into "behind" —
-  // this only decides how the "shared with N others" clause reads. A
+  // row that was never revalidated. `direct` above keeps a strict `=== 1`
+  // check as one of its two conditions, so malformed counts always fail safe
+  // into "behind" — this only decides how the "shared with N others" clause
+  // reads. A
   // deviceCount of 0 here is itself a contradiction (this device is
   // apparently behind the port, so the count can't be zero), same as a
   // missing or non-numeric count: treat all of them as unusable and say
@@ -58,11 +92,17 @@ export default function UplinkLine({ device }) {
   return (
     <div style={{ color: 'var(--color-gel)', fontSize: 11, marginBottom: 8 }}>
       {direct ? `on ${where}` : `behind ${where}`}
-      {!direct && (
+      {/* Gated on the COUNT, not on `direct`: a lone device behind a stale map
+          is hedged by the age note below, and "shared with 0 others" would be
+          a false claim about the port. */}
+      {value.deviceCount !== 1 && (
         <span style={{ color: 'var(--color-text-muted)' }}>
           {' '}· shared with {others !== null ? `${others} others` : 'others'}, so this is a path, not a patch point
         </span>
       )}
+      <span style={{ color: fresh ? 'var(--color-text-muted)' : 'var(--color-warn)' }}>
+        {' · '}{ageNote}
+      </span>
     </div>
   );
 }

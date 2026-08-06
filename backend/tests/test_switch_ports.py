@@ -7,6 +7,7 @@ and 74 minutes later — so these are frozen captures and no test here may
 assert that a real switch still reports a given number.
 """
 
+from collections import Counter
 from unittest.mock import patch
 
 from app import vendors
@@ -195,6 +196,90 @@ def test_a_non_canonical_bp2if_key_yields_empty_not_an_exception():
         assert vendors.read_switch_ports('172.16.1.21') == {}
 
 
+def test_an_undecodable_fdb_suffix_discards_the_whole_map():
+    """A suffix that does not decode to six octets used to be DROPPED — and
+    `deviceCount` is derived after the drop, from `len(macs)`, so the rejected
+    device vanished from the count as well as the list. A port genuinely
+    carrying two devices then reported deviceCount 1, which every layer above
+    renders as proof of direct attachment. That is the one direction this
+    feature must never fail in: it turns "behind" into "on" and sends an
+    operator to the wrong rack.
+
+    The chosen behaviour is to refuse the whole read, matching the function's
+    documented "returns {} on any failure" contract and the scanner's
+    carry-forward. It is also the honest response to the real trigger: a
+    suffix fails to decode when the walk's key shape is not what we expect
+    (a leading-dot OID form from a different puresnmp build makes
+    `_snmp_walk_suffix` fall back to the FULL OID), which is a property of the
+    whole response, not of one row.
+    """
+    mixed = dict(GIGACORE_FDB)
+    mixed['0.25.124.2.224'] = 12       # five arcs, not six — undecodable
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks(fdb=mixed)(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: _fake_walks()(ip, oid)):
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+
+def test_a_leading_dot_oid_form_discards_the_map_rather_than_emptying_every_port():
+    """`_snmp_walk_suffix` falls back to the FULL OID when a row's OID does
+    not start with the expected prefix. A puresnmp build that renders OIDs
+    with a leading dot makes EVERY key fall back, every suffix fail the
+    six-arc test, and — before this fix — every port report deviceCount 0
+    while the switch is perfectly healthy."""
+    dotted = {f'.1.3.6.1.2.1.17.4.3.1.2.{s}': bp for s, bp in GIGACORE_FDB.items()}
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks(fdb=dotted)(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: _fake_walks()(ip, oid)):
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+
+def test_no_port_reports_fewer_devices_than_the_fdb_entries_pointing_at_it():
+    """The invariant behind the fix above, stated directly rather than through
+    one chosen strategy: `deviceCount` may err toward "behind" (too high) but
+    NEVER toward "on" (too low). Holds for a clean FDB and for one carrying a
+    reject — whether the map comes back whole or not at all."""
+    clean = GIGACORE_FDB
+    mixed = {**GIGACORE_FDB, '0.25.124.2.224': 12}
+    for fdb in (clean, mixed):
+        with patch('app.vendors._snmp_walk_suffix',
+                   side_effect=lambda ip, oid, f=fdb: _fake_walks(fdb=f)(ip, oid)), \
+             patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: _fake_walks()(ip, oid)):
+            data = vendors.read_switch_ports('172.16.1.21')
+
+        # How many FDB rows point at each physical bridge port, decodable or not.
+        pointed_at = Counter(int(bp) for bp in fdb.values() if str(bp) in GIGACORE_BP2IF)
+        for p in data.get('switchPorts', []):
+            assert p['deviceCount'] >= pointed_at[p['port']], (
+                f"port {p['port']} under-reports: {p['deviceCount']} < {pointed_at[p['port']]}"
+            )
+
+
+def test_a_derivation_failure_is_logged_not_swallowed_silently():
+    """Unlike the walk-level handler — where switches on this rig legitimately
+    never answer, and the comment there says so — an exception in the port-map
+    derivation is a malformed-MIB bug signal. Combined with the scanner's
+    carry-forward, a silent {} shows the operator a permanently frozen map
+    with no diagnostic anywhere to explain it.
+
+    The assertion patches the logger's own method rather than attaching a
+    handler or using `caplog`: `tests/test_fixture_library.py` runs Alembic,
+    whose `fileConfig` call disables every logger that already exists, so any
+    handler-based capture here passes alone and fails in the full suite
+    depending on file order.
+    """
+    bad_bp2if = {'not-a-number': 1}
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks()(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: (
+             bad_bp2if if oid == '1.3.6.1.2.1.17.1.4.1.2' else _fake_walks()(ip, oid)
+         )), \
+         patch.object(vendors.log, 'warning') as warned:
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+    assert warned.call_count == 1, warned.call_args_list
+    # The switch's IP has to be in it — a warning that doesn't say WHICH
+    # switch is not a diagnostic when six of them are being swept.
+    assert '172.16.1.21' in warned.call_args.args, warned.call_args
+
+
 def test_mac_from_oid_suffix_rejects_an_out_of_range_octet():
     """int('300') succeeds, so without an explicit range check this would
     format as '12C' and return a plausible-but-wrong MAC instead of being
@@ -207,16 +292,38 @@ def test_mac_from_oid_suffix_rejects_a_negative_octet():
     assert vendors._mac_from_oid_suffix('0.25.124.2.224.-5') is None
 
 
-def test_the_vendors_module_issues_no_snmp_writes():
-    """BINDING: the rig is live. This module may GET and WALK, never SET.
+def test_the_switch_path_issues_no_snmp_writes():
+    """BINDING: the rig is live. The switch path may GET and WALK, never SET.
 
-    Asserted against the module's own source so that ADDING a write fails the
+    Asserted against the modules' own source so that ADDING a write fails the
     suite, rather than relying on nobody having called one during a test run.
+    All three modules this branch wired into the switch path are covered —
+    `vendors` does the walking, but `network_routes` and `scanner` are just as
+    able to import puresnmp and call it, and a pin that greps only `vendors`
+    would not notice.
+
+    SCOPE, stated so a future maintainer does not read this more broadly than
+    it holds: this pins the SNMP path ONLY. It is NOT a claim that nothing in
+    this application can change a switch. `routes.py`'s `_gigacore_write`
+    (reachable from NodesPage.jsx) PUTs universe/protocol/mergeMode to a
+    GigaCore over HTTP; that is a separate write path, deliberately out of
+    this feature's scope, unpinned by this test, and not used by anything the
+    switch-port map touches.
     """
     import inspect
-    src = inspect.getsource(vendors)
-    for forbidden in ('puresnmp.set', 'puresnmp.multiset', '.bulkset('):
-        assert forbidden not in src, f'SNMP write {forbidden!r} in vendors'
+    from app import network_routes, scanner
+    forbidden = (
+        'puresnmp.set', 'puresnmp.multiset', 'puresnmp.v2c.set',
+        '.bulkset(', 'multiset(',
+        # Source-text matching is evadable by indirection. These two forms are
+        # the cheapest ways to reach a setter without naming it, so they are
+        # refused outright rather than trusted to be read-only.
+        'getattr(puresnmp',
+    )
+    for module in (vendors, network_routes, scanner):
+        src = inspect.getsource(module)
+        for token in forbidden:
+            assert token not in src, f'SNMP write {token!r} in {module.__name__}'
 
 
 def test_luminex_enrichment_attaches_the_port_map():

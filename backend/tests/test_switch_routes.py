@@ -99,6 +99,39 @@ def test_uplink_finds_a_directly_attached_device(client, db, switch):
         db.session.delete(dev); db.session.commit()
 
 
+def test_uplink_carries_the_stored_maps_own_timestamp(client, db, switch):
+    """Critical 1: /switch-ports already serves `switchPortsAsOf` and the pane
+    renders "as of 3h ago" from it. /uplink read the SAME stored maps and
+    carried no timestamp, so its consumer stated present-tense attachment from
+    a map that has no expiry — a switch that goes dark keeps its map frozen
+    across restarts. The route has `s.vendor_data` in hand already."""
+    dev = NetworkDevice(mac_address='00:19:7C:02:E0:5B', device_type='bolero')
+    db.session.add(dev); db.session.commit()
+    try:
+        body = client.get('/api/network/devices/00:19:7C:02:E0:5B/uplink').get_json()
+        assert body['found'] is True
+        assert body['asOf'] == '2026-08-06T13:15:16.000000Z'
+    finally:
+        db.session.delete(dev); db.session.commit()
+
+
+def test_uplink_reports_asof_none_for_a_map_stored_before_stamping(client, db):
+    """A stored map with no `switchPortsAsOf` — every row swept before the
+    timestamp existed — must report the key as null, not omit it. The UI reads
+    a missing age as unknown and refuses the confident wording; an absent key
+    would be indistinguishable from a route that never learned to send one."""
+    sw = NetworkDevice(mac_address='D0:69:9E:00:00:09', device_type='luminex',
+                       label='Unstamped', vendor_data={'switchPorts': PORTS})
+    dev = NetworkDevice(mac_address='00:19:7C:02:E0:5B', device_type='bolero')
+    db.session.add_all([sw, dev]); db.session.commit()
+    try:
+        body = client.get('/api/network/devices/00:19:7C:02:E0:5B/uplink').get_json()
+        assert body['found'] is True
+        assert 'asOf' in body and body['asOf'] is None
+    finally:
+        db.session.delete(sw); db.session.delete(dev); db.session.commit()
+
+
 def test_uplink_reports_the_count_for_a_device_seen_only_via_an_uplink(client, db, switch):
     """deviceCount 2 means the UI must say "behind", not "on"."""
     dev = NetworkDevice(mac_address='00:19:7C:15:E4:97', device_type='unknown')
