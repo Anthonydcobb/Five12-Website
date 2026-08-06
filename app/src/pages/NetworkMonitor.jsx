@@ -3,6 +3,7 @@ import axios from 'axios';
 import SacnUniverses from '../components/SacnUniverses';
 import PortTable from '../components/PortTable';
 import SwitchPortTable from '../components/SwitchPortTable';
+import UplinkLine from '../components/UplinkLine';
 import { parseUtc, timeAgo } from '../utils/timeAgo';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -263,6 +264,8 @@ function DeviceDetail({ device, devices, locations, onUpdate }) {
           ● {online ? 'ONLINE' : 'OFFLINE'}
         </div>
       </div>
+
+      <UplinkLine device={device} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
         <MetaCell label="MAC ADDRESS" value={device.macAddress} />
