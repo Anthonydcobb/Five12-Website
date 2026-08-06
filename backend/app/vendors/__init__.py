@@ -174,6 +174,108 @@ def _snmp_walk_map(ip: str, oid: str) -> dict:
     return out
 
 
+def _snmp_walk_suffix(ip: str, oid: str) -> dict:
+    """Walk a table column keyed by the FULL remaining OID suffix.
+
+    `_snmp_walk_map` keys on the last arc alone, which is correct for tables
+    indexed by one integer (ifIndex) and destroys tables indexed by anything
+    wider. The bridge forwarding database is indexed by the six octets of a
+    MAC address, so keying on the last arc returns '91' — the final byte —
+    where the answer is a whole device.
+
+    Kept alongside rather than replacing it: `_snmp_walk_map` serves the
+    Netgear and Luminex enrichers today and must not change behaviour.
+    """
+    out = {}
+    prefix = oid + '.'
+    for row in puresnmp.walk(ip, _SNMP_COMMUNITY, oid, timeout=_SNMP_TIMEOUT):
+        # NOTE: deliberately not `getattr(row, 'oid', row[0])` — that default
+        # expression evaluates `row[0]` unconditionally, even when `row.oid`
+        # exists, and raises on any row object that isn't also subscriptable.
+        o = str(row.oid) if hasattr(row, 'oid') else str(row[0])
+        val = row.value if hasattr(row, 'value') else row[1]
+        out[o[len(prefix):] if o.startswith(prefix) else o] = val
+    return out
+
+
+def _mac_from_oid_suffix(suffix: str) -> str | None:
+    """'0.25.124.2.224.91' -> '00:19:7C:02:E0:5B'. None if it isn't six octets."""
+    parts = suffix.split('.')
+    if len(parts) != 6:
+        return None
+    try:
+        return ':'.join(f'{int(p):02X}' for p in parts)
+    except ValueError:
+        return None
+
+
+def read_switch_ports(ip: str) -> dict:
+    """Which MACs are behind each physical port of a managed switch.
+
+    Four standard read-only walks — BRIDGE-MIB forwarding database, the
+    bridge-port to ifIndex map, and MIB-II's ifDescr and ifOperStatus.
+    [VERIFIED 2026-08-06] against five GigaCore12s, ~2s each.
+
+    READ-ONLY. GET and WALK only; this never issues an SNMP SET. The rig is
+    live and a configuration change would be visible on stage.
+
+    A forwarding database records where a MAC was LAST SEEN, not what is
+    plugged in where, so `deviceCount` travels with every port: only a count
+    of exactly one proves direct attachment. Callers must not present a
+    higher-count port as a device's location.
+
+    ifName is unsupported on this firmware (0 rows) — the label comes from
+    ifDescr, which returns bytes padded to a fixed width (b'Port  1').
+
+    Returns {} on any failure, so the scanner's merge keeps the last good map.
+    """
+    try:
+        fdb = _snmp_walk_suffix(ip, '1.3.6.1.2.1.17.4.3.1.2')
+        bp2if = _snmp_walk_map(ip, '1.3.6.1.2.1.17.1.4.1.2')
+        descr = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.2')
+        oper = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.8')
+    except Exception:
+        return {}
+    if not bp2if:
+        return {}
+
+    by_port = {int(bp): [] for bp in bp2if}
+    for suffix, bridge_port in fdb.items():
+        # Bridge ports absent from dot1dBasePortIfIndex are not physical
+        # ports — port 0 is the switch's own management MAC. Assigning it a
+        # port number would invent hardware.
+        if str(bridge_port) not in bp2if:
+            continue
+        mac = _mac_from_oid_suffix(suffix)
+        if mac:
+            by_port[int(bridge_port)].append(mac)
+
+    ports = []
+    for bridge_port in sorted(by_port):
+        if_index = str(bp2if[str(bridge_port)])
+        raw = descr.get(if_index, b'')
+        name = (raw.decode('latin-1') if isinstance(raw, bytes) else str(raw))
+        # b'Port  1' -> 'Port 1'. The padding is the device's, not ours.
+        name = ' '.join(name.split()) or f'Port {bridge_port}'
+        macs = sorted(by_port[bridge_port])
+        ports.append({
+            'port': bridge_port,
+            'name': name,
+            'link': 'up' if oper.get(if_index) == 1 else 'down',
+            'macs': macs,
+            'deviceCount': len(macs),
+        })
+
+    return {
+        'switchPorts': ports,
+        # Stamped here, at the moment of the read. The sibling DMX feature
+        # shipped a bug where the staleness timestamp was the ICMP ping clock
+        # rather than the data's own clock, so a wedged-but-pingable device
+        # showed an hours-old reading labelled seconds old.
+        'switchPortsAsOf': _utc_iso(datetime.utcnow()),
+    }
+
+
 def _entity_field(ip: str, oid: str):
     """First non-empty value in an ENTITY-MIB column.
 
