@@ -87,7 +87,14 @@ function DeviceCard({ device, onConfigure, selected }) {
     amber: selected ? 'border-amber-500' : 'border-gray-700 hover:border-amber-700',
     gray:  selected ? 'border-gray-500'  : 'border-gray-700',
   };
-  const canConfigure = device.type === 'gigacore' || device.type === 'swisson';
+  // GigaCores are deliberately NOT configurable here. They are Ethernet
+  // switches: their twelve ports are RJ45 and carry no DMX, so the universe /
+  // protocol / merge-mode panel this button opens has nothing to act on. The
+  // backend branch behind it was removed for the same reason. They stay listed
+  // — the Network tab shows what is plugged into each of their ports — and if
+  // real GigaCore configuration arrives (Groups, PoE, port enable) this is
+  // where it would go.
+  const canConfigure = device.type === 'swisson';
 
   return (
     <div className={`bg-gray-800 border rounded-lg p-4 transition-colors ${colorMap[m.color]}`}>
@@ -283,9 +290,6 @@ function ConfigPanel({ node, onClose }) {
       {error && (
         <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-xs rounded px-3 py-2 mb-3">
           {error}
-          {node.type === 'gigacore' && !error.includes('connect') && (
-            <p className="mt-1 opacity-70">Tip: REST API requires GigaCore firmware 3.x+</p>
-          )}
         </div>
       )}
       {saveErr && (

@@ -1279,64 +1279,6 @@ def nodes_scan():
     })
 
 
-# ── GigaCore config helpers ───────────────────────────────────────────────────
-
-def _gigacore_read(ip, username='admin', password='admin'):
-    """
-    Try GigaCore REST API (firmware 3.x+).
-    POST /api/rest/v1/login → bearer token → GET /api/rest/v1/ports
-    Falls back to a note if REST is unavailable (older firmware).
-    NOTE: Endpoint paths may vary by firmware — verify against your unit.
-    """
-    base = f'http://{ip}'
-    try:
-        # Authenticate
-        login = req.post(f'{base}/api/rest/v1/login',
-                         json={'username': username, 'password': password},
-                         timeout=5)
-        if login.status_code == 200:
-            token = login.json().get('token', '')
-            hdrs  = {'Authorization': f'Bearer {token}'}
-
-            # Device info
-            info_resp = req.get(f'{base}/api/rest/v1/device', headers=hdrs, timeout=5)
-            info = info_resp.json() if info_resp.ok else {}
-
-            # Port / universe config
-            ports_resp = req.get(f'{base}/api/rest/v1/ports', headers=hdrs, timeout=5)
-            if ports_resp.ok:
-                return {
-                    'method': 'rest',
-                    'device': info,
-                    'ports':  ports_resp.json(),
-                    'token':  token,
-                }
-        elif login.status_code == 404:
-            return {'method': 'none', 'error': 'REST API not found — firmware may be older than 3.x'}
-        else:
-            return {'method': 'none', 'error': f'Auth failed ({login.status_code}) — check credentials'}
-    except req.exceptions.ConnectionError:
-        return {'method': 'none', 'error': 'Could not connect'}
-    except Exception as e:
-        return {'method': 'none', 'error': str(e)}
-
-
-def _gigacore_write(ip, token, port_id, universe, protocol, merge_mode):
-    """
-    PUT /api/rest/v1/ports/{id}
-    NOTE: Field names may vary by firmware — verify against your unit.
-    """
-    hdrs = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
-    payload = {
-        'universe':  universe,
-        'protocol':  protocol,    # 'sacn' | 'artnet'
-        'mergeMode': merge_mode,  # 'htp' | 'ltp'
-    }
-    resp = req.put(f'http://{ip}/api/rest/v1/ports/{port_id}',
-                   json=payload, headers=hdrs, timeout=5)
-    return resp.ok, resp.text
-
-
 # ── Swisson XND config helpers ────────────────────────────────────────────────
 
 # Known field-name patterns across XND firmware versions
@@ -1447,9 +1389,17 @@ def node_config_get(ip):
     username    = request.args.get('user', 'admin')
     password    = request.args.get('pass', 'admin')
 
-    if device_type == 'gigacore':
-        return jsonify(_gigacore_read(ip, username, password))
-    elif device_type == 'swisson':
+    # CHANGE: the `gigacore` branch is gone, so a GigaCore now falls through
+    # to "unknown device type" like any other unsupported unit. It read
+    # per-port `universe` from a Luminex GigaCore — an Ethernet switch whose
+    # twelve ports are RJ45 and carry no DMX, so there was never a universe to
+    # read. It was also aimed at a JSON login endpoint returning a bearer
+    # token, while the device actually answers every path (including ones that
+    # do not exist) with `401 WWW-Authenticate: Basic realm="GigaCore12"`.
+    # Both facts verified on the rig 2026-08-06. A real GigaCore config
+    # feature would target Groups, PoE and port enable over HTTP Basic; it
+    # would share nothing with this but the IP address.
+    if device_type == 'swisson':
         return jsonify(_swisson_read(ip, username, password))
     return jsonify({'error': 'Unknown device type'}), 400
 
@@ -1466,11 +1416,10 @@ def node_config_put(ip):
     merge_mode  = body.get('mergeMode', 'htp')
     username    = body.get('user', 'admin')
     password    = body.get('pass', 'admin')
-    token       = body.get('token', '')
 
-    if device_type == 'gigacore':
-        ok, text = _gigacore_write(ip, token, port_id, universe, protocol, merge_mode)
-    elif device_type == 'swisson':
+    # The write half of the same removal, and the one that mattered: this
+    # branch PUT `universe`/`protocol`/`mergeMode` at a live show switch.
+    if device_type == 'swisson':
         ok, text = _swisson_write(ip, port_id, universe, protocol, merge_mode, username, password)
     else:
         return jsonify({'error': 'Unknown device type'}), 400
