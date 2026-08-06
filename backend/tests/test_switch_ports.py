@@ -59,7 +59,14 @@ def test_suffix_walk_keeps_the_whole_mac():
         def __init__(self, oid, value):
             self.oid, self.value = oid, value
 
-    with patch('app.vendors.puresnmp.walk', return_value=[_Row(*r) for r in rows]):
+    # Patch the module attribute itself, not `.walk` beneath it: on the
+    # default test interpreter (no puresnmp installed) `vendors.puresnmp` is
+    # None, and patching an attribute of None raises AttributeError before
+    # the test body ever runs. Patching the name wholesale replaces it with
+    # a MagicMock regardless of what it currently holds, on both
+    # interpreters, and still exercises the real `_snmp_walk_suffix` body.
+    with patch('app.vendors.puresnmp') as mock_puresnmp:
+        mock_puresnmp.walk.return_value = [_Row(*r) for r in rows]
         out = vendors._snmp_walk_suffix('172.16.1.21', '1.3.6.1.2.1.17.4.3.1.2')
 
     assert out == {'0.25.124.2.224.91': 5}
