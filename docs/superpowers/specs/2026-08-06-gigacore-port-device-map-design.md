@@ -2,7 +2,7 @@
 
 - **Date:** 2026-08-06
 - **Author:** Claude Code, with Anthony
-- **Status:** design approved, not implemented
+- **Status:** implemented 2026-08-06, verified on the rig — see Verification below
 - **Scope:** Network tab only.
 - **Related:** `2026-08-05-dmx-node-port-universes-design.md`. This is the
   switch-side counterpart, and it deliberately reuses that feature's shape —
@@ -263,6 +263,43 @@ Backend, against the captured real payloads:
 Frontend: a one-MAC port names the device; a many-MAC port shows a count and
 does not claim attachment; an unknown MAC renders raw; the device-side line
 hedges when the count exceeds one; nothing renders for a device no switch saw.
+
+## Verification
+
+> **Run 2026-08-06 — `verified on actual gear`.**
+
+The shipped `read_switch_ports` against CARL (172.16.1.21): 12 ports, six
+single-device ports, four down and empty, and port 12 carrying 74. The route
+`GET /devices/D0:69:9E:04:78:72/switch-ports` returned `live: true` with all 12.
+
+A discovery sweep populated stored maps on **all five reachable switches**.
+`172.16.1.12` (HOBBS) answers neither SNMP nor HTTP and got **no** map — while
+keeping its `model`. That is the independent merge doing its job on real
+hardware: half a read did not cost the other half.
+
+**Both halves of the honesty rule, confirmed against the live rig:**
+
+```
+/uplink 00:19:7C:02:E0:5B  -> deviceCount 1,  CARL Port 5   -> "on Luminex (CARL) · Port 5"
+/uplink 00:19:7C:15:C7:4D  -> deviceCount 73, Port 12       -> "behind Luminex · Port 12 ·
+                                                               shared with 72 others, so this
+                                                               is a path, not a patch point"
+```
+
+On screen, CARL's table named `Bollero Antenna #1` and `#2` on ports 5 and 6,
+showed raw MACs for the devices the app does not know, `—` for the four empty
+ports, and on port 12 `73 devices behind this port` with four names and
+`+69 more` — arithmetic exact. No stale banner, no console errors.
+
+**Regression check:** the Swisson XND-8 still shows its DMX `PORTS` table
+(universes 21 / 44 / 91 …) and **no** switch-port table, and correctly picks up
+a hedged uplink line of its own. Stardust and the Devices tab are untouched.
+
+**One consequence worth knowing.** `/uplink` reads *stored* maps, so
+immediately after deploying this it answers `found: false` for everything until
+the first sweep completes — up to 300 seconds, or one press of **Scan Now**.
+Verified: it returned `found: false` before the sweep and correct answers 40
+seconds after. This is the deliberate trade for the route issuing no SNMP.
 
 ## Open question, deliberately left open
 
