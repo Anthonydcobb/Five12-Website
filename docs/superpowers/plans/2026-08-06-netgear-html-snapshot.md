@@ -34,7 +34,13 @@ copy(document.documentElement.outerHTML)
 
 Save the clipboard to `backend/tests/fixtures/netgear_m4250_overview.html`. A `view-source` of the SPA shell contains none of the data — it must be the rendered DOM.
 
-The reference capture is FMB Switch 60, an `M4250-10G2F-PoE+`, serial `70VG5C5RA0129`, base MAC `28:94:01:84:3A:02`, management IP `172.16.3.60`, firmware `13.0.5.26`. Every assertion below uses those values. If a different switch is captured, update the expected values in the tests to match it — do not change the assertions to be vaguer.
+**The fixture is already captured and in place** (Ctrl+S "Webpage, Complete" from the AV UI). It is FMB Switch **73**, an `M4250-10G2F-PoE+`, serial `70VG5C57A01E0`, base MAC `28:94:01:84:3C:DE`, management IP `172.16.3.73`, firmware `13.0.5.26`. Every assertion below uses those values verbatim — do not loosen an assertion to make it pass.
+
+Three sibling pages were captured alongside it and are also on disk. They are NOT parsed by this plan, but they are the raw material for the follow-on described in Future work, so leave them in place:
+
+- `netgear_m4250_portconfig.html` — per-port Profile Name and Template in a real table row
+- `netgear_m4250_neighbor.html` — port → host → MAC → VLAN → IP in a real table
+- `netgear_m4250_profiles.html` — the Network Profiles page
 
 ## File Structure
 
@@ -142,10 +148,10 @@ def snapshot():
 
 
 def test_identity_fields(snapshot):
-    assert snapshot['serial'] == '70VG5C5RA0129'
-    assert snapshot['baseMac'] == '28:94:01:84:3A:02'
+    assert snapshot['serial'] == '70VG5C57A01E0'
+    assert snapshot['baseMac'] == '28:94:01:84:3C:DE'
     assert snapshot['model'] == 'M4250-10G2F-PoE+'
-    assert snapshot['systemName'] == 'FMB Switch 60'
+    assert snapshot['systemName'] == 'FMB Switch 73'
 
 
 def test_version_fields(snapshot):
@@ -155,14 +161,14 @@ def test_version_fields(snapshot):
 
 
 def test_network_and_health_fields(snapshot):
-    assert snapshot['managementIp'] == '172.16.3.60'
-    assert snapshot['uptime'] == '0 days, 2 hrs, 2 mins, 55 secs'
+    assert snapshot['managementIp'] == '172.16.3.73'
+    assert snapshot['uptime'] == '0 days, 11 hrs, 49 mins, 3 secs'
     assert snapshot['stpMode'] == 'Neutral mode(32768): 32768'
     assert snapshot['fanMode'] == 'Quiet'
-    assert snapshot['tempC'] == 25
+    assert snapshot['tempC'] == 31
     assert snapshot['maxTempC'] == 53
-    assert snapshot['cpuPercent'] == 38.58
-    assert snapshot['memoryPercent'] == 33.39
+    assert snapshot['cpuPercent'] == 54.38
+    assert snapshot['memoryPercent'] == 33.43
 
 
 def test_absent_field_is_absent_not_blank():
@@ -388,7 +394,7 @@ def test_profile_fields(snapshot):
     assert by_name['HogNet']['color'] == '#ffa600'
 
     assert by_name['Default']['vlan'] == 1
-    assert by_name['Default']['ip'] == '172.16.3.60'
+    assert by_name['Default']['ip'] == '172.16.3.73'
 
 
 def test_profiles_absent_when_table_missing():
@@ -519,21 +525,33 @@ def test_port_media_copper_and_fiber(snapshot):
 
 def test_port_link_state(snapshot):
     by_num = {p['port']: p for p in snapshot['netgearPorts']}
-    assert by_num[4]['linkUp'] is True
-    assert by_num[5]['linkUp'] is True
-    assert by_num[10]['linkUp'] is True
+    assert by_num[1]['linkUp'] is True     # lan-disabled lan-connected
+    assert by_num[4]['linkUp'] is True     # lan-connected
     assert by_num[3]['linkUp'] is False
     assert by_num[8]['linkUp'] is False
     assert snapshot['activePorts'] == 3
+
+
+def test_powered_port_counts_as_up(snapshot):
+    """Port 5 carries `lan-connected-powered`, not `lan-connected`.
+
+    A substring test would pass by accident; an exact class-list membership
+    test for 'lan-connected' reports this port DOWN. It is up at 100T Full
+    and delivering 6W to a Raspberry Pi, so reporting it down would send an
+    operator to a rack to fix a port that is working.
+    """
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
+    assert by_num[5]['linkUp'] is True
+    assert by_num[5]['poe'] is True
 
 
 def test_port_poe_and_trunk_badges(snapshot):
     by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[3]['poe'] is True
     assert by_num[9]['poe'] is False
-    assert by_num[1]['trunk'] == 'manual'
+    assert by_num[1]['trunk'] == 'auto'
     assert by_num[2]['trunk'] == 'manual'
-    assert by_num[10]['trunk'] == 'auto'
+    assert by_num[10]['trunk'] == 'manual'
     assert by_num[4]['trunk'] is None
 
 
@@ -572,11 +590,16 @@ def _parse_ports(soup) -> list:
     Fibre ports nest .lan-font inside .fib-view; copper ports put it in
     .lan-three. Searching for the class rather than the container covers both.
 
-    'lan-connected' on .lan-content is the link-up marker. On the reference
-    capture it agrees exactly with which popovers carry a host, MAC and link
-    speed -- the three connected ports (4, 5 and the uplink 10) are the three
-    with populated popovers.
+    Link-up is marked by 'lan-connected' OR 'lan-connected-powered' -- the
+    latter is a PoE port that is both linked and delivering power, and it is a
+    DISTINCT class, not 'lan-connected' with a suffix. Testing membership of
+    'lan-connected' alone reports a powered, working port as down; testing by
+    substring instead would be right by accident and would also match any
+    future 'lan-connected-*' class whose meaning we have not seen. Match the
+    two known classes explicitly, so an unknown third one shows up as down and
+    gets noticed rather than being silently absorbed.
     """
+    LINK_UP_CLASSES = {'lan-connected', 'lan-connected-powered'}
     out = []
     for lan in soup.select('.sakura-port-lan'):
         number = _int_in(_text(lan.select_one('.lan-font')))
@@ -593,7 +616,7 @@ def _parse_ports(soup) -> list:
         out.append({
             'port': number,
             'media': 'fiber' if lan.select_one('.fib-view') else 'copper',
-            'linkUp': 'lan-connected' in classes,
+            'linkUp': bool(LINK_UP_CLASSES & set(classes)),
             'poe': lan.select_one('.port-poe') is not None,
             'trunk': trunk,
             'color': _rgb_to_hex(swatch.get('style') if swatch else None),
@@ -663,18 +686,22 @@ def test_popover_alignment_holds(snapshot):
     assert by_num[8]['vlans'] == [400]
     assert by_num[4]['profile'] == 'FixtureNet'
     assert by_num[4]['template'] == 'Lighting'
-    assert by_num[1]['vlans'] == [300, 400, 500, 600, 1]
+    assert by_num[1]['vlans'] == [1, 300, 400, 500, 600]
+    assert by_num[2]['vlans'] == [300, 400, 500, 600, 1]
 
 
 def test_popover_connected_host_details(snapshot):
     by_num = {p['port']: p for p in snapshot['netgearPorts']}
-    assert by_num[4]['ip'] == '10.31.8.60'
-    assert by_num[4]['mac'] == '28:36:38:C0:73:63'
+    assert by_num[1]['host'] == 'FMB Switch 52'
+    assert by_num[1]['mac'] == '28:94:01:84:47:02'
+    assert by_num[1]['ip'] == '172.16.3.52'
+    assert by_num[1]['linkSpeed'] == '1000 Full'
+    assert by_num[4]['ip'] == '10.31.8.73'
+    assert by_num[4]['mac'] == '28:36:38:C0:6D:51'
     assert by_num[4]['linkSpeed'] == '100T Full'
-    assert by_num[5]['ip'] == '10.9.15.112'
-    assert by_num[10]['host'] == 'FMB Switch 76'
-    assert by_num[10]['ip'] == '172.16.3.76'
-    assert by_num[10]['linkSpeed'] == '1000 Full'
+    assert by_num[5]['host'] == 'Raspberry Pi Trading Ltd'
+    assert by_num[5]['ip'] == '10.0.5.5'
+    assert by_num[5]['powerWatts'] == '6 Watts'
 
 
 def test_unconnected_port_has_no_host_keys(snapshot):
@@ -839,7 +866,7 @@ from app import db
 from app.models import NetworkDevice
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'netgear_m4250_overview.html'
-MAC = '28:94:01:84:3A:02'
+MAC = '28:94:01:84:3C:DE'
 
 
 @pytest.fixture
@@ -849,7 +876,7 @@ def html():
 
 @pytest.fixture
 def switch(db):
-    device = NetworkDevice(mac_address=MAC, device_type='netgear', last_ip='172.16.3.60')
+    device = NetworkDevice(mac_address=MAC, device_type='netgear', last_ip='172.16.3.73')
     db.session.add(device)
     db.session.commit()
     yield device
@@ -866,7 +893,7 @@ def test_import_writes_snapshot(client, switch, html):
     assert res.json['hostDataAvailable'] is True
 
     stored = db.session.get(NetworkDevice, MAC).vendor_data
-    assert stored['serial'] == '70VG5C5RA0129'
+    assert stored['serial'] == '70VG5C57A01E0'
     assert stored['source'] == 'html-snapshot'
     assert stored['snapshotAsOf'].endswith('Z')
     assert len(stored['netgearPorts']) == 12
@@ -1042,11 +1069,11 @@ from app import db
 from app.models import NetworkDevice
 from app.scanner import _process_discovered_device
 
-MAC = '28:94:01:84:3A:02'
-IP = '172.16.3.60'
+MAC = '28:94:01:84:3C:DE'
+IP = '172.16.3.73'
 
 SNAPSHOT = {
-    'serial': '70VG5C5RA0129',
+    'serial': '70VG5C57A01E0',
     'firmware': '13.0.5.26',
     'source': 'html-snapshot',
     'snapshotAsOf': '2026-08-06T12:00:00Z',
@@ -1628,7 +1655,7 @@ After Task 9, with the backend running:
 
 1. Open the Network tab and select a NETGEAR switch. Expand **IMPORT SWITCH SNAPSHOT**.
 2. Capture the page from that switch's AV UI and paste it. Confirm the result line reports the right system name, 5 profiles, 12 ports.
-3. Confirm **NETWORK PROFILES** shows all five with the switch's own colours, and **SWITCH PORTS (SNAPSHOT)** shows twelve rows — port 3 HogNet/600 with PoE, port 8 Comms/400, port 10 as the trunk to FMB Switch 76 at 1000 Full.
+3. Confirm **NETWORK PROFILES** shows all five with the switch's own colours, and **SWITCH PORTS (SNAPSHOT)** shows twelve rows — port 3 HogNet/600 with PoE, port 8 Comms/400, port 1 as the auto-trunk to FMB Switch 52 at 1000 Full, and port 5 up at 100T Full showing the Raspberry Pi drawing 6 W.
 4. Confirm the snapshot age is on the panel face and advances.
 5. Paste the *same* page while a *different* switch is selected. Expect a refusal naming the MAC, and no change to either device.
 6. Wait one 300s sweep. Confirm the profile and port tables are still populated — this is the precedence rule holding in production, not just in Task 7's test.
