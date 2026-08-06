@@ -404,3 +404,70 @@ def delete_location(loc_id):
     db.session.delete(snap)
     db.session.commit()
     return '', 204
+
+
+@net.post('/snapshot')
+def import_snapshot():
+    """Import a saved NETGEAR AV UI Overview page.
+
+    The switch's own page prints its serial and base MAC, so a snapshot
+    identifies its own subject -- an operator pasting seven pages in a row
+    never has to keep track of which is which, and cannot land switch 60's
+    profiles on switch 76.
+
+    Refuses rather than guesses. An unmatched MAC does NOT create a row: a
+    switch the scanner has never seen is a discovery problem, not something to
+    invent a record for out of a pasted document.
+
+    Merges rather than replaces, so the operator's label and notes, and any
+    live SNMP fields already present, survive. The next sweep merges SNMP over
+    this (scanner._process_discovered_device), which is the intended
+    precedence: SNMP is live, a snapshot is not.
+    """
+    from datetime import datetime
+
+    from .models import _utc_iso
+    from .vendors.netgear_snapshot import parse_snapshot
+
+    payload = request.get_json(silent=True) or {}
+    parsed = parse_snapshot(payload.get('html') or '')
+
+    mac = (parsed.get('baseMac') or '').upper().replace('-', ':')
+    if not mac or not parsed.get('serial'):
+        return jsonify({
+            'error': 'unrecognised_page',
+            'detail': 'No NETGEAR serial and base MAC found. Paste the rendered '
+                      'Configure -> Overview page (document.documentElement.outerHTML), '
+                      'not a view-source of the page shell.',
+        }), 422
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({
+            'error': 'unknown_device',
+            'detail': f'No device known with MAC {mac}. Let the scanner discover '
+                      f'the switch first, then import.',
+        }), 404
+
+    stored = device.vendor_data or {}
+    known_serial = stored.get('serial')
+    if known_serial and known_serial != parsed['serial']:
+        return jsonify({
+            'error': 'serial_conflict',
+            'detail': f'{mac} is recorded with serial {known_serial}, but this page '
+                      f'reports {parsed["serial"]}. Nothing was changed.',
+        }), 409
+
+    parsed['source'] = 'html-snapshot'
+    parsed['snapshotAsOf'] = _utc_iso(datetime.utcnow())
+    device.vendor_data = {**stored, **parsed}
+    db.session.commit()
+
+    return jsonify({
+        'macAddress': mac,
+        'systemName': parsed.get('systemName'),
+        'profileCount': len(parsed.get('profiles', [])),
+        'portCount': len(parsed.get('netgearPorts', [])),
+        'hostDataAvailable': parsed.get('netgearPortHostsAvailable', False),
+        'snapshotAsOf': parsed['snapshotAsOf'],
+    })
