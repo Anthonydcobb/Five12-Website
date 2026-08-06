@@ -333,13 +333,19 @@ def find_switch_port(mac: str, switches: list) -> dict | None:
             # technically ints in Python but nonsense counts here) is
             # treated as absent, not trusted at face value.
             if not isinstance(count, int) or isinstance(count, bool):
-                count = len(macs)
+                count = len(seen)
             # Tie-break deterministically on switch MAC then port number.
             # Without this, which port wins a tie depends on the order rows
             # came back from the database query in the route above, and a
             # device would appear to hop between switches on a refresh
-            # where nothing was physically rewired.
-            key = (count, sw.get('mac') or '', port.get('port'))
+            # where nothing was physically rewired. The port number is the
+            # same half-written-row threat as deviceCount and mac above: if
+            # it is missing or not a genuine int, a sentinel keeps the tuple
+            # comparison well-typed instead of raising mid-lookup.
+            port_num = port.get('port')
+            if not isinstance(port_num, int) or isinstance(port_num, bool):
+                port_num = -1
+            key = (count, sw.get('mac') or '', port_num)
             if best is None or key < best_key:
                 best_key = key
                 best = {

@@ -117,3 +117,39 @@ def test_a_non_string_entry_in_macs_is_skipped_not_crashed():
     hit = vendors.find_switch_port(mac, switches)
     assert hit['port'] == 3
     assert hit['deviceCount'] == 2
+
+
+def test_a_tie_with_a_missing_port_number_does_not_crash():
+    """Two ports on the SAME switch tie on deviceCount, so the tie-break
+    falls through to the port number. If one port dict is missing its
+    'port' key entirely — the same half-written-row shape that forced the
+    deviceCount and macs-element defenses above — the comparison must not
+    reach `None < int` and raise. It must still return an answer."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'name': 'No Port Field', 'link': 'up',
+             'macs': [mac], 'deviceCount': 1},
+            {'port': 5, 'name': 'Port 5', 'link': 'up',
+             'macs': [mac], 'deviceCount': 1},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    assert hit is not None
+
+
+def test_unusable_device_count_falls_back_to_the_deduped_seen_count():
+    """When deviceCount is unusable, the fallback must count the VETTED set
+    of real MAC strings, not the raw macs list. A junk (non-string) entry
+    sitting alongside one real MAC must not inflate a genuinely single
+    device port's reported count from 1 to 2 — that misclassification is
+    exactly what turns "on Port X" into a false "shared with others"."""
+    mac = '00:11:22:33:44:55'
+    switches = [
+        {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
+            {'port': 3, 'name': 'Port 3', 'link': 'up',
+             'macs': [mac, None], 'deviceCount': None},
+        ]},
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    assert hit['deviceCount'] == 1
