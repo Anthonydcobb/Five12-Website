@@ -199,14 +199,20 @@ def _snmp_walk_suffix(ip: str, oid: str) -> dict:
 
 
 def _mac_from_oid_suffix(suffix: str) -> str | None:
-    """'0.25.124.2.224.91' -> '00:19:7C:02:E0:5B'. None if it isn't six octets."""
+    """'0.25.124.2.224.91' -> '00:19:7C:02:E0:5B'. None if it isn't six octets,
+    or if any arc isn't a byte (0-255) — `int('-5')` and `int('300')` both
+    succeed, and without this check they'd format as '-5' and '12C' rather
+    than being rejected, silently naming the wrong device on a port."""
     parts = suffix.split('.')
     if len(parts) != 6:
         return None
     try:
-        return ':'.join(f'{int(p):02X}' for p in parts)
+        octets = [int(p) for p in parts]
     except ValueError:
         return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    return ':'.join(f'{o:02X}' for o in octets)
 
 
 def read_switch_ports(ip: str) -> dict:
@@ -214,7 +220,9 @@ def read_switch_ports(ip: str) -> dict:
 
     Four standard read-only walks — BRIDGE-MIB forwarding database, the
     bridge-port to ifIndex map, and MIB-II's ifDescr and ifOperStatus.
-    [VERIFIED 2026-08-06] against five GigaCore12s, ~2s each.
+    The underlying walks were [VERIFIED 2026-08-06] against five GigaCore12s,
+    ~2s each; this function itself has not yet been run against a switch
+    (hardware verification is Task 7, still pending).
 
     READ-ONLY. GET and WALK only; this never issues an SNMP SET. The rig is
     live and a configuration change would be visible on stage.
@@ -239,16 +247,25 @@ def read_switch_ports(ip: str) -> dict:
     if not bp2if:
         return {}
 
-    by_port = {int(bp): [] for bp in bp2if}
-    for suffix, bridge_port in fdb.items():
-        # Bridge ports absent from dot1dBasePortIfIndex are not physical
-        # ports — port 0 is the switch's own management MAC. Assigning it a
-        # port number would invent hardware.
-        if str(bridge_port) not in bp2if:
-            continue
-        mac = _mac_from_oid_suffix(suffix)
-        if mac:
-            by_port[int(bridge_port)].append(mac)
+    # A switch returning a bridge-port key or FDB value that isn't cleanly
+    # int()-convertible (malformed MIB response, an unexpected ASN.1 type
+    # from puresnmp, a firmware quirk) must not raise out of here — this runs
+    # inside the scanner's per-subnet sweep, and an uncaught ValueError/
+    # TypeError would abort the rest of that sweep, same failure class as the
+    # /model/status port-parsing bug fixed in 7033761.
+    try:
+        by_port = {int(bp): [] for bp in bp2if}
+        for suffix, bridge_port in fdb.items():
+            # Bridge ports absent from dot1dBasePortIfIndex are not physical
+            # ports — port 0 is the switch's own management MAC. Assigning it
+            # a port number would invent hardware.
+            if str(bridge_port) not in bp2if:
+                continue
+            mac = _mac_from_oid_suffix(suffix)
+            if mac:
+                by_port[int(bridge_port)].append(mac)
+    except Exception:
+        return {}
 
     ports = []
     for bridge_port in sorted(by_port):

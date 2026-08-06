@@ -141,6 +141,54 @@ def test_a_switch_with_no_bridge_table_yields_empty():
         assert vendors.read_switch_ports('172.16.1.21') == {}
 
 
+class _NotIntConvertible:
+    """Stands in for an unexpected ASN.1 type puresnmp could hand back — it
+    stringifies to a plausible bridge-port number but has no __int__, so
+    int() on it raises TypeError rather than ValueError."""
+    def __str__(self):
+        return '5'
+
+
+def test_a_non_integer_bridge_port_key_yields_empty_not_an_exception():
+    """dot1dBasePortIfIndex keyed by something int() can't parse — a
+    malformed MIB response or firmware quirk — used to raise ValueError out
+    of `by_port = {int(bp): [] for bp in bp2if}`, which sat outside the
+    function's try/except. That escapes read_switch_ports, contradicting its
+    own 'returns {} on any failure' contract, and reaches enrich_device
+    inside the scanner's per-subnet sweep — same failure class fixed for
+    /model/status parsing in 7033761."""
+    bad_bp2if = {'not-a-number': 1}
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks()(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: (
+             bad_bp2if if oid == '1.3.6.1.2.1.17.1.4.1.2' else _fake_walks()(ip, oid)
+         )):
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+
+def test_a_non_integer_fdb_value_yields_empty_not_an_exception():
+    """A forwarding-database entry whose bridge-port value passes the
+    `str(bridge_port) not in bp2if` membership check (so it isn't skipped as
+    a phantom port) but isn't int()-convertible used to raise TypeError out
+    of `by_port[int(bridge_port)].append(mac)`, uncaught, for the same
+    reason as above."""
+    bad_fdb = {'0.25.124.2.224.91': _NotIntConvertible()}
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks(fdb=bad_fdb)(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: _fake_walks()(ip, oid)):
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+
+def test_mac_from_oid_suffix_rejects_an_out_of_range_octet():
+    """int('300') succeeds, so without an explicit range check this would
+    format as '12C' and return a plausible-but-wrong MAC instead of being
+    rejected — silently naming the wrong device on a port."""
+    assert vendors._mac_from_oid_suffix('0.25.124.2.224.300') is None
+
+
+def test_mac_from_oid_suffix_rejects_a_negative_octet():
+    """int('-5') succeeds too, formatting as '-5' rather than a hex byte."""
+    assert vendors._mac_from_oid_suffix('0.25.124.2.224.-5') is None
+
+
 def test_the_vendors_module_issues_no_snmp_writes():
     """BINDING: the rig is live. This module may GET and WALK, never SET.
 
