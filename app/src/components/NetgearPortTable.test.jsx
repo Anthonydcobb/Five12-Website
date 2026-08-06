@@ -10,6 +10,9 @@ const PORTS = [
   { port: 4, media: 'copper', linkUp: true, poe: true, trunk: null,
     color: '#00ff00', vlans: [300], profile: 'FixtureNet', template: 'Lighting',
     ip: '10.31.8.60', mac: '28:36:38:C0:73:63', linkSpeed: '100T Full' },
+  { port: 11, media: 'fiber', linkUp: true, poe: false, trunk: null,
+    color: '#00a2ff', vlans: [1], profile: 'Uplink', template: 'Trunk',
+    linkSpeed: '1000F Full' },
 ]
 
 const device = (vendorData) => ({ macAddress: 'AA', vendorData })
@@ -27,6 +30,11 @@ describe('NetgearPortTable', () => {
     expect(screen.getByText('600')).toBeTruthy()
     expect(screen.getByText('10.31.8.60')).toBeTruthy()
     expect(screen.getByText('100T Full')).toBeTruthy()
+  })
+
+  it('marks a fiber port as SFP rather than showing it identically to copper', () => {
+    render(<NetgearPortTable device={device({ netgearPorts: PORTS })} />)
+    expect(screen.getByText('11 (SFP)')).toBeTruthy()
   })
 
   it('shows a trunk as its VLAN list rather than a blank profile', () => {

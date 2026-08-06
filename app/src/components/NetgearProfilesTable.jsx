@@ -1,16 +1,27 @@
 import React from 'react';
+import { timeAgo } from '../utils/timeAgo';
 
 const CELL = { padding: '3px 8px', fontSize: 12, textAlign: 'left' };
 const HEAD = { ...CELL, color: 'var(--color-text-muted)', fontSize: 10, letterSpacing: 1 };
 
 export default function NetgearProfilesTable({ device }) {
-  const profiles = device.vendorData?.profiles;
+  const vd = device.vendorData || {};
+  const profiles = vd.profiles;
   if (!profiles?.length) return null;
 
   return (
     <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
-      <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 6 }}>
-        NETWORK PROFILES
+      {/* Carries its own capture time rather than relying on the ports panel's.
+          The two panels are populated from independent parts of the page and
+          either can render without the other, so a shared timestamp somewhere
+          above them would sometimes describe data that isn't on screen. */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1 }}>
+          NETWORK PROFILES
+        </div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 10 }}>
+          snapshot {vd.snapshotAsOf ? timeAgo(vd.snapshotAsOf) : 'time unknown'}
+        </div>
       </div>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead>
