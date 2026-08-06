@@ -240,6 +240,20 @@ pattern):
 - Regression check: a Stardust unit still shows `UNIVERSES OUTPUTTING` with
   "None reported" and its Art-Net note, and renders **no** port table.
 
+**Goal 2 demonstrated itself, unprompted.** On re-verification after the final
+fixes, `10.31.8.51` port 6 read universe **43**; an hour earlier it had read
+**41**. Somebody repatched that port in between. The live read picked the
+change up immediately — the cached copy from the previous sweep would have
+shown 41. That is the entire argument for option A over option B, observed on
+the rig rather than reasoned about.
+
+Also confirmed after the final fix wave: all 29 nodes carry `portsAsOf`
+alongside `ports`, and the `/model/device`-derived keys (`model`, `firmware`,
+`hwVersion`, `portCount`, `longName`) survive a sweep intact — the general
+carry-forward merge does not drop either half. A node that has never answered
+(`10.0.0.95`) returns `live: false, ports: [], asOf: null`, which renders as
+nothing rather than as a false patch.
+
 **One consequence worth knowing.** The panel renders only for a device that
 already has `vendor_data.ports`, so immediately after deploying this, no node
 shows a table until the next discovery sweep — up to 300 seconds, or one press
