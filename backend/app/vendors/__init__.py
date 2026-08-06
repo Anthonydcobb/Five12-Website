@@ -2,6 +2,14 @@ import logging
 import re
 import requests
 import subprocess
+from datetime import datetime
+
+# `_utc_iso` is the repo's one serializer for a naive-UTC instant (trailing Z,
+# never a bare offset-less string — see its docstring for the 4h-in-the-future
+# bug that motivated it). No cycle: `models` imports only `db` from the package
+# root, and nothing in `models` or the package root imports `vendors` — every
+# caller of this module imports it lazily inside a function.
+from ..models import _utc_iso
 
 try:
     import puresnmp
@@ -289,6 +297,21 @@ def _port_enum(table: dict, code) -> str:
     return table.get(code, f'code {code}')
 
 
+# The universe a port outputs is the column an operator is actually reading —
+# it is the answer to "which port is feeding this rig". A node that omits it
+# used to pass None straight through, and PortTable renders null as nothing, so
+# the cell went BLANK. A blank cell is unreadable in exactly the wrong way: it
+# looks like a rendering fault, or like universe 0, or like the row is still
+# loading. Same principle as the 'code N' convention one function up — never
+# blank, never guessed — applied to the value rather than to an enum.
+_UNIVERSE_UNREPORTED = 'not reported'
+
+
+def _port_universe(value):
+    """The universe as the node reported it, or a visible 'not reported'."""
+    return _UNIVERSE_UNREPORTED if value is None else value
+
+
 def read_port_status(ip: str) -> dict:
     """Per-port universe/protocol/direction/status from /model/status.
 
@@ -300,8 +323,18 @@ def read_port_status(ip: str) -> dict:
     and ?portIndex=, always returns one record, and reports a protocol that
     contradicts this one. Do not cross-reference the two.
 
-    Returns {} on any failure, so the scanner's `if vendor_data:` guard leaves
-    a previously stored patch intact — one missed poll must not erase it.
+    Returns {} on any failure, so the scanner's carry-forward in
+    `_process_discovered_device` leaves a previously stored patch intact — one
+    missed poll must not erase it.
+
+    A successful read is stamped with `portsAsOf`. That timestamp is the whole
+    point: it rides into vendor_data on the sweep at no cost, and it is the
+    ONLY honest provenance for the patch. NetworkDevice.last_seen cannot stand
+    in for it — the 20s keep-alive re-probe refreshes last_seen without
+    enriching at all, so a node whose HTTP stack is wedged but which still
+    answers ping would otherwise show an hours-old patch under a 10s-old
+    timestamp, and somebody can repatch that node from its front panel inside
+    that window.
     """
     try:
         r = requests.get(f'http://{ip}/model/status', timeout=3)
@@ -322,18 +355,21 @@ def read_port_status(ip: str) -> dict:
     # parsing is best-effort like the request above it: any failure here is
     # just as much "this node can't be trusted right now" as a timeout is.
     try:
-        return {'ports': [
+        parsed = [
             {
                 'port': i + 1,
-                'universe': p.get('universe'),
+                'universe': _port_universe(p.get('universe')),
                 'protocol': _port_enum(_PORT_PROTOCOL, p.get('protocol')),
                 'direction': _port_enum(_PORT_DIRECTION, p.get('direction')),
                 'status': _port_enum(_PORT_STATUS, p.get('status')),
             }
             for i, p in enumerate(ports)
-        ]}
+        ]
     except Exception:
         return {}
+    # Stamped only on the success path, so `portsAsOf` can never appear
+    # without the `ports` it describes.
+    return {'ports': parsed, 'portsAsOf': _utc_iso(datetime.utcnow())}
 
 
 def _enrich_model_device_api(ip: str) -> dict:

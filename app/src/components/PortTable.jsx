@@ -52,9 +52,30 @@ export default function PortTable({ device }) {
         // as current, which is exactly what this feature must not do.
         setStale({ mac: device.macAddress, value: res.data.live ? null : { asOf: res.data.asOf ?? null } });
       })
-      // Keep showing the cached patch. A failed refresh is not a reason to
-      // throw away the last thing we knew.
-      .catch(() => {});
+      // Keep showing the cached patch — a failed refresh is not a reason to
+      // throw away the last thing we knew — but SAY that it is unconfirmed.
+      // This branch used to be a bare `.catch(() => {})`, leaving `stale`
+      // null, so an up-to-5-minutes-old patch rendered indistinguishably from
+      // a confirmed-live one, permanently. That is the other half of what
+      // this feature must not do: not blanked, but silently presented as
+      // current. The triggers are ordinary — the backend restarting mid-show,
+      // a proxy hiccup, a 500.
+      //
+      // `refreshFailed` selects DIFFERENT wording from the live:false case on
+      // purpose. There the node itself declined to answer; here the node may
+      // be perfectly fine and it is our own refresh that failed, so claiming
+      // the node is down would be a second false statement.
+      //
+      // The timestamp is the stored patch's own `portsAsOf`, never
+      // `device.lastSeen`: lastSeen is refreshed every 20s by the ICMP
+      // keep-alive and says nothing about when the patch was last read.
+      .catch(() => {
+        if (cancelled) return;
+        setStale({
+          mac: device.macAddress,
+          value: { asOf: device.vendorData?.portsAsOf ?? null, refreshFailed: true },
+        });
+      });
     return () => { cancelled = true; };
   }, [device.macAddress]);
 
@@ -80,7 +101,9 @@ export default function PortTable({ device }) {
                 node did answer at some point (that's how we have a cached
                 patch) — we just don't have a recorded last-seen time for
                 it. Say so honestly instead of inventing or implying one. */}
-            node did not answer · {staleValue.asOf ? `as of ${timeAgo(staleValue.asOf)}` : 'time unknown'}
+            {staleValue.refreshFailed ? 'could not refresh' : 'node did not answer'}
+            {' · '}
+            {staleValue.asOf ? `as of ${timeAgo(staleValue.asOf)}` : 'time unknown'}
           </div>
         )}
       </div>

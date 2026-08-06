@@ -47,10 +47,53 @@ describe('PortTable', () => {
     expect(await screen.findByText(/4m ago/)).toBeInTheDocument()
   })
 
-  it('keeps the cached patch when the request errors', async () => {
+  // A failed refresh must keep the rows AND say they are unconfirmed. Leaving
+  // the banner unset rendered an up-to-5-minutes-old cached patch identically
+  // to a confirmed-live one, permanently — the spec's forbidden "silently
+  // presented as current". The triggers are ordinary: backend restarting
+  // mid-show, a proxy hiccup, a 500.
+  it('keeps the cached patch when the request errors, and labels it', async () => {
     axios.get.mockRejectedValue(new Error('network'))
     render(<PortTable device={DEVICE} />)
     await waitFor(() => expect(axios.get).toHaveBeenCalled())
+    expect(screen.getByText('21')).toBeInTheDocument()
+    expect(await screen.findByText(/could not refresh/)).toBeInTheDocument()
+    // Different wording from the node-did-not-answer case on purpose: the
+    // node may be perfectly fine here, it is our refresh that failed. Saying
+    // the node is down would be a second false statement.
+    expect(screen.queryByText(/node did not answer/)).not.toBeInTheDocument()
+  })
+
+  it('times a failed refresh from the stored patch, not from the ping clock', async () => {
+    axios.get.mockRejectedValue(new Error('network'))
+    render(<PortTable device={{
+      ...DEVICE,
+      // last_seen is refreshed every 20s by the ICMP keep-alive and says
+      // nothing about when the patch was last read. portsAsOf does.
+      lastSeen: new Date().toISOString(),
+      vendorData: { ...DEVICE.vendorData, portsAsOf: new Date(Date.now() - 240_000).toISOString() },
+    }} />)
+    expect(await screen.findByText(/could not refresh · as of 4m ago/)).toBeInTheDocument()
+  })
+
+  it('says the time is unknown when a failed refresh has no stored portsAsOf', async () => {
+    axios.get.mockRejectedValue(new Error('network'))
+    render(<PortTable device={DEVICE} />)
+    expect(await screen.findByText(/could not refresh · time unknown/)).toBeInTheDocument()
+    // "never" is the wrong word: the node did answer once — that is how we
+    // have a cached patch — we just do not know when.
+    expect(screen.queryByText(/never/)).not.toBeInTheDocument()
+  })
+
+  // The SPA-fallback case (stale backend, the route 404s into index.html)
+  // does NOT land in the catch: axios resolves with an HTML string, so
+  // `res.data.live` is undefined and the node-did-not-answer banner shows.
+  // Pinned so the new catch-branch banner cannot quietly take it over.
+  it('shows the node-did-not-answer banner when the route falls through to index.html', async () => {
+    axios.get.mockResolvedValue({ data: '<!doctype html><div id="root"></div>' })
+    render(<PortTable device={DEVICE} />)
+    expect(await screen.findByText(/node did not answer/)).toBeInTheDocument()
+    expect(screen.queryByText(/could not refresh/)).not.toBeInTheDocument()
     expect(screen.getByText('21')).toBeInTheDocument()
   })
 

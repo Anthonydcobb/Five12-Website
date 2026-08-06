@@ -5,6 +5,7 @@ segment (10.9.15.101-.121) on 2026-08-05, captured from the devices themselves
 rather than composed by hand.
 """
 
+from datetime import datetime
 from unittest.mock import patch
 
 from app import vendors
@@ -252,8 +253,16 @@ def test_enrichment_keeps_device_fields_when_status_endpoint_fails():
     existing test mocks both endpoints with the same body, so this behaviour
     was never actually pinned — a node with /model/status down (but /model/device
     up) must still surface model/firmware/hwVersion/portCount/longName."""
-    with patch('app.vendors.requests.get', side_effect=_model_device_only):
+    with patch('app.vendors.requests.get', side_effect=_model_device_only) as get:
         data = vendors._enrich_model_device_api('10.9.15.101')
+
+    # Without this, every assertion below passes against a URL-BLIND mock:
+    # read_port_status finds no `ports` key in the /model/device body and
+    # returns {} either way, so the discriminator does no work and the test
+    # proves nothing about the two endpoints being independent.
+    urls = [c.args[0] for c in get.call_args_list]
+    assert any(u.endswith('/model/device') for u in urls)
+    assert any(u.endswith('/model/status') for u in urls)
 
     assert data['model'] == 'PDXND-4-1'
     assert data['firmware'] == 'V01.06.2.ee8877.992774699'
@@ -261,6 +270,8 @@ def test_enrichment_keeps_device_fields_when_status_endpoint_fails():
     assert data['portCount'] == 4
     assert data['longName'] == 'ACPD NODE ENET/DMX (PDXND-4-1)'
     assert 'ports' not in data
+    # A timestamp with no patch to describe would be worse than none at all.
+    assert 'portsAsOf' not in data
 
 
 def test_enrichment_keeps_ports_when_device_endpoint_fails():
@@ -271,3 +282,47 @@ def test_enrichment_keeps_ports_when_device_endpoint_fails():
 
     assert [p['universe'] for p in data['ports']] == [1, 2, 3, 4]
     assert 'model' not in data
+
+
+def test_a_successful_read_stamps_when_it_happened():
+    """`portsAsOf` is the patch's own provenance, carried into vendor_data on
+    the sweep. NetworkDevice.last_seen cannot stand in for it: the 20s
+    keep-alive refreshes last_seen without enriching, so a node whose HTTP
+    stack is wedged but which still answers ping would show an hours-old
+    patch under a seconds-old timestamp."""
+    with patch('app.vendors.requests.get', return_value=_Resp(XND8_MODEL_STATUS)):
+        data = vendors.read_port_status('10.31.8.51')
+
+    assert data['portsAsOf'].endswith('Z')       # unambiguous UTC, per _utc_iso
+    assert datetime.fromisoformat(data['portsAsOf'].replace('Z', '+00:00'))
+
+
+def test_a_failed_read_carries_no_timestamp():
+    """{} on failure, not a timestamp attached to nothing — the scanner's
+    carry-forward keys off the absence of `ports`."""
+    with patch('app.vendors.requests.get', side_effect=OSError('unreachable')):
+        assert vendors.read_port_status('10.31.8.51') == {}
+
+
+def test_a_missing_universe_is_visibly_absent_not_blank():
+    """The universe is the column an operator is actually reading. Passing a
+    missing one through as None rendered an EMPTY CELL — indistinguishable
+    from a rendering fault, from universe 0, or from a row still loading.
+    Same never-blank-never-guess rule as the 'code N' enum convention."""
+    payload = {'ports': [{'status': 3, 'direction': 1, 'protocol': 2}]}
+    with patch('app.vendors.requests.get', return_value=_Resp(payload)):
+        port1 = vendors.read_port_status('10.31.8.51')['ports'][0]
+
+    assert port1['universe'] == 'not reported'
+    # The rest of the row is still decoded — one absent field does not
+    # discard the port.
+    assert port1['status'] == 'OK'
+    assert port1['port'] == 1
+
+
+def test_universe_zero_is_still_reported_as_zero():
+    """Guards the None check against being written as a falsy check. Universe
+    0 is a real, patchable universe."""
+    payload = {'ports': [{'status': 3, 'direction': 1, 'protocol': 2, 'universe': 0}]}
+    with patch('app.vendors.requests.get', return_value=_Resp(payload)):
+        assert vendors.read_port_status('10.31.8.51')['ports'][0]['universe'] == 0

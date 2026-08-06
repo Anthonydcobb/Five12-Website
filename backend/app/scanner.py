@@ -453,6 +453,28 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         # the operator typed on it still attached.
         device.hidden = False
         if vendor_data:
+            # CHANGE: carry a stored patch forward when the fresh enrichment
+            # didn't bring one. `if vendor_data:` alone only protects against
+            # an enrichment that comes back COMPLETELY empty, and
+            # _enrich_model_device_api merges two independent GETs
+            # (/model/device and /model/status) into one dict. A node that
+            # answers the first and times out on the second — two requests 3s
+            # apart to hardware that is also pushing DMX, so an ordinary event
+            # — returns a truthy dict with no `ports` key, and the wholesale
+            # assignment below then DELETED the last known patch of a node
+            # that is up and pingable. The panel rendered nothing at all, with
+            # no message, for 300s — or permanently while /model/status stayed
+            # down and /model/device stayed up.
+            #
+            # `portsAsOf` moves with the ports it describes, never separately:
+            # preserving a patch while letting its timestamp advance would
+            # relabel an old reading as a recent one, which is the same lie in
+            # the other direction.
+            prior = device.vendor_data or {}
+            if 'ports' not in vendor_data and prior.get('ports'):
+                vendor_data = {**vendor_data,
+                               'ports': prior['ports'],
+                               'portsAsOf': prior.get('portsAsOf')}
             device.vendor_data = vendor_data
 
         # CHANGE: dropped the `is_new` guard. Auto-labelling only ever fired on

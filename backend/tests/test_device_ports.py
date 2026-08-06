@@ -12,13 +12,20 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models import NetworkDevice
+from app.models import NetworkDevice, _utc_iso
 
 
 PORTS = [
     {'port': 1, 'universe': 21, 'protocol': 'sACN', 'direction': 'Output', 'status': 'OK'},
     {'port': 2, 'universe': 42, 'protocol': 'sACN', 'direction': 'Output', 'status': 'OK'},
 ]
+
+
+# The sweep stamps the patch when /model/status answered. It is deliberately
+# much older than last_seen below: last_seen is refreshed every 20s by the ICMP
+# keep-alive, which does not enrich, so the two genuinely diverge on a node
+# that pings but will not serve HTTP.
+STORED_AS_OF = '2026-08-05T18:00:00Z'
 
 
 @pytest.fixture
@@ -28,7 +35,7 @@ def node(db):
         device_type='swisson',
         last_ip='10.31.8.51',
         last_seen=datetime.utcnow() - timedelta(seconds=30),
-        vendor_data={'model': 'XND-8', 'ports': PORTS},
+        vendor_data={'model': 'XND-8', 'ports': PORTS, 'portsAsOf': STORED_AS_OF},
     )
     db.session.add(row)
     db.session.commit()
@@ -99,6 +106,47 @@ def test_an_unreachable_node_falls_back_to_the_stored_patch(client, node):
     assert body['live'] is False
     assert body['ports'][0]['universe'] == 21
     assert body['asOf'].endswith('Z')
+
+
+def test_the_fallback_asof_is_the_patch_read_not_the_last_ping(client, node):
+    """The provenance of the PATCH, not of the ping.
+
+    `last_seen` is refreshed every 20s by quick_reprobe, which explicitly does
+    not enrich. A node whose HTTP stack is wedged (crashed web server, TCP/80
+    ACL change, mid-reboot) but which still answers ping keeps advancing
+    last_seen while the patch stays frozen — so reporting last_seen here
+    rendered an hours-old patch as "as of 10s ago", and somebody can repatch
+    that node from its front panel inside that window.
+    """
+    with patch('app.vendors.read_port_status', return_value={}):
+        res = client.get(f'/api/network/devices/{node.mac_address}/ports')
+
+    body = res.get_json()
+    assert body['asOf'] == STORED_AS_OF
+    # last_seen is 30s old; the stored patch is from August 5th. If those two
+    # were ever conflated again this assertion is the one that fires.
+    assert body['asOf'] != _utc_iso(node.last_seen)
+
+
+def test_a_row_swept_before_portsasof_existed_reports_no_time(client, db):
+    """No migration: rows written before the timestamp existed simply have
+    none. `None` is honest — the panel degrades to "time unknown" — where
+    borrowing last_seen would invent a provenance the row does not have."""
+    row = NetworkDevice(mac_address='AA:BB:CC:00:00:0B', last_ip='10.0.0.11',
+                        last_seen=datetime.utcnow(),
+                        vendor_data={'model': 'XND-8', 'ports': PORTS})
+    db.session.add(row)
+    db.session.commit()
+    try:
+        with patch('app.vendors.read_port_status', return_value={}):
+            res = client.get('/api/network/devices/AA:BB:CC:00:00:0B/ports')
+
+        body = res.get_json()
+        assert body['ports'][0]['universe'] == 21   # the patch still shows
+        assert body['asOf'] is None
+    finally:
+        db.session.delete(row)
+        db.session.commit()
 
 
 def test_an_unreachable_node_with_nothing_stored_returns_an_empty_list(client, db):

@@ -228,10 +228,23 @@ def device_ports(mac):
                 'asOf': _utc_iso(datetime.utcnow()),
             })
 
+    # CHANGE: asOf is the stored `portsAsOf` — the moment /model/status was
+    # last read successfully — not `last_seen`. last_seen tracks ICMP
+    # liveness: quick_reprobe refreshes it every 20s and explicitly does NOT
+    # enrich (pinned by test_reprobe_never_sweeps_or_enriches). Returning it
+    # here presented the ping clock as the patch's provenance, so a node whose
+    # HTTP stack is wedged but which still answers ping showed an hours-old
+    # patch labelled "as of 10s ago" — and somebody can repatch that node from
+    # its front panel while the operator believes the table.
+    #
+    # Rows swept before this change carry no portsAsOf, so this is None for
+    # them; the panel degrades to "time unknown", which is the truth. No
+    # migration — the next sweep of a reachable node fills it in.
+    stored = device.vendor_data or {}
     return jsonify({
-        'ports': (device.vendor_data or {}).get('ports') or [],
+        'ports': stored.get('ports') or [],
         'live': False,
-        'asOf': _utc_iso(device.last_seen),
+        'asOf': stored.get('portsAsOf'),
     })
 
 
