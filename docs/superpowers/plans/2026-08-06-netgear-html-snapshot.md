@@ -15,7 +15,11 @@
 - **Interpreter.** The app runs on `C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe`. Tests MUST run on that same interpreter. `python` on PATH is 3.14 and has a different package set — a green suite there says nothing about the app runtime. Every `pytest` command below assumes the app interpreter is first on PATH.
 - **No lxml.** It is not installed and needs a compiler on Windows. Use `BeautifulSoup(html, 'html.parser')` — stdlib backend, no build step.
 - **Read-only.** No code in this plan may issue a write to a switch.
-- **Storage key is `switchPorts`, never `ports`.** `PortTable` renders whenever `vendorData.ports` is non-empty (`PortTable.jsx:103`) and `/api/network/devices/<mac>/ports` re-reads that same key live against `read_port_status`. Writing switch ports to `ports` would render a DMX universe/protocol table for every switch and point a DMX endpoint read at a switch. This is the single most important naming rule in the plan.
+- **Storage key is `netgearPorts`. Never `ports`, never `switchPorts`.** Both of those are taken, by different features, with different shapes:
+  - `ports` — `PortTable` renders whenever `vendorData.ports` is non-empty (`PortTable.jsx:103`) and `/api/network/devices/<mac>/ports` re-reads it live via `read_port_status`. Using it would render a DMX universe/protocol table for every switch and aim a DMX node endpoint at a switch's IP.
+  - `switchPorts` — claimed by the in-flight GigaCore port-to-device map on branch `spec/gigacore-port-device-map`, which writes `{port, name, link, macs, deviceCount}` from BRIDGE-MIB. That reader is generic to any managed switch, so if it is ever wired into `_enrich_netgear` it would overwrite this feature's ports on every 300s sweep through the scanner's `{**prior, **fresh}` merge.
+
+  This is the single most important naming rule in the plan. The two port datasets are complementary, not redundant — theirs answers "what is behind port 6", this one answers "what VLAN and profile is port 6 in" — and they are kept in separate keys so either can land without waiting on the other.
 - **Never guess a value.** A field that cannot be located is absent. Follow the `'code N'` convention already in `vendors/__init__.py` — never blank, never guessed.
 - **Timestamps** use `_utc_iso` from `app.models`, matching every other timestamp in this module.
 - **Provenance keys:** `snapshotAsOf` (ISO string) and `source: 'html-snapshot'`.
@@ -43,8 +47,8 @@ The reference capture is FMB Switch 60, an `M4250-10G2F-PoE+`, serial `70VG5C5RA
 | `backend/tests/test_netgear_snapshot.py` (create) | Parser unit tests |
 | `backend/tests/test_netgear_snapshot_routes.py` (create) | Route + matching tests |
 | `backend/tests/test_scanner_snapshot_precedence.py` (create) | Regression: SNMP must not clobber |
-| `app/src/components/SwitchPortTable.jsx` (create) | Per-port switch table |
-| `app/src/components/SwitchProfilesTable.jsx` (create) | Profiles table |
+| `app/src/components/NetgearPortTable.jsx` (create) | Per-port switch table |
+| `app/src/components/NetgearProfilesTable.jsx` (create) | Profiles table |
 | `app/src/components/SnapshotImportPanel.jsx` (create) | Paste box + confirm |
 | `app/src/pages/NetworkMonitor.jsx` (modify) | Wire the three components into `DeviceDetail` |
 | `app/src/components/*.test.jsx` (create) | Component tests |
@@ -116,7 +120,7 @@ git commit -m "deps: add beautifulsoup4 for NETGEAR snapshot parsing"
 - Requires: `backend/tests/fixtures/netgear_m4250_overview.html` (see Prerequisite)
 
 **Interfaces:**
-- Produces: `parse_snapshot(html: str) -> dict`. Later tasks add the `profiles` and `switchPorts` keys to the same returned dict. Also produces the private helpers `_text(node)`, `_by_id(soup, element_id)` and `_int_in(text)` which Tasks 3–5 reuse.
+- Produces: `parse_snapshot(html: str) -> dict`. Later tasks add the `profiles` and `netgearPorts` keys to the same returned dict. Also produces the private helpers `_text(node)`, `_by_id(soup, element_id)` and `_int_in(text)` which Tasks 3–5 reuse.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -493,7 +497,7 @@ Everything here comes from the port elements themselves, which carry their own p
 - Modify: `backend/tests/test_netgear_snapshot.py`
 
 **Interfaces:**
-- Produces: `parse_snapshot(...)['switchPorts']` — list of dicts with `port` (int), `media` (`'copper'`|`'fiber'`), `linkUp` (bool), `poe` (bool), `trunk` (`'manual'`|`'auto'`|None), `color` (str|None). Also `portCount` (int) and `activePorts` (int). Task 5 adds more keys to each port dict.
+- Produces: `parse_snapshot(...)['netgearPorts']` — list of dicts with `port` (int), `media` (`'copper'`|`'fiber'`), `linkUp` (bool), `poe` (bool), `trunk` (`'manual'`|`'auto'`|None), `color` (str|None). Also `portCount` (int) and `activePorts` (int). Task 5 adds more keys to each port dict.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -501,20 +505,20 @@ Append to `backend/tests/test_netgear_snapshot.py`:
 
 ```python
 def test_all_twelve_ports_in_order(snapshot):
-    ports = snapshot['switchPorts']
+    ports = snapshot['netgearPorts']
     assert [p['port'] for p in ports] == list(range(1, 13))
     assert snapshot['portCount'] == 12
 
 
 def test_port_media_copper_and_fiber(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[1]['media'] == 'copper'
     assert by_num[11]['media'] == 'fiber'
     assert by_num[12]['media'] == 'fiber'
 
 
 def test_port_link_state(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[4]['linkUp'] is True
     assert by_num[5]['linkUp'] is True
     assert by_num[10]['linkUp'] is True
@@ -524,7 +528,7 @@ def test_port_link_state(snapshot):
 
 
 def test_port_poe_and_trunk_badges(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[3]['poe'] is True
     assert by_num[9]['poe'] is False
     assert by_num[1]['trunk'] == 'manual'
@@ -534,7 +538,7 @@ def test_port_poe_and_trunk_badges(snapshot):
 
 
 def test_port_colour_matches_profile_swatch(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[3]['color'] == '#ffa600'   # HogNet
     assert by_num[8]['color'] == '#00fff7'   # Comms
     assert by_num[4]['color'] == '#00ff00'   # FixtureNet
@@ -542,7 +546,7 @@ def test_port_colour_matches_profile_swatch(snapshot):
 
 def test_ports_absent_when_strip_missing():
     parsed = parse_snapshot('<div id="device_serial">X</div>')
-    assert parsed.get('switchPorts', []) == []
+    assert parsed.get('netgearPorts', []) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -551,7 +555,7 @@ def test_ports_absent_when_strip_missing():
 cd backend && python -m pytest tests/test_netgear_snapshot.py -k port -v
 ```
 
-Expected: FAIL — `KeyError: 'switchPorts'`
+Expected: FAIL — `KeyError: 'netgearPorts'`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -605,7 +609,7 @@ Extend `parse_snapshot`:
     data = _parse_device(soup)
     data['profiles'] = _parse_profiles(soup)
     ports = _parse_ports(soup)
-    data['switchPorts'] = ports
+    data['netgearPorts'] = ports
     if ports:
         data['portCount'] = len(ports)
         data['activePorts'] = sum(1 for p in ports if p['linkUp'])
@@ -640,7 +644,7 @@ Dropping a column is recoverable. Attributing port 7's connected fixture to port
 - Modify: `backend/tests/test_netgear_snapshot.py`
 
 **Interfaces:**
-- Produces: on each `switchPorts` entry, the optional keys `vlans` (list[int]), `profile` (str|None), `template` (str|None), `host` (str|None), `mac` (str|None), `ip` (str|None), `linkSpeed` (str|None), `powerWatts` (str|None). Plus the top-level flag `switchPortHostsAvailable` (bool), which the UI reads to explain a degraded import.
+- Produces: on each `netgearPorts` entry, the optional keys `vlans` (list[int]), `profile` (str|None), `template` (str|None), `host` (str|None), `mac` (str|None), `ip` (str|None), `linkSpeed` (str|None), `powerWatts` (str|None). Plus the top-level flag `netgearPortHostsAvailable` (bool), which the UI reads to explain a degraded import.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -650,8 +654,8 @@ Append to `backend/tests/test_netgear_snapshot.py`:
 def test_popover_alignment_holds(snapshot):
     """Cross-checks popover-sourced VLAN against each port's own colour, which
     is read structurally. If ordering ever drifts these disagree."""
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
-    assert snapshot['switchPortHostsAvailable'] is True
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
+    assert snapshot['netgearPortHostsAvailable'] is True
 
     assert by_num[3]['profile'] == 'HogNet'
     assert by_num[3]['vlans'] == [600]
@@ -663,7 +667,7 @@ def test_popover_alignment_holds(snapshot):
 
 
 def test_popover_connected_host_details(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[4]['ip'] == '10.31.8.60'
     assert by_num[4]['mac'] == '28:36:38:C0:73:63'
     assert by_num[4]['linkSpeed'] == '100T Full'
@@ -674,7 +678,7 @@ def test_popover_connected_host_details(snapshot):
 
 
 def test_unconnected_port_has_no_host_keys(snapshot):
-    by_num = {p['port']: p for p in snapshot['switchPorts']}
+    by_num = {p['port']: p for p in snapshot['netgearPorts']}
     assert by_num[3].get('host') is None
     assert by_num[3].get('ip') is None
 
@@ -689,12 +693,12 @@ def test_count_mismatch_drops_host_data_but_keeps_ports():
     degraded = html[:cut - 60] + html[end - 60:]
 
     parsed = parse_snapshot(degraded)
-    assert parsed['switchPortHostsAvailable'] is False
-    assert len(parsed['switchPorts']) == 12
-    assert parsed['switchPorts'][2]['poe'] is True          # structural, kept
-    assert parsed['switchPorts'][2]['color'] == '#ffa600'   # structural, kept
-    assert all('profile' not in p for p in parsed['switchPorts'])
-    assert all('ip' not in p for p in parsed['switchPorts'])
+    assert parsed['netgearPortHostsAvailable'] is False
+    assert len(parsed['netgearPorts']) == 12
+    assert parsed['netgearPorts'][2]['poe'] is True          # structural, kept
+    assert parsed['netgearPorts'][2]['color'] == '#ffa600'   # structural, kept
+    assert all('profile' not in p for p in parsed['netgearPorts'])
+    assert all('ip' not in p for p in parsed['netgearPorts'])
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -703,7 +707,7 @@ def test_count_mismatch_drops_host_data_but_keeps_ports():
 cd backend && python -m pytest tests/test_netgear_snapshot.py -k popover -v
 ```
 
-Expected: FAIL — `KeyError: 'switchPortHostsAvailable'`
+Expected: FAIL — `KeyError: 'netgearPortHostsAvailable'`
 
 - [ ] **Step 3: Write the implementation**
 
@@ -780,11 +784,11 @@ Extend `parse_snapshot`'s tail:
 
 ```python
     ports = _parse_ports(soup)
-    data['switchPorts'] = ports
+    data['netgearPorts'] = ports
     if ports:
         data['portCount'] = len(ports)
         data['activePorts'] = sum(1 for p in ports if p['linkUp'])
-        data['switchPortHostsAvailable'] = _merge_popovers(soup, ports)
+        data['netgearPortHostsAvailable'] = _merge_popovers(soup, ports)
     return data
 ```
 
@@ -865,8 +869,10 @@ def test_import_writes_snapshot(client, switch, html):
     assert stored['serial'] == '70VG5C5RA0129'
     assert stored['source'] == 'html-snapshot'
     assert stored['snapshotAsOf'].endswith('Z')
-    assert len(stored['switchPorts']) == 12
-    assert 'ports' not in stored, 'switch ports must never occupy the DMX key'
+    assert len(stored['netgearPorts']) == 12
+    # Both neighbouring keys are owned by other features with other shapes.
+    assert 'ports' not in stored, 'must never occupy the DMX node patch key'
+    assert 'switchPorts' not in stored, 'must never occupy the GigaCore SNMP map key'
 
 
 def test_import_preserves_operator_fields(client, switch, html):
@@ -982,8 +988,8 @@ def import_snapshot():
         'macAddress': mac,
         'systemName': parsed.get('systemName'),
         'profileCount': len(parsed.get('profiles', [])),
-        'portCount': len(parsed.get('switchPorts', [])),
-        'hostDataAvailable': parsed.get('switchPortHostsAvailable', False),
+        'portCount': len(parsed.get('netgearPorts', [])),
+        'hostDataAvailable': parsed.get('netgearPortHostsAvailable', False),
         'snapshotAsOf': parsed['snapshotAsOf'],
     })
 ```
@@ -1045,7 +1051,7 @@ SNAPSHOT = {
     'source': 'html-snapshot',
     'snapshotAsOf': '2026-08-06T12:00:00Z',
     'profiles': [{'name': 'FixtureNet', 'vlan': 300}],
-    'switchPorts': [{'port': 1, 'linkUp': True}],
+    'netgearPorts': [{'port': 1, 'linkUp': True}],
 }
 
 
@@ -1066,7 +1072,7 @@ def test_empty_snmp_read_leaves_snapshot_intact(app, switch):
 
     stored = db.session.get(NetworkDevice, MAC).vendor_data
     assert stored['profiles'] == SNAPSHOT['profiles']
-    assert stored['switchPorts'] == SNAPSHOT['switchPorts']
+    assert stored['netgearPorts'] == SNAPSHOT['netgearPorts']
     assert stored['snapshotAsOf'] == SNAPSHOT['snapshotAsOf']
 
 
@@ -1099,25 +1105,25 @@ git commit -m "test: pin that an SNMP sweep cannot erase an imported snapshot"
 
 ---
 
-### Task 8: SwitchPortTable and SwitchProfilesTable components
+### Task 8: NetgearPortTable and NetgearProfilesTable components
 
 **Files:**
-- Create: `app/src/components/SwitchPortTable.jsx`
-- Create: `app/src/components/SwitchPortTable.test.jsx`
-- Create: `app/src/components/SwitchProfilesTable.jsx`
+- Create: `app/src/components/NetgearPortTable.jsx`
+- Create: `app/src/components/NetgearPortTable.test.jsx`
+- Create: `app/src/components/NetgearProfilesTable.jsx`
 
 **Interfaces:**
-- Consumes: `device.vendorData.switchPorts`, `.profiles`, `.switchPortHostsAvailable` from Task 6.
-- Produces: default exports `SwitchPortTable({ device })` and `SwitchProfilesTable({ device })`. Both render `null` when their data is absent, matching `PortTable.jsx:103`.
+- Consumes: `device.vendorData.netgearPorts`, `.profiles`, `.netgearPortHostsAvailable` from Task 6.
+- Produces: default exports `NetgearPortTable({ device })` and `NetgearProfilesTable({ device })`. Both render `null` when their data is absent, matching `PortTable.jsx:103`.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `app/src/components/SwitchPortTable.test.jsx`:
+Create `app/src/components/NetgearPortTable.test.jsx`:
 
 ```jsx
 import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import SwitchPortTable from './SwitchPortTable'
+import NetgearPortTable from './NetgearPortTable'
 
 const PORTS = [
   { port: 1, media: 'copper', linkUp: false, poe: false, trunk: 'manual',
@@ -1131,14 +1137,14 @@ const PORTS = [
 
 const device = (vendorData) => ({ macAddress: 'AA', vendorData })
 
-describe('SwitchPortTable', () => {
+describe('NetgearPortTable', () => {
   it('renders nothing when there are no switch ports', () => {
-    const { container } = render(<SwitchPortTable device={device({})} />)
+    const { container } = render(<NetgearPortTable device={device({})} />)
     expect(container).toBeEmptyDOMElement()
   })
 
   it('renders a row per port with profile and VLAN', () => {
-    render(<SwitchPortTable device={device({ switchPorts: PORTS })} />)
+    render(<NetgearPortTable device={device({ netgearPorts: PORTS })} />)
     expect(screen.getByText('HogNet')).toBeTruthy()
     expect(screen.getByText('FixtureNet')).toBeTruthy()
     expect(screen.getByText('600')).toBeTruthy()
@@ -1147,23 +1153,23 @@ describe('SwitchPortTable', () => {
   })
 
   it('shows a trunk as its VLAN list rather than a blank profile', () => {
-    render(<SwitchPortTable device={device({ switchPorts: PORTS })} />)
+    render(<NetgearPortTable device={device({ netgearPorts: PORTS })} />)
     expect(screen.getByText('300, 400, 500, 600, 1')).toBeTruthy()
     expect(screen.getByText('Trunk (manual)')).toBeTruthy()
   })
 
   it('explains missing host data instead of showing blank columns', () => {
-    render(<SwitchPortTable device={device({
-      switchPorts: [{ port: 1, media: 'copper', linkUp: true, poe: false, trunk: null }],
-      switchPortHostsAvailable: false,
+    render(<NetgearPortTable device={device({
+      netgearPorts: [{ port: 1, media: 'copper', linkUp: true, poe: false, trunk: null }],
+      netgearPortHostsAvailable: false,
     })} />)
     expect(screen.getByText(/per-port host details were not readable/i)).toBeTruthy()
   })
 
   it('shows the snapshot age', () => {
-    render(<SwitchPortTable device={device({
-      switchPorts: PORTS,
-      switchPortHostsAvailable: true,
+    render(<NetgearPortTable device={device({
+      netgearPorts: PORTS,
+      netgearPortHostsAvailable: true,
       snapshotAsOf: new Date().toISOString(),
     })} />)
     expect(screen.getByText(/snapshot/i)).toBeTruthy()
@@ -1174,14 +1180,14 @@ describe('SwitchPortTable', () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd app && npm test -- SwitchPortTable
+cd app && npm test -- NetgearPortTable
 ```
 
-Expected: FAIL — cannot resolve `./SwitchPortTable`.
+Expected: FAIL — cannot resolve `./NetgearPortTable`.
 
 - [ ] **Step 3: Write the implementation**
 
-Create `app/src/components/SwitchPortTable.jsx`:
+Create `app/src/components/NetgearPortTable.jsx`:
 
 ```jsx
 import React from 'react';
@@ -1194,9 +1200,9 @@ const HEAD = { ...CELL, color: 'var(--color-text-muted)', fontSize: 10, letterSp
 // profile and PoE where PortTable has universe, protocol and direction. They
 // are deliberately separate components rather than one with half its columns
 // blank for whichever kind it is rendering.
-export default function SwitchPortTable({ device }) {
+export default function NetgearPortTable({ device }) {
   const vd = device.vendorData || {};
-  const ports = vd.switchPorts;
+  const ports = vd.netgearPorts;
   if (!ports?.length) return null;
 
   // Snapshots are manual and therefore stale by definition. The capture time
@@ -1209,14 +1215,14 @@ export default function SwitchPortTable({ device }) {
     <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1 }}>
-          SWITCH PORTS
+          SWITCH PORTS (SNAPSHOT)
         </div>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 10 }}>
           snapshot {asOf ? timeAgo(asOf) : 'time unknown'}
         </div>
       </div>
 
-      {vd.switchPortHostsAvailable === false && (
+      {vd.netgearPortHostsAvailable === false && (
         <div style={{ color: 'var(--color-brand-hi)', fontSize: 10, marginBottom: 6 }}>
           Per-port host details were not readable from this page — VLAN, PoE and
           link state below are still accurate.
@@ -1260,7 +1266,7 @@ export default function SwitchPortTable({ device }) {
 }
 ```
 
-Create `app/src/components/SwitchProfilesTable.jsx`:
+Create `app/src/components/NetgearProfilesTable.jsx`:
 
 ```jsx
 import React from 'react';
@@ -1268,7 +1274,7 @@ import React from 'react';
 const CELL = { padding: '3px 8px', fontSize: 12, textAlign: 'left' };
 const HEAD = { ...CELL, color: 'var(--color-text-muted)', fontSize: 10, letterSpacing: 1 };
 
-export default function SwitchProfilesTable({ device }) {
+export default function NetgearProfilesTable({ device }) {
   const profiles = device.vendorData?.profiles;
   if (!profiles?.length) return null;
 
@@ -1313,7 +1319,7 @@ export default function SwitchProfilesTable({ device }) {
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd app && npm test -- SwitchPortTable
+cd app && npm test -- NetgearPortTable
 ```
 
 Expected: 5 passed.
@@ -1321,7 +1327,7 @@ Expected: 5 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/src/components/SwitchPortTable.jsx app/src/components/SwitchPortTable.test.jsx app/src/components/SwitchProfilesTable.jsx
+git add app/src/components/NetgearPortTable.jsx app/src/components/NetgearPortTable.test.jsx app/src/components/NetgearProfilesTable.jsx
 git commit -m "feat: switch port and profile tables for the Network tab"
 ```
 
@@ -1335,7 +1341,7 @@ git commit -m "feat: switch port and profile tables for the Network tab"
 - Modify: `app/src/pages/NetworkMonitor.jsx` (import at top; render inside `DeviceDetail` after the `<PortTable device={device} />` at line 307)
 
 **Interfaces:**
-- Consumes: `POST /api/network/snapshot` from Task 6; `SwitchPortTable`, `SwitchProfilesTable` from Task 8.
+- Consumes: `POST /api/network/snapshot` from Task 6; `NetgearPortTable`, `NetgearProfilesTable` from Task 8.
 - Produces: `SnapshotImportPanel({ device, onImported })`, where `onImported()` is the existing refresh callback so the tables repaint.
 
 - [ ] **Step 1: Write the failing test**
@@ -1544,8 +1550,8 @@ Add this next to `updateDevice` (line 527) in `NetworkMonitor.jsx`, mirroring ho
 Add beside the existing `PortTable` import at line 4:
 
 ```jsx
-import SwitchPortTable from '../components/SwitchPortTable';
-import SwitchProfilesTable from '../components/SwitchProfilesTable';
+import NetgearPortTable from '../components/NetgearPortTable';
+import NetgearProfilesTable from '../components/NetgearProfilesTable';
 import SnapshotImportPanel from '../components/SnapshotImportPanel';
 ```
 
@@ -1565,8 +1571,8 @@ Then replace the single line `<PortTable device={device} />` (line 307) with:
 
 ```jsx
       <PortTable device={device} />
-      <SwitchProfilesTable device={device} />
-      <SwitchPortTable device={device} />
+      <NetgearProfilesTable device={device} />
+      <NetgearPortTable device={device} />
       <SnapshotImportPanel device={device} onImported={() => onRefresh?.(device.macAddress)} />
 ```
 
@@ -1583,7 +1589,7 @@ Add the snapshot-only meta cells to the existing grid, after the `SERIAL` cell:
 cd app && npm test
 ```
 
-Expected: all suites pass, including the pre-existing `PortTable` tests — confirming a switch's `switchPorts` never triggers the DMX table.
+Expected: all suites pass, including the pre-existing `PortTable` tests — confirming a switch's `netgearPorts` never triggers the DMX table.
 
 - [ ] **Step 8: Run the whole backend suite on the app interpreter**
 
@@ -1608,7 +1614,7 @@ After Task 9, with the backend running:
 
 1. Open the Network tab and select a NETGEAR switch. Expand **IMPORT SWITCH SNAPSHOT**.
 2. Capture the page from that switch's AV UI and paste it. Confirm the result line reports the right system name, 5 profiles, 12 ports.
-3. Confirm **NETWORK PROFILES** shows all five with the switch's own colours, and **SWITCH PORTS** shows twelve rows — port 3 HogNet/600 with PoE, port 8 Comms/400, port 10 as the trunk to FMB Switch 76 at 1000 Full.
+3. Confirm **NETWORK PROFILES** shows all five with the switch's own colours, and **SWITCH PORTS (SNAPSHOT)** shows twelve rows — port 3 HogNet/600 with PoE, port 8 Comms/400, port 10 as the trunk to FMB Switch 76 at 1000 Full.
 4. Confirm the snapshot age is on the panel face and advances.
 5. Paste the *same* page while a *different* switch is selected. Expect a refusal naming the MAC, and no change to either device.
 6. Wait one 300s sweep. Confirm the profile and port tables are still populated — this is the precedence rule holding in production, not just in Task 7's test.

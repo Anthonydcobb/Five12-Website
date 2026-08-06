@@ -100,7 +100,7 @@ PoE presence, and trunk type — the `M` (manual) and `A` (auto) badges. Enriche
 where available, with the popover fields: VLAN, profile name, profile template,
 connected host, MAC, IP, link speed, and power draw.
 
-**`SwitchPortTable`** — a new component, not an extension of `PortTable`. A DMX
+**`NetgearPortTable`** — a new component, not an extension of `PortTable`. A DMX
 port and a switch port share only the word "port": one has universe, protocol
 and direction, the other has VLAN, profile and PoE. Forcing them into one
 component would mean a table where most columns are blank for whichever kind it
@@ -151,12 +151,30 @@ Parsed output merges into the existing `vendorData` blob on `NetworkDevice`,
 stamped `snapshotAsOf` (naive-UTC ISO via `_utc_iso`, matching every other
 timestamp in this module) and `source: 'html-snapshot'`.
 
-Switch ports are stored under **`switchPorts`**, never `ports`. `PortTable`
-renders whenever `vendorData.ports` is non-empty, and
-`/api/network/devices/<mac>/ports` re-reads that same key live via
-`read_port_status`. Writing switch ports to `ports` would render a DMX
-universe/protocol table for every switch, and point a DMX node endpoint at a
-switch's IP. Profiles are stored under `profiles`.
+Switch ports are stored under **`netgearPorts`** — not `ports`, and not
+`switchPorts`. Both are already taken, by different features, with
+incompatible shapes.
+
+`ports` belongs to the DMX node patch: `PortTable` renders whenever
+`vendorData.ports` is non-empty, and `/api/network/devices/<mac>/ports`
+re-reads that key live via `read_port_status`. Using it would render a DMX
+universe/protocol table for every switch and point a DMX node endpoint at a
+switch's IP.
+
+`switchPorts` belongs to the GigaCore port-to-device map (branch
+`spec/gigacore-port-device-map`), which writes
+`{port, name, link, macs, deviceCount}` read from BRIDGE-MIB. That reader is
+generic to any managed switch, so wiring it into `_enrich_netgear` would put
+GigaCore-shaped ports over this feature's on every sweep.
+
+The two port datasets are complementary rather than competing: the SNMP map
+answers *what is behind port 6*, this snapshot answers *what VLAN and profile
+is port 6 in*. On an M4250 with SNMP v2c enabled both are worth having. They
+are kept in separate keys so neither feature blocks the other, and so a future
+merged view — if one is ever wanted — can be built from two stable shapes
+rather than negotiated between two moving ones.
+
+Profiles are stored under `profiles`, which nothing else claims.
 
 Precedence between the snapshot and SNMP:
 
@@ -194,7 +212,7 @@ tracking which is which.
 Device details extend the existing meta cells in `DeviceDetail` — the same
 `MetaCell` row that renders `FIRMWARE` and `PORTS` today.
 
-Profiles and ports each get a table below it, `SwitchPortTable` for the latter.
+Profiles and ports each get a table below it, `NetgearPortTable` for the latter.
 
 Every panel fed by a snapshot shows its capture time. Not in a tooltip — on the
 face of the panel, next to the data. An operator reading a port table during a
@@ -247,7 +265,7 @@ Cases:
 8. SNMP precedence — SNMP returns a firmware, snapshot has an older one, SNMP's
    is shown and the snapshot's other fields are untouched.
 9. Non-NETGEAR input — arbitrary HTML refused cleanly.
-10. `SwitchPortTable` renders VLAN, profile, PoE, link speed and connected host,
+10. `NetgearPortTable` renders VLAN, profile, PoE, link speed and connected host,
     and renders a port with no popover data without blank-looking holes.
 
 ## Future work
