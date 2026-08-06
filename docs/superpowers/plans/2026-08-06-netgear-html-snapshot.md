@@ -34,6 +34,12 @@ copy(document.documentElement.outerHTML)
 
 Save the clipboard to `backend/tests/fixtures/netgear_m4250_overview.html`. A `view-source` of the SPA shell contains none of the data — it must be the rendered DOM.
 
+> **Expected values come from the fixture file, never from anything else.** The
+> first draft of this plan took them from a copy of the page pasted into chat
+> ~40 minutes before the file was saved. Identity fields matched, but uptime,
+> temperature and CPU had all moved on, and Task 2 blocked on the mismatch.
+> If you need a value, read it out of `netgear_m4250_overview.html`.
+
 **The fixture is already captured and in place** (Ctrl+S "Webpage, Complete" from the AV UI). It is FMB Switch **73**, an `M4250-10G2F-PoE+`, serial `70VG5C57A01E0`, base MAC `28:94:01:84:3C:DE`, management IP `172.16.3.73`, firmware `13.0.5.26`. Every assertion below uses those values verbatim — do not loosen an assertion to make it pass.
 
 Three sibling pages were captured alongside it and are also on disk. They are NOT parsed by this plan, but they are the raw material for the follow-on described in Future work, so leave them in place:
@@ -162,12 +168,12 @@ def test_version_fields(snapshot):
 
 def test_network_and_health_fields(snapshot):
     assert snapshot['managementIp'] == '172.16.3.73'
-    assert snapshot['uptime'] == '0 days, 11 hrs, 49 mins, 3 secs'
+    assert snapshot['uptime'] == '0 days, 11 hrs, 58 mins, 10 secs'
     assert snapshot['stpMode'] == 'Neutral mode(32768): 32768'
     assert snapshot['fanMode'] == 'Quiet'
-    assert snapshot['tempC'] == 31
+    assert snapshot['tempC'] == 32
     assert snapshot['maxTempC'] == 53
-    assert snapshot['cpuPercent'] == 54.38
+    assert snapshot['cpuPercent'] == 39.06
     assert snapshot['memoryPercent'] == 33.43
 
 
