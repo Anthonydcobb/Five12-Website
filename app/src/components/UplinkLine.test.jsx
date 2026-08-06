@@ -132,6 +132,44 @@ describe('UplinkLine', () => {
     expect(screen.getByText(/age unknown/)).toBeInTheDocument()
   })
 
+  // Finding 1 regression (final-fix-2): a stamp AHEAD of the browser clock
+  // makes ageMs negative. Number.isFinite(-14_400_000) is true and
+  // -14_400_000 < STALE_MS is true, so the OLD gate `ageMs !== null &&
+  // Number.isFinite(ageMs) && ageMs < STALE_MS` stayed true forever for a
+  // future-dated asOf — the exact "nothing ever offline" arithmetic bug
+  // documented at the top of utils/timeAgo.js, one layer up. A future stamp
+  // is no more evidence of youth than a missing one.
+  it('never says "on" when asOf is in the future (clock skew), and never prints a negative duration', async () => {
+    const FUTURE = () => new Date(Date.now() + 4 * 3600_000).toISOString()
+    axios.get.mockResolvedValue({ data: { found: true, switchLabel: 'Luminex (CARL)',
+      switchMac: 'D0:69:9E:04:78:72', port: 5, portName: 'Port 5', deviceCount: 1, asOf: FUTURE() } })
+    render(<UplinkLine device={DEVICE} />)
+    expect(await screen.findByText(/behind Luminex \(CARL\) · Port 5/)).toBeInTheDocument()
+    expect(screen.queryByText(/^on /)).not.toBeInTheDocument()
+    // Must say the age is untrustworthy in words, and must never render a
+    // negative duration like "-14400s ago" — that reads as a UI glitch, not
+    // a warning.
+    expect(screen.getByText(/future/i)).toBeInTheDocument()
+    expect(screen.queryByText(/-\d/)).not.toBeInTheDocument()
+  })
+
+  // Finding 2 regression (final-fix-2): STALE_MS (600_000) was below the
+  // scanner's real refresh period. scanner.py sleeps DISCOVERY_INTERVAL
+  // (300s) AFTER each sweep finishes (not before), and start_scanner's own
+  // docstring says the sweep itself measures ~165s on the rig — so the true
+  // period is >= 465s, and a given switch's consecutive stamps can land up
+  // to DISCOVERY_INTERVAL + 2*sweep_duration apart (~630s), already over the
+  // old 600_000ms bound on a perfectly healthy rig. 15 minutes (900_000ms)
+  // sits between the old wrong bound and the corrected one.
+  it('still reads FRESH for a map aged between the old 600s bound and the real scan cycle', async () => {
+    const BETWEEN = () => new Date(Date.now() - 900_000).toISOString() // 15 min
+    axios.get.mockResolvedValue({ data: { found: true, switchLabel: 'Luminex (CARL)',
+      switchMac: 'D0:69:9E:04:78:72', port: 5, portName: 'Port 5', deviceCount: 1, asOf: BETWEEN() } })
+    render(<UplinkLine device={DEVICE} />)
+    expect(await screen.findByText(/on Luminex \(CARL\) · Port 5/)).toBeInTheDocument()
+    expect(screen.getByText(/as of \d+m ago/)).toBeInTheDocument()
+  })
+
   it('never commits a frame showing the previous device\'s switch/port line after the device prop changes', async () => {
     const DEVICE_B = { macAddress: 'AA:BB:CC:00:00:02', label: 'Bollero Antenna #2' }
     axios.get.mockImplementation((url) => {

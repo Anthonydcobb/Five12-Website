@@ -385,19 +385,28 @@ def find_switch_port(mac: str, switches: list) -> dict | None:
             # and the returned raw `port`/`name` then rendered as
             # "on Luminex (CARL) · undefined". Same reasoning as
             # `_entity_field`'s 1 << 30 sort key.
-            port_num = port.get('port')
-            if not isinstance(port_num, int) or isinstance(port_num, bool):
-                port_num = 1 << 30
+            raw_port = port.get('port')
+            port_malformed = not isinstance(raw_port, int) or isinstance(raw_port, bool)
+            port_num = (1 << 30) if port_malformed else raw_port
             key = (count, sw.get('mac') or '', port_num)
             if best is None or key < best_key:
                 best_key = key
+                # The sentinel (1 << 30) exists ONLY to lose ties in `key`
+                # above — it must never be PUBLISHED. A stored row with
+                # neither `port` nor `name` used to come back as
+                # {'port': 1073741824, 'portName': 'Port 1073741824'}, which
+                # UplinkLine renders verbatim: that looks like a real port
+                # number an operator might go hunting for, on a switch with
+                # no such port. A malformed port instead reports as unknown.
+                published_port = None if port_malformed else raw_port
                 best = {
                     'switchMac': sw.get('mac'),
                     'switchLabel': sw.get('label'),
-                    # The NORMALISED port number and a name that is always a
-                    # string: whatever this returns is rendered verbatim.
-                    'port': port_num,
-                    'portName': port.get('name') or f'Port {port_num}',
+                    'port': published_port,
+                    'portName': port.get('name') or (
+                        'unrecorded port' if published_port is None
+                        else f'Port {published_port}'
+                    ),
                     'deviceCount': count,
                     # The stored map's own timestamp, carried through. The maps
                     # have no expiry — `read_switch_ports` returns {} on failure

@@ -177,7 +177,12 @@ def test_a_malformed_port_row_loses_a_tie_instead_of_winning_it():
 
 def test_a_malformed_port_row_alone_still_returns_something_renderable():
     """When the malformed row is the ONLY candidate it still has to answer —
-    with a genuine int port and a non-empty name, never None/undefined."""
+    but the internal tie-break sentinel (1 << 30) must never be PUBLISHED as
+    if it were a real port number. Finding 3 (final-fix-2): a stored row with
+    neither `port` nor `name` used to yield {'port': 1073741824, 'portName':
+    'Port 1073741824'} — which UplinkLine renders verbatim, looking like a
+    genuine port an operator might go hunting for on a switch that has no
+    such port. It must instead report the port as unknown."""
     mac = '00:11:22:33:44:55'
     switches = [
         {'mac': 'AA:AA:AA:AA:AA:AA', 'label': 'Switch A', 'switchPorts': [
@@ -185,8 +190,11 @@ def test_a_malformed_port_row_alone_still_returns_something_renderable():
         ]},
     ]
     hit = vendors.find_switch_port(mac, switches)
-    assert isinstance(hit['port'], int) and not isinstance(hit['port'], bool)
+    assert hit['port'] is None
+    assert hit['port'] != 1 << 30
     assert isinstance(hit['portName'], str) and hit['portName']
+    assert hit['portName'] != f'Port {1 << 30}'
+    assert '1073741824' not in hit['portName']
 
 
 def test_unusable_device_count_falls_back_to_the_deduped_seen_count():

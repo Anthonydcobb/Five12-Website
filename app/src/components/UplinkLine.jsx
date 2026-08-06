@@ -2,15 +2,27 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { timeAgo, parseUtc } from '../utils/timeAgo';
 
-// Two discovery sweeps. The scanner re-reads every switch's port map on a 300s
-// cycle, so a map older than 600s means at least one whole sweep produced
-// nothing — the switch has gone quiet. That matters here more than anywhere
-// else in the app because the stored maps have NO expiry: read_switch_ports
-// returns {} on failure by design and the scanner merges shallowly, so a dark
-// switch keeps its last map in the database forever, across restarts. Without
-// this bound the line would keep saying "on Luminex (CARL) · Port 5" long
+// Two real discovery cycles, not two DISCOVERY_INTERVALs. backend/app/scanner.py
+// sleeps DISCOVERY_INTERVAL (300s, scanner.py:43) AFTER each sweep finishes
+// (scanner.py's `_discovery_loop`: run_scan_now() then time.sleep), so the
+// true period between sweeps is 300s + sweep_duration, not a flat 300s. And
+// start_scanner's own docstring (scanner.py:718) puts a full discovery pass
+// at ~165s measured on the rig — before this branch added four SNMP walks
+// per Luminex switch to every sweep, which lengthens sweep_duration further.
+// So one switch's consecutive stamps can already land up to
+// DISCOVERY_INTERVAL + 2*sweep_duration (~630s) apart on a perfectly healthy
+// rig — over the old 600_000ms bound. Use 2x the real (inflated) cycle,
+// 2*(300+165)=930s, rounded up for headroom against this branch's added
+// walks, rather than pin an exact number to an unmeasured sweep duration.
+// That matters here more than anywhere else in the app because the stored
+// maps have NO expiry: read_switch_ports returns {} on failure by design and
+// the scanner merges shallowly, so a dark switch keeps its last map in the
+// database forever, across restarts. Too LOW a bound is its own failure mode:
+// it declares healthy, answering switches silent on every ordinary sweep,
+// training an operator to ignore the one time it is true. Without an upper
+// bound at all the line would keep saying "on Luminex (CARL) · Port 5" long
 // after the device was repatched to another rack.
-const STALE_MS = 600_000;
+const STALE_MS = 1_200_000;
 
 export default function UplinkLine({ device }) {
   // Tagged with the device it describes: this component persists across
@@ -60,7 +72,15 @@ export default function UplinkLine({ device }) {
   //    have — is NOT freshness. No evidence of age is not evidence of youth,
   //    so it falls to the hedged branch.
   const ageMs = value.asOf ? Date.now() - parseUtc(value.asOf) : null;
-  const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs < STALE_MS;
+  // A stamp AHEAD of the browser clock makes ageMs negative. Without the
+  // `>= 0` guard, Number.isFinite(-14_400_000) is true and
+  // -14_400_000 < STALE_MS is true, so `fresh` would stay true forever — the
+  // identical "elapsed time went negative, so nothing ever reads as old"
+  // arithmetic failure documented at the top of utils/timeAgo.js, one layer
+  // up. A stamp from the future is no more evidence of youth than a missing
+  // one, so it is handled separately below (`future`) and always hedges.
+  const future = ageMs !== null && Number.isFinite(ageMs) && ageMs < 0;
+  const fresh = ageMs !== null && Number.isFinite(ageMs) && ageMs >= 0 && ageMs < STALE_MS;
   const direct = value.deviceCount === 1 && fresh;
   const where = `${value.switchLabel || value.switchMac} · ${value.portName}`;
 
@@ -71,9 +91,15 @@ export default function UplinkLine({ device }) {
   // no explanation of the difference.
   const ageNote = !value.asOf
     ? 'age unknown, so this may already have changed'
-    : fresh
-      ? `as of ${timeAgo(value.asOf)}`
-      : `last confirmed ${timeAgo(value.asOf)}; the switch has not reported since, so this may already have changed`;
+    : future
+      // Never format a negative elapsed time through timeAgo() here — that
+      // renders as e.g. "as of -14400s ago", which reads as a display glitch
+      // rather than the warning it is supposed to be. State the actual
+      // problem in words instead.
+      ? 'reported timestamp is in the future, so its age cannot be trusted; this may already have changed'
+      : fresh
+        ? `as of ${timeAgo(value.asOf)}`
+        : `last confirmed ${timeAgo(value.asOf)}; the switch has not reported since, so this may already have changed`;
 
   // deviceCount can arrive malformed (0, missing, non-numeric) from a stored
   // row that was never revalidated. `direct` above keeps a strict `=== 1`
