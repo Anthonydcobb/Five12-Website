@@ -42,12 +42,25 @@ export default function UplinkLine({ device }) {
   const direct = value.deviceCount === 1;
   const where = `${value.switchLabel || value.switchMac} · ${value.portName}`;
 
+  // deviceCount can arrive malformed (0, missing, non-numeric) from a stored
+  // row that was never revalidated. `direct` above stays a strict `=== 1`
+  // check regardless, so malformed counts always fail safe into "behind" —
+  // this only decides how the "shared with N others" clause reads. A
+  // deviceCount of 0 here is itself a contradiction (this device is
+  // apparently behind the port, so the count can't be zero), same as a
+  // missing or non-numeric count: treat all of them as unusable and say
+  // nothing about the number rather than state a nonsense (negative/NaN/0)
+  // one.
+  const others = Number.isFinite(value.deviceCount) && value.deviceCount >= 1
+    ? value.deviceCount - 1
+    : null;
+
   return (
     <div style={{ color: 'var(--color-gel)', fontSize: 11, marginBottom: 8 }}>
       {direct ? `on ${where}` : `behind ${where}`}
       {!direct && (
         <span style={{ color: 'var(--color-text-muted)' }}>
-          {' '}· shared with {value.deviceCount - 1} others, so this is a path, not a patch point
+          {' '}· shared with {others !== null ? `${others} others` : 'others'}, so this is a path, not a patch point
         </span>
       )}
     </div>
