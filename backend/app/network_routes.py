@@ -248,6 +248,77 @@ def device_ports(mac):
     })
 
 
+@net.get('/devices/<mac>/switch-ports')
+def device_switch_ports(mac):
+    """Which MACs are behind each port of a managed switch, live then cached.
+
+    Read-only in both directions: SNMP GET/WALK only toward the switch (the
+    rig is live), and no database write here — the scanner updates this row
+    concurrently.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    if device.last_ip:
+        live = vendors.read_switch_ports(device.last_ip)
+        if live.get('switchPorts'):
+            return jsonify({
+                'switchPorts': live['switchPorts'],
+                'live': True,
+                'asOf': _utc_iso(datetime.utcnow()),
+            })
+
+    # The map's own timestamp, never last_seen — last_seen is the ICMP clock
+    # that quick_reprobe refreshes every 20s without walking SNMP.
+    stored = device.vendor_data or {}
+    return jsonify({
+        'switchPorts': stored.get('switchPorts') or [],
+        'live': False,
+        'asOf': stored.get('switchPortsAsOf'),
+    })
+
+
+@net.get('/devices/<mac>/uplink')
+def device_uplink(mac):
+    """Which switch port this device sits behind.
+
+    Pure computation over stored maps — issues no SNMP at all. Answering this
+    live would mean walking every switch on every device selection.
+
+    `deviceCount` is part of the answer, not decoration: only a count of one
+    proves direct attachment, and the caller must word itself accordingly.
+
+    `asOf` is the other half of that. The stored maps never expire — a switch
+    that stops answering keeps its last map in the database indefinitely,
+    across restarts — so a count of one from a three-hour-old map is not
+    present-tense evidence of anything. /switch-ports already serves this
+    timestamp and its pane renders it; this route serves the same stored maps
+    and must not be the one consumer that hides their age.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    switches = [
+        {'mac': s.mac_address, 'label': s.label,
+         'switchPorts': (s.vendor_data or {}).get('switchPorts'),
+         # The map's OWN timestamp, same field /switch-ports serves, so the
+         # answer can be aged. It is None on every row swept before stamping.
+         'asOf': (s.vendor_data or {}).get('switchPortsAsOf')}
+        for s in NetworkDevice.query.filter(NetworkDevice.mac_address != mac).all()
+        if (s.vendor_data or {}).get('switchPorts')
+    ]
+    hit = vendors.find_switch_port(mac, switches)
+    if hit is None:
+        return jsonify({'found': False})
+    return jsonify({'found': True, **hit})
+
+
 @net.delete('/devices/<mac>')
 def delete_device(mac):
     device = db.session.get(NetworkDevice, mac)

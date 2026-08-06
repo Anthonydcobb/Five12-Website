@@ -174,6 +174,252 @@ def _snmp_walk_map(ip: str, oid: str) -> dict:
     return out
 
 
+def _snmp_walk_suffix(ip: str, oid: str) -> dict:
+    """Walk a table column keyed by the FULL remaining OID suffix.
+
+    `_snmp_walk_map` keys on the last arc alone, which is correct for tables
+    indexed by one integer (ifIndex) and destroys tables indexed by anything
+    wider. The bridge forwarding database is indexed by the six octets of a
+    MAC address, so keying on the last arc returns '91' — the final byte —
+    where the answer is a whole device.
+
+    Kept alongside rather than replacing it: `_snmp_walk_map` serves the
+    Netgear and Luminex enrichers today and must not change behaviour.
+    """
+    out = {}
+    prefix = oid + '.'
+    for row in puresnmp.walk(ip, _SNMP_COMMUNITY, oid, timeout=_SNMP_TIMEOUT):
+        # NOTE: deliberately not `getattr(row, 'oid', row[0])` — that default
+        # expression evaluates `row[0]` unconditionally, even when `row.oid`
+        # exists, and raises on any row object that isn't also subscriptable.
+        o = str(row.oid) if hasattr(row, 'oid') else str(row[0])
+        val = row.value if hasattr(row, 'value') else row[1]
+        out[o[len(prefix):] if o.startswith(prefix) else o] = val
+    return out
+
+
+def _mac_from_oid_suffix(suffix: str) -> str | None:
+    """'0.25.124.2.224.91' -> '00:19:7C:02:E0:5B'. None if it isn't six octets,
+    or if any arc isn't a byte (0-255) — `int('-5')` and `int('300')` both
+    succeed, and without this check they'd format as '-5' and '12C' rather
+    than being rejected, silently naming the wrong device on a port."""
+    parts = suffix.split('.')
+    if len(parts) != 6:
+        return None
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return None
+    if any(o < 0 or o > 255 for o in octets):
+        return None
+    return ':'.join(f'{o:02X}' for o in octets)
+
+
+def read_switch_ports(ip: str) -> dict:
+    """Which MACs are behind each physical port of a managed switch.
+
+    Four standard read-only walks — BRIDGE-MIB forwarding database, the
+    bridge-port to ifIndex map, and MIB-II's ifDescr and ifOperStatus.
+    The underlying walks were [VERIFIED 2026-08-06] against five GigaCore12s,
+    ~2s each; this function itself has not yet been run against a switch
+    (hardware verification is Task 7, still pending).
+
+    READ-ONLY. GET and WALK only; this never issues an SNMP SET. The rig is
+    live and a configuration change would be visible on stage.
+
+    A forwarding database records where a MAC was LAST SEEN, not what is
+    plugged in where, so `deviceCount` travels with every port: only a count
+    of exactly one proves direct attachment. Callers must not present a
+    higher-count port as a device's location.
+
+    ifName is unsupported on this firmware (0 rows) — the label comes from
+    ifDescr, which returns bytes padded to a fixed width (b'Port  1').
+
+    Returns {} on any failure, so the scanner's merge keeps the last good map.
+    """
+    try:
+        fdb = _snmp_walk_suffix(ip, '1.3.6.1.2.1.17.4.3.1.2')
+        bp2if = _snmp_walk_map(ip, '1.3.6.1.2.1.17.1.4.1.2')
+        descr = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.2')
+        oper = _snmp_walk_map(ip, '1.3.6.1.2.1.2.2.1.8')
+    except Exception:
+        return {}
+    if not bp2if:
+        return {}
+
+    # This guard covers the whole port-map derivation, not just `by_port`:
+    # a bridge-port key or FDB value that isn't cleanly int()-convertible
+    # (malformed MIB response, an unexpected ASN.1 type from puresnmp, a
+    # firmware quirk) must not raise out of here — this runs inside the
+    # scanner's per-subnet sweep, and an uncaught ValueError/TypeError would
+    # abort the rest of that sweep, same failure class as the /model/status
+    # port-parsing bug fixed in 7033761. The ports-build loop below was once
+    # a second, unguarded block: a `bp2if` key that is int-parseable but
+    # non-canonical (a leading zero like '05') passes `int()` in `by_port`
+    # but then misses the later `bp2if[str(bridge_port)]` lookup, raising
+    # KeyError. One guard over the whole derivation closes that gap instead
+    # of needing to stay in sync with a second try/except.
+    try:
+        by_port = {int(bp): [] for bp in bp2if}
+        for suffix, bridge_port in fdb.items():
+            mac = _mac_from_oid_suffix(suffix)
+            if mac is None:
+                # An undecodable suffix must NOT simply be dropped. `deviceCount`
+                # below is derived AFTER the drop, from len(macs), so a rejected
+                # entry shrinks the count as well as the list: a port genuinely
+                # carrying two devices reports deviceCount 1, and every layer
+                # above renders that as proof of direct attachment. That is the
+                # one direction this feature must never fail in — it turns
+                # "behind" into "on" and sends an operator to the wrong rack.
+                #
+                # WHY refuse the whole read rather than keep the port with an
+                # inflated count: the function's documented contract is already
+                # "returns {} on any failure", and the scanner's carry-forward
+                # keeps the last good map rather than publishing a wrong one.
+                # It also matches the actual trigger. A suffix fails to decode
+                # when the walk's KEY SHAPE is not what we expect — e.g. a
+                # leading-dot OID form from a different puresnmp build makes
+                # `_snmp_walk_suffix` fall back to the full OID for every row —
+                # which is a property of the whole response, not of one entry.
+                # A partial map built from a response we demonstrably cannot
+                # parse is not worth more than no map.
+                log.warning('undecodable FDB suffix %r from %s; discarding port map',
+                            suffix, ip)
+                return {}
+            # Bridge ports absent from dot1dBasePortIfIndex are not physical
+            # ports — port 0 is the switch's own management MAC. Assigning it
+            # a port number would invent hardware. Checked AFTER the decode so
+            # a broken key shape is caught wherever it appears, including on
+            # rows that would have been skipped anyway.
+            if str(bridge_port) not in bp2if:
+                continue
+            by_port[int(bridge_port)].append(mac)
+
+        ports = []
+        for bridge_port in sorted(by_port):
+            if_index = str(bp2if[str(bridge_port)])
+            raw = descr.get(if_index, b'')
+            name = (raw.decode('latin-1') if isinstance(raw, bytes) else str(raw))
+            # b'Port  1' -> 'Port 1'. The padding is the device's, not ours.
+            name = ' '.join(name.split()) or f'Port {bridge_port}'
+            macs = sorted(by_port[bridge_port])
+            ports.append({
+                'port': bridge_port,
+                'name': name,
+                'link': 'up' if oper.get(if_index) == 1 else 'down',
+                'macs': macs,
+                'deviceCount': len(macs),
+            })
+    except Exception as e:
+        # Logged, unlike the walk-level handler above — there, switches on this
+        # rig legitimately never answer, so silence is correct. Here the walks
+        # already succeeded and the MIB data itself is malformed, which is a
+        # genuine bug signal. Combined with the scanner's carry-forward, a
+        # silent {} leaves the operator looking at a permanently frozen map
+        # with no diagnostic anywhere to explain why it stopped moving.
+        log.warning('switch port map derivation failed for %s: %s', ip, e)
+        return {}
+
+    return {
+        'switchPorts': ports,
+        # Stamped here, at the moment of the read. The sibling DMX feature
+        # shipped a bug where the staleness timestamp was the ICMP ping clock
+        # rather than the data's own clock, so a wedged-but-pingable device
+        # showed an hours-old reading labelled seconds old.
+        'switchPortsAsOf': _utc_iso(datetime.utcnow()),
+    }
+
+
+def find_switch_port(mac: str, switches: list) -> dict | None:
+    """The closest switch port that has seen `mac`, with the count that says
+    how much that means.
+
+    A forwarding database records where a MAC was last seen, so a device shows
+    up behind every switch on its path. The port with the FEWEST devices
+    behind it is the closest — and only a count of exactly one proves direct
+    attachment. [MEASURED 2026-08-06] Bolero Antenna #1 resolves to a
+    one-device port and really is plugged there; Antenna #3's best candidate
+    is an uplink with 73 others, and it is plugged into something else
+    entirely. So the count is returned, always, and the caller words its
+    answer from it.
+
+    The winning switch's `asOf` rides along in the answer. A forwarding
+    database ages — entries expire when a device goes quiet, so absence is not
+    proof of unplugging — and the stored maps have no expiry of their own, so
+    the caller cannot honestly word a present-tense answer without knowing how
+    old the evidence is. Each element of `switches` may carry an `asOf`.
+
+    Pure: no I/O, no database, no SNMP. Give it the stored maps.
+    """
+    want = (mac or '').upper()
+    best = None
+    best_key = None
+    for sw in switches:
+        for port in sw.get('switchPorts') or []:
+            macs = port.get('macs') or []
+            # A stored macs list is JSON from the database column: a
+            # malformed element (e.g. a null slipped in by a half-written
+            # row) must be skipped, not crash the lookup for every device
+            # behind this port.
+            seen = {m.upper() for m in macs if isinstance(m, str)}
+            if want not in seen:
+                continue
+            count = port.get('deviceCount')
+            # A deviceCount that is present but not a genuine int (None from
+            # a nullable/half-written column, or a bool — True/False are
+            # technically ints in Python but nonsense counts here) is
+            # treated as absent, not trusted at face value.
+            if not isinstance(count, int) or isinstance(count, bool):
+                count = len(seen)
+            # Tie-break deterministically on switch MAC then port number.
+            # Without this, which port wins a tie depends on the order rows
+            # came back from the database query in the route above, and a
+            # device would appear to hop between switches on a refresh
+            # where nothing was physically rewired. The port number is the
+            # same half-written-row threat as deviceCount and mac above: if
+            # it is missing or not a genuine int, a sentinel keeps the tuple
+            # comparison well-typed instead of raising mid-lookup.
+            # The sentinel is HIGH, not -1: a malformed row must LOSE a tie, not
+            # win it. With -1 it sorted before every real port number, so a
+            # half-written row beat a perfectly good candidate at equal count —
+            # and the returned raw `port`/`name` then rendered as
+            # "on Luminex (CARL) · undefined". Same reasoning as
+            # `_entity_field`'s 1 << 30 sort key.
+            raw_port = port.get('port')
+            port_malformed = not isinstance(raw_port, int) or isinstance(raw_port, bool)
+            port_num = (1 << 30) if port_malformed else raw_port
+            key = (count, sw.get('mac') or '', port_num)
+            if best is None or key < best_key:
+                best_key = key
+                # The sentinel (1 << 30) exists ONLY to lose ties in `key`
+                # above — it must never be PUBLISHED. A stored row with
+                # neither `port` nor `name` used to come back as
+                # {'port': 1073741824, 'portName': 'Port 1073741824'}, which
+                # UplinkLine renders verbatim: that looks like a real port
+                # number an operator might go hunting for, on a switch with
+                # no such port. A malformed port instead reports as unknown.
+                published_port = None if port_malformed else raw_port
+                best = {
+                    'switchMac': sw.get('mac'),
+                    'switchLabel': sw.get('label'),
+                    'port': published_port,
+                    'portName': port.get('name') or (
+                        'unrecorded port' if published_port is None
+                        else f'Port {published_port}'
+                    ),
+                    'deviceCount': count,
+                    # The stored map's own timestamp, carried through. The maps
+                    # have no expiry — `read_switch_ports` returns {} on failure
+                    # and the scanner merges shallowly, so a switch that goes
+                    # dark keeps its map frozen indefinitely, across restarts.
+                    # The switch-side pane already renders that age; this
+                    # consumer states attachment, so it needs the age more, not
+                    # less. None when the row predates stamping.
+                    'asOf': sw.get('asOf'),
+                }
+    return best
+
+
 def _entity_field(ip: str, oid: str):
     """First non-empty value in an ENTITY-MIB column.
 
@@ -256,8 +502,14 @@ def _enrich_snmp_switch(ip: str, vendor: str) -> dict:
 def _enrich_luminex(ip: str) -> dict:
     # GigaCore's web GUI is auth-locked (401) and exposes no public REST API,
     # but SNMP v2c is enabled by default. Firmware is not in any MIB GigaCore
-    # implements, so it stays blank.
-    return _enrich_snmp_switch(ip, 'Luminex')
+    # answers, so it stays None.
+    #
+    # The per-port device map is read alongside, from the same SNMP session's
+    # worth of walks. Merged independently: a switch that answers MIB-II but
+    # not the bridge table still contributes its model, and vice versa.
+    data = _enrich_snmp_switch(ip, 'Luminex')
+    data.update(read_switch_ports(ip))
+    return data
 
 
 def _enrich_netgear(ip: str) -> dict:

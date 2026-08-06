@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import SacnUniverses from '../components/SacnUniverses';
 import PortTable from '../components/PortTable';
+import SwitchPortTable from '../components/SwitchPortTable';
+import UplinkLine from '../components/UplinkLine';
 import { parseUtc, timeAgo } from '../utils/timeAgo';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -181,7 +183,7 @@ function MetaCell({ label, value }) {
   );
 }
 
-function DeviceDetail({ device, locations, onUpdate }) {
+function DeviceDetail({ device, devices, locations, onUpdate }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelVal, setLabelVal] = useState('');
   const [notesVal, setNotesVal] = useState('');
@@ -263,6 +265,8 @@ function DeviceDetail({ device, locations, onUpdate }) {
         </div>
       </div>
 
+      <UplinkLine device={device} />
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
         <MetaCell label="MAC ADDRESS" value={device.macAddress} />
         <MetaCell label="DEVICE TYPE" value={device.deviceType === 'swisson' ? `Swisson${vd.model ? ` ${vd.model}` : ''}` : (vd.model || device.deviceType)} />
@@ -305,6 +309,7 @@ function DeviceDetail({ device, locations, onUpdate }) {
       )}
 
       <PortTable device={device} />
+      <SwitchPortTable device={device} devices={devices} />
 
       <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 4 }}>NOTES</div>
@@ -661,7 +666,7 @@ export default function NetworkMonitor() {
         />
         <div style={{ flex: 1, overflow: 'auto' }}>
           {selectedDevice
-            ? <DeviceDetail device={selectedDevice} locations={locationsWithDevices} onUpdate={updateDevice} />
+            ? <DeviceDetail device={selectedDevice} devices={devices} locations={locationsWithDevices} onUpdate={updateDevice} />
             : (
               // With no device selected this pane used to be an empty prompt.
               // The live sACN table is always relevant and needs no selection,
