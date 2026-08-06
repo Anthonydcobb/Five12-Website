@@ -226,7 +226,11 @@ def _parse_ports(soup) -> list:
             'trunk': trunk,
             'color': _rgb_to_hex(swatch.get('style') if swatch else None),
         })
-    out.sort(key=lambda p: p['port'])
+    # Returned in DOM order, NOT sorted. _merge_popovers has to see the order
+    # the document actually emitted, because that is the only thing tying a
+    # popover to a port. Sorting here would make its ascending-order check a
+    # tautology -- it would be comparing a sorted list against itself and
+    # could never refuse. parse_snapshot sorts after the merge instead.
     return out
 
 
@@ -276,7 +280,8 @@ def _merge_popovers(soup, ports: list) -> bool:
     The ONLY thing associating a popover with a port is document order --
     popovers live in a detached container at the end of the body, not inside
     the ports they describe. So the association is accepted only when the two
-    counts match exactly AND the ports are in ascending order. On any mismatch
+    counts match exactly AND the ports arrived in ascending DOM order. On any
+    mismatch
     every popover-sourced field is dropped, and the caller surfaces that; the
     structurally-read fields from _parse_ports are unaffected because they
     never depended on ordering.
@@ -291,6 +296,10 @@ def _merge_popovers(soup, ports: list) -> bool:
     popovers = soup.select('.sakura-port-popover')
     if not popovers or len(popovers) != len(ports):
         return False
+    # `ports` is in DOM order here (see _parse_ports). If the document emitted
+    # port 2 before port 1 while the popovers kept the underlying order, zip()
+    # below would pair each port with its neighbour's popover -- silent, and
+    # exactly the failure this guard exists to prevent. Refuse instead.
     if [p['port'] for p in ports] != sorted(p['port'] for p in ports):
         return False
     for port, node in zip(ports, popovers):
@@ -320,4 +329,6 @@ def parse_snapshot(html: str) -> dict:
         data['portCount'] = len(ports)
         data['activePorts'] = sum(1 for p in ports if p['linkUp'])
         data['netgearPortHostsAvailable'] = _merge_popovers(soup, ports)
+        # Sorted only after the merge, so the guard above judged real DOM order.
+        ports.sort(key=lambda p: p['port'])
     return data

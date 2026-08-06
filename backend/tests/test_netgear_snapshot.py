@@ -207,3 +207,48 @@ def test_non_string_input_returns_empty_rather_than_raising():
     reachable from outside. It must refuse, not raise."""
     for bad in (None, 5, {'html': 'x'}, ['<html>'], b'<html>'):
         assert parse_snapshot(bad) == {}
+
+
+def _synthetic_page(first_port, second_port):
+    """Two ports and two popovers, emitted in the given DOM order.
+
+    Deliberately synthetic rather than fixture-derived: the real capture emits
+    ports in ascending order, so it cannot exercise this path at all.
+    """
+    def port(n):
+        return (f'<div class="sakura-port-lan"><div class="lan-content">'
+                f'<div class="lan-three"><div class="lan-font">{n}</div>'
+                f'</div></div></div>')
+
+    def popover(ip):
+        return (f'<div class="sakura-port-popover"><div class="port-item">'
+                f'<div class="item-label">IP Address :</div>'
+                f'<div class="flex-item">{ip}</div></div></div>')
+
+    return ('<html><body>'
+            + port(first_port) + port(second_port)
+            + popover(f'10.0.0.{first_port}') + popover(f'10.0.0.{second_port}')
+            + '</body></html>')
+
+
+def test_ascending_dom_order_merges_hosts():
+    parsed = parse_snapshot(_synthetic_page(1, 2))
+    by_num = {p['port']: p for p in parsed['netgearPorts']}
+    assert parsed['netgearPortHostsAvailable'] is True
+    assert by_num[1]['ip'] == '10.0.0.1'
+    assert by_num[2]['ip'] == '10.0.0.2'
+
+
+def test_out_of_order_dom_refuses_the_merge():
+    """Ports emitted 2-then-1, popovers in that same order, counts matching.
+
+    _parse_ports must return DOM order so _merge_popovers can see it is not
+    ascending and refuse. If _parse_ports sorted first, the guard would compare
+    a sorted list against itself, accept, and zip would give port 1 the popover
+    describing port 2 -- silent misattribution of a connected device.
+    """
+    parsed = parse_snapshot(_synthetic_page(2, 1))
+    assert parsed['netgearPortHostsAvailable'] is False
+    assert all('ip' not in p for p in parsed['netgearPorts'])
+    # Output is still presented in ascending order despite DOM order.
+    assert [p['port'] for p in parsed['netgearPorts']] == [1, 2]
