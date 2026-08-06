@@ -295,6 +295,26 @@ ports, and on port 12 `73 devices behind this port` with four names and
 (universes 21 / 44 / 91 …) and **no** switch-port table, and correctly picks up
 a hedged uplink line of its own. Stardust and the Devices tab are untouched.
 
+**The freshness gate, added after the final review.** The original design let
+`/uplink` state attachment with no timestamp at all — while the switch-side
+pane, reading the *same* stored map, honestly showed its age. Since a dark
+switch keeps its map frozen in the database indefinitely (that is deliberate:
+the sweep's carry-forward is what stops a single flap erasing a good map), the
+line would have gone on confidently naming a port forever. It now carries
+`switchPortsAsOf` end to end, prints the age, and requires **both**
+`deviceCount === 1` **and** a fresh stamp before it will say "on". A missing,
+future-dated, or stale timestamp all fall to the hedged wording.
+
+`STALE_MS` is 1,200,000 ms, derived from the real sweep cycle rather than a
+guess: `DISCOVERY_INTERVAL` is 300s but the scanner *sleeps it after* each
+sweep, and the sweep itself is ~165s, so consecutive stamps for one switch can
+legitimately sit ~630s apart on healthy gear. A tighter bound would have fired
+the "switch has not reported" warning routinely on working hardware, which
+trains an operator to ignore it — disarming the very warning it exists to give.
+
+Confirmed on the rig after the change: `on Luminex (CARL) · Port 5 · as of 5m
+ago`, and no negative durations anywhere.
+
 **One consequence worth knowing.** `/uplink` reads *stored* maps, so
 immediately after deploying this it answers `found: false` for everything until
 the first sweep completes — up to 300 seconds, or one press of **Scan Now**.
