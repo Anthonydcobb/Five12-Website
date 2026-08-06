@@ -151,6 +151,13 @@ Parsed output merges into the existing `vendorData` blob on `NetworkDevice`,
 stamped `snapshotAsOf` (naive-UTC ISO via `_utc_iso`, matching every other
 timestamp in this module) and `source: 'html-snapshot'`.
 
+Switch ports are stored under **`switchPorts`**, never `ports`. `PortTable`
+renders whenever `vendorData.ports` is non-empty, and
+`/api/network/devices/<mac>/ports` re-reads that same key live via
+`read_port_status`. Writing switch ports to `ports` would render a DMX
+universe/protocol table for every switch, and point a DMX node endpoint at a
+switch's IP. Profiles are stored under `profiles`.
+
 Precedence between the snapshot and SNMP:
 
 - SNMP wins for any field it actually returns — `model`, `firmware`,
