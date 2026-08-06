@@ -55,6 +55,7 @@ STORED_PORTS = [
     {'port': 2, 'universe': 42, 'protocol': 'sACN', 'direction': 'Output', 'status': 'OK'},
 ]
 STORED_AS_OF = '2026-08-05T18:00:00Z'
+STORED_FIRMWARE = 'V01.05.9.old'
 
 
 class _Resp:
@@ -83,6 +84,13 @@ def _both_up(url, **kwargs):
     return _Resp(MODEL_STATUS)
 
 
+def _status_up_device_down(url, **kwargs):
+    """The mirror incident: /model/status answers, /model/device times out."""
+    if url.endswith('/model/status'):
+        return _Resp(MODEL_STATUS)
+    raise OSError('timed out')
+
+
 @pytest.fixture
 def node(db):
     row = NetworkDevice(
@@ -90,8 +98,8 @@ def node(db):
         device_type='acpd',
         last_ip=ACPD_IP,
         last_seen=datetime.utcnow(),
-        vendor_data={'model': 'PDXND-4-1', 'ports': STORED_PORTS,
-                     'portsAsOf': STORED_AS_OF},
+        vendor_data={'model': 'PDXND-4-1', 'firmware': STORED_FIRMWARE,
+                     'ports': STORED_PORTS, 'portsAsOf': STORED_AS_OF},
     )
     db.session.add(row)
     db.session.commit()
@@ -158,3 +166,27 @@ def test_a_node_that_never_had_a_patch_gains_no_ports_key(app, db):
     finally:
         db.session.delete(row)
         db.session.commit()
+
+
+def test_a_device_endpoint_miss_does_not_erase_the_stored_model_fields(app, db, node):
+    """The mirror of the regression above: /model/device times out while
+    /model/status answers. The first fix carried only `ports` forward, so
+    this direction was still a wholesale `device.vendor_data = vendor_data`
+    that deleted model/firmware/hwVersion/portCount/longName from a node that
+    is up and pingable — FIRMWARE and HW VERSION went blank, and a
+    first-seen node in this window got stuck labelled "ACPD" forever, never
+    "ACPD PDXND-4-1", because the auto-label branch only fires once."""
+    with patch('app.vendors.requests.get', side_effect=_status_up_device_down) as get:
+        _process_discovered_device(ACPD_IP, ACPD_MAC, None, app)
+
+    urls = [c.args[0] for c in get.call_args_list]
+    assert any(u.endswith('/model/device') for u in urls)
+    assert any(u.endswith('/model/status') for u in urls)
+
+    db.session.refresh(node)
+    # The stored model/firmware survive the /model/device miss.
+    assert node.vendor_data['model'] == 'PDXND-4-1'
+    assert node.vendor_data['firmware'] == STORED_FIRMWARE
+    # The half that DID answer still lands, with a fresh timestamp.
+    assert [p['universe'] for p in node.vendor_data['ports']] == [11, 12, 13, 14]
+    assert node.vendor_data['portsAsOf'] != STORED_AS_OF

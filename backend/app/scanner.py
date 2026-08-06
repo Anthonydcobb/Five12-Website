@@ -453,28 +453,39 @@ def _process_discovered_device(ip: str, mac: str, subnet_id: int, app) -> None:
         # the operator typed on it still attached.
         device.hidden = False
         if vendor_data:
-            # CHANGE: carry a stored patch forward when the fresh enrichment
-            # didn't bring one. `if vendor_data:` alone only protects against
-            # an enrichment that comes back COMPLETELY empty, and
+            # CHANGE: merge with the stored patch instead of replacing it
+            # outright. `if vendor_data:` alone only protects against an
+            # enrichment that comes back COMPLETELY empty, and
             # _enrich_model_device_api merges two independent GETs
             # (/model/device and /model/status) into one dict. A node that
             # answers the first and times out on the second — two requests 3s
             # apart to hardware that is also pushing DMX, so an ordinary event
-            # — returns a truthy dict with no `ports` key, and the wholesale
-            # assignment below then DELETED the last known patch of a node
-            # that is up and pingable. The panel rendered nothing at all, with
-            # no message, for 300s — or permanently while /model/status stayed
-            # down and /model/device stayed up.
+            # — returns a truthy dict missing whichever half didn't answer,
+            # and the wholesale assignment this used to be then DELETED the
+            # other half of the last known patch of a node that is up and
+            # pingable. A first fix carried `ports` forward when it alone was
+            # missing, but that only covered /model/status timing out — the
+            # mirror case (/model/device times out, /model/status answers)
+            # was still a wholesale assignment, so FIRMWARE, HW VERSION and
+            # PORTS-count went blank for 300s or permanently, DEVICE TYPE fell
+            # back to the raw `acpd` string, and a node discovered for the
+            # first time in that window was auto-labelled "ACPD" instead of
+            # "ACPD PDXND-4-1" — permanently, since the auto-label branch
+            # below only fires while `device.label` is still unset. A key
+            # absent from a fresh read means its endpoint failed, not that the
+            # value became empty, so a general merge — fresh keys win, absent
+            # keys fall back to what was already stored — subsumes the
+            # targeted carry-forward and keeps every field, not just `ports`,
+            # from being wiped by half a read.
             #
-            # `portsAsOf` moves with the ports it describes, never separately:
-            # preserving a patch while letting its timestamp advance would
-            # relabel an old reading as a recent one, which is the same lie in
-            # the other direction.
+            # `portsAsOf` still moves with the `ports` it describes, never
+            # separately: the two are only ever written together (see
+            # read_port_status), so an old `ports` can never survive paired
+            # with a fresher `portsAsOf` — preserving a patch while letting
+            # its timestamp advance would relabel an old reading as a recent
+            # one, which is the same lie in the other direction.
             prior = device.vendor_data or {}
-            if 'ports' not in vendor_data and prior.get('ports'):
-                vendor_data = {**vendor_data,
-                               'ports': prior['ports'],
-                               'portsAsOf': prior.get('portsAsOf')}
+            vendor_data = {**prior, **vendor_data}
             device.vendor_data = vendor_data
 
         # CHANGE: dropped the `is_new` guard. Auto-labelling only ever fired on

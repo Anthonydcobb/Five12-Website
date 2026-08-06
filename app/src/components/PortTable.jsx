@@ -42,6 +42,27 @@ export default function PortTable({ device }) {
     axios.get(`/api/network/devices/${device.macAddress}/ports`)
       .then(res => {
         if (cancelled) return;
+        // A stale backend can 404 this route into `index.html` — axios
+        // RESOLVES with that HTML string rather than rejecting, since it's a
+        // successful HTTP response. `res.data.live` is then undefined, which
+        // used to fall through to the same branch as a genuine `live: false`
+        // and render "node did not answer": blaming hardware that is working
+        // perfectly for a failure that is entirely ours. This repo has a
+        // documented habit of leaving stale backends running (see the
+        // comment in utils/timeAgo.js), so the trigger is real — mid-show,
+        // an operator walks to the rack to check a node with nothing wrong
+        // with it. A well-formed body is the only thing that can tell us the
+        // node actually answered; anything else is treated the same as the
+        // catch branch below — one wording for "our side failed", a
+        // different one for "the node failed".
+        const wellFormed = res.data && typeof res.data === 'object' && typeof res.data.live === 'boolean';
+        if (!wellFormed) {
+          setStale({
+            mac: device.macAddress,
+            value: { asOf: device.vendorData?.portsAsOf ?? null, refreshFailed: true },
+          });
+          return;
+        }
         if (res.data.ports?.length) {
           setPortsState({ mac: device.macAddress, ports: res.data.ports });
         }

@@ -193,7 +193,11 @@ def test_port_status_survives_an_unreachable_node():
 
 def test_port_status_ignores_a_body_without_ports():
     """A node answering some other JSON must yield {} rather than a KeyError,
-    so the caller's `if vendor_data:` guard keeps the last known patch."""
+    so the caller's carry-forward in `_process_discovered_device` keeps the
+    last known patch (pinned in `test_scanner_port_persistence.py`, not here
+    — this function cannot enforce it). The `if vendor_data:` guard alone is
+    not enough: {} is falsy and skips the assignment, but a dict that merely
+    lacks `ports` is truthy and would otherwise still wipe the stored patch."""
     with patch('app.vendors.requests.get', return_value=_Resp({'modelName': 'XND-8'})):
         assert vendors.read_port_status('10.31.8.51') == {}
 
@@ -299,7 +303,9 @@ def test_a_successful_read_stamps_when_it_happened():
 
 def test_a_failed_read_carries_no_timestamp():
     """{} on failure, not a timestamp attached to nothing — the scanner's
-    carry-forward keys off the absence of `ports`."""
+    carry-forward in `_process_discovered_device` merges this {} against the
+    stored patch, so an absent `portsAsOf` here means the prior one survives
+    untouched rather than being overwritten with nothing."""
     with patch('app.vendors.requests.get', side_effect=OSError('unreachable')):
         assert vendors.read_port_status('10.31.8.51') == {}
 

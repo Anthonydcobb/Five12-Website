@@ -86,14 +86,16 @@ describe('PortTable', () => {
   })
 
   // The SPA-fallback case (stale backend, the route 404s into index.html)
-  // does NOT land in the catch: axios resolves with an HTML string, so
-  // `res.data.live` is undefined and the node-did-not-answer banner shows.
-  // Pinned so the new catch-branch banner cannot quietly take it over.
-  it('shows the node-did-not-answer banner when the route falls through to index.html', async () => {
+  // does NOT land in the catch: axios resolves with an HTML string rather
+  // than rejecting, since it's a successful HTTP response. `res.data.live`
+  // is undefined, and the not-well-formed-body check now treats that as a
+  // refresh failure rather than a node failure — the node is fine, our
+  // backend is stale, and "node did not answer" would blame the wrong side.
+  it('shows the could-not-refresh banner when the route falls through to index.html', async () => {
     axios.get.mockResolvedValue({ data: '<!doctype html><div id="root"></div>' })
     render(<PortTable device={DEVICE} />)
-    expect(await screen.findByText(/node did not answer/)).toBeInTheDocument()
-    expect(screen.queryByText(/could not refresh/)).not.toBeInTheDocument()
+    expect(await screen.findByText(/could not refresh/)).toBeInTheDocument()
+    expect(screen.queryByText(/node did not answer/)).not.toBeInTheDocument()
     expect(screen.getByText('21')).toBeInTheDocument()
   })
 
