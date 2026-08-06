@@ -4,6 +4,9 @@ import SacnUniverses from '../components/SacnUniverses';
 import PortTable from '../components/PortTable';
 import SwitchPortTable from '../components/SwitchPortTable';
 import UplinkLine from '../components/UplinkLine';
+import NetgearPortTable from '../components/NetgearPortTable';
+import NetgearProfilesTable from '../components/NetgearProfilesTable';
+import SnapshotImportPanel from '../components/SnapshotImportPanel';
 import { parseUtc, timeAgo } from '../utils/timeAgo';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -183,7 +186,7 @@ function MetaCell({ label, value }) {
   );
 }
 
-function DeviceDetail({ device, devices, locations, onUpdate }) {
+function DeviceDetail({ device, devices, locations, onUpdate, onRefresh }) {
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelVal, setLabelVal] = useState('');
   const [notesVal, setNotesVal] = useState('');
@@ -277,6 +280,8 @@ function DeviceDetail({ device, devices, locations, onUpdate }) {
             so boot loader is shown separately rather than faked into it. */}
         <MetaCell label="BOOT" value={vd.bootVersion} />
         <MetaCell label="SERIAL" value={vd.serial} />
+        <MetaCell label="MGMT IP" value={vd.managementIp} />
+        <MetaCell label="TEMP" value={vd.tempC != null ? `${vd.tempC}°C` : null} />
         <MetaCell label="LAST SEEN" value={device.lastSeen ? timeAgo(device.lastSeen) : 'never'} />
       </div>
 
@@ -310,6 +315,9 @@ function DeviceDetail({ device, devices, locations, onUpdate }) {
 
       <PortTable device={device} />
       <SwitchPortTable device={device} devices={devices} />
+      <NetgearProfilesTable device={device} />
+      <NetgearPortTable device={device} />
+      <SnapshotImportPanel device={device} onImported={() => onRefresh?.(device.macAddress)} />
 
       <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1, marginBottom: 4 }}>NOTES</div>
@@ -539,6 +547,21 @@ export default function NetworkMonitor() {
     }
   };
 
+  // The import writes vendor_data server-side rather than through
+  // updateDevice's PATCH, so both the list and the selected-device copy have
+  // to be re-read. Without the second setState the panel keeps rendering the
+  // pre-import device object and the new tables never appear.
+  const refreshDevice = async (mac) => {
+    try {
+      const res = await axios.get('/api/network/devices');
+      setDevices(res.data);
+      setSelectedDevice(prev => res.data.find(
+        d => d.macAddress === (mac || prev?.macAddress)) || prev);
+    } catch (e) {
+      console.error('refresh device', e);
+    }
+  };
+
   const addSubnet = async (data) => {
     try {
       const res = await axios.post('/api/network/subnets', data);
@@ -666,7 +689,7 @@ export default function NetworkMonitor() {
         />
         <div style={{ flex: 1, overflow: 'auto' }}>
           {selectedDevice
-            ? <DeviceDetail device={selectedDevice} devices={devices} locations={locationsWithDevices} onUpdate={updateDevice} />
+            ? <DeviceDetail device={selectedDevice} devices={devices} locations={locationsWithDevices} onUpdate={updateDevice} onRefresh={refreshDevice} />
             : (
               // With no device selected this pane used to be an empty prompt.
               // The live sACN table is always relevant and needs no selection,
