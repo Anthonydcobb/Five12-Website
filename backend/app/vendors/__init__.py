@@ -299,6 +299,39 @@ def read_switch_ports(ip: str) -> dict:
     }
 
 
+def find_switch_port(mac: str, switches: list) -> dict | None:
+    """The closest switch port that has seen `mac`, with the count that says
+    how much that means.
+
+    A forwarding database records where a MAC was last seen, so a device shows
+    up behind every switch on its path. The port with the FEWEST devices
+    behind it is the closest — and only a count of exactly one proves direct
+    attachment. [MEASURED 2026-08-06] Bolero Antenna #1 resolves to a
+    one-device port and really is plugged there; Antenna #3's best candidate
+    is an uplink with 73 others, and it is plugged into something else
+    entirely. So the count is returned, always, and the caller words its
+    answer from it.
+
+    Pure: no I/O, no database, no SNMP. Give it the stored maps.
+    """
+    want = (mac or '').upper()
+    best = None
+    for sw in switches:
+        for port in sw.get('switchPorts') or []:
+            if want not in {m.upper() for m in port.get('macs') or []}:
+                continue
+            count = port.get('deviceCount', len(port.get('macs') or []))
+            if best is None or count < best['deviceCount']:
+                best = {
+                    'switchMac': sw.get('mac'),
+                    'switchLabel': sw.get('label'),
+                    'port': port.get('port'),
+                    'portName': port.get('name'),
+                    'deviceCount': count,
+                }
+    return best
+
+
 def _entity_field(ip: str, oid: str):
     """First non-empty value in an ENTITY-MIB column.
 
