@@ -177,6 +177,24 @@ def test_a_non_integer_fdb_value_yields_empty_not_an_exception():
         assert vendors.read_switch_ports('172.16.1.21') == {}
 
 
+def test_a_non_canonical_bp2if_key_yields_empty_not_an_exception():
+    """dot1dBasePortIfIndex keyed by something that IS int()-convertible but
+    doesn't round-trip through str(int(x)) == x — a leading zero like '05' —
+    used to pass the `by_port` construction (int('05') == 5 succeeds) but
+    then raise KeyError out of `bp2if[str(bridge_port)]` in the ports-build
+    loop, which sat outside the try/except. Genuine puresnmp walk output
+    always yields plain unsigned-decimal arcs, so this is a narrow case, but
+    the function's contract is 'returns {} on any failure' and this loop is
+    part of the same port-map derivation as the guarded block above it —
+    same failure class fixed for /model/status parsing in 7033761."""
+    odd_bp2if = {'05': 5}
+    with patch('app.vendors._snmp_walk_suffix', side_effect=lambda ip, oid: _fake_walks()(ip, oid)), \
+         patch('app.vendors._snmp_walk_map', side_effect=lambda ip, oid: (
+             odd_bp2if if oid == '1.3.6.1.2.1.17.1.4.1.2' else _fake_walks()(ip, oid)
+         )):
+        assert vendors.read_switch_ports('172.16.1.21') == {}
+
+
 def test_mac_from_oid_suffix_rejects_an_out_of_range_octet():
     """int('300') succeeds, so without an explicit range check this would
     format as '12C' and return a plausible-but-wrong MAC instead of being

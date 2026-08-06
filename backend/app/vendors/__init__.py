@@ -247,12 +247,18 @@ def read_switch_ports(ip: str) -> dict:
     if not bp2if:
         return {}
 
-    # A switch returning a bridge-port key or FDB value that isn't cleanly
-    # int()-convertible (malformed MIB response, an unexpected ASN.1 type
-    # from puresnmp, a firmware quirk) must not raise out of here — this runs
-    # inside the scanner's per-subnet sweep, and an uncaught ValueError/
-    # TypeError would abort the rest of that sweep, same failure class as the
-    # /model/status port-parsing bug fixed in 7033761.
+    # This guard covers the whole port-map derivation, not just `by_port`:
+    # a bridge-port key or FDB value that isn't cleanly int()-convertible
+    # (malformed MIB response, an unexpected ASN.1 type from puresnmp, a
+    # firmware quirk) must not raise out of here — this runs inside the
+    # scanner's per-subnet sweep, and an uncaught ValueError/TypeError would
+    # abort the rest of that sweep, same failure class as the /model/status
+    # port-parsing bug fixed in 7033761. The ports-build loop below was once
+    # a second, unguarded block: a `bp2if` key that is int-parseable but
+    # non-canonical (a leading zero like '05') passes `int()` in `by_port`
+    # but then misses the later `bp2if[str(bridge_port)]` lookup, raising
+    # KeyError. One guard over the whole derivation closes that gap instead
+    # of needing to stay in sync with a second try/except.
     try:
         by_port = {int(bp): [] for bp in bp2if}
         for suffix, bridge_port in fdb.items():
@@ -264,24 +270,24 @@ def read_switch_ports(ip: str) -> dict:
             mac = _mac_from_oid_suffix(suffix)
             if mac:
                 by_port[int(bridge_port)].append(mac)
+
+        ports = []
+        for bridge_port in sorted(by_port):
+            if_index = str(bp2if[str(bridge_port)])
+            raw = descr.get(if_index, b'')
+            name = (raw.decode('latin-1') if isinstance(raw, bytes) else str(raw))
+            # b'Port  1' -> 'Port 1'. The padding is the device's, not ours.
+            name = ' '.join(name.split()) or f'Port {bridge_port}'
+            macs = sorted(by_port[bridge_port])
+            ports.append({
+                'port': bridge_port,
+                'name': name,
+                'link': 'up' if oper.get(if_index) == 1 else 'down',
+                'macs': macs,
+                'deviceCount': len(macs),
+            })
     except Exception:
         return {}
-
-    ports = []
-    for bridge_port in sorted(by_port):
-        if_index = str(bp2if[str(bridge_port)])
-        raw = descr.get(if_index, b'')
-        name = (raw.decode('latin-1') if isinstance(raw, bytes) else str(raw))
-        # b'Port  1' -> 'Port 1'. The padding is the device's, not ours.
-        name = ' '.join(name.split()) or f'Port {bridge_port}'
-        macs = sorted(by_port[bridge_port])
-        ports.append({
-            'port': bridge_port,
-            'name': name,
-            'link': 'up' if oper.get(if_index) == 1 else 'down',
-            'macs': macs,
-            'deviceCount': len(macs),
-        })
 
     return {
         'switchPorts': ports,
