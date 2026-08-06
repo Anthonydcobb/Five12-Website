@@ -139,4 +139,54 @@ describe('PortTable', () => {
     }
     expect(snapshots.some(s => s.includes('199sACNOutputOK'))).toBe(true) // device B's row eventually commits
   })
+
+  // Finding 2 round 2 regression: `stale` is not tagged with the mac it
+  // belongs to, only `portsState` is. So when device A's check resolved
+  // live:false (banner showing) and the user then selects device B, the
+  // render that applies device B's props (before the effect commits) keeps
+  // device A's `stale` value while `portsState` has already fallen back to
+  // device B's own cached rows. That paints device B's fresh, never-queried
+  // rows underneath device A's "node did not answer" banner — the reviewer's
+  // Profiler probe captured this exact commit. A plain render/rerender test
+  // can't see it: act() flushes the corrective effect before assertions run,
+  // so the bug self-heals before it can be observed. Profiler captures every
+  // commit, including the intermediate one.
+  it('never commits a frame showing the previous device\'s stale banner over the new device\'s fresh rows', async () => {
+    const DEVICE_B = {
+      macAddress: 'AA:BB:CC:00:00:02',
+      vendorData: { model: 'XND-4', ports: [
+        { port: 1, universe: 99, protocol: 'sACN', direction: 'Output', status: 'OK' },
+      ] },
+    }
+    axios.get.mockImplementation((url) => {
+      if (url.includes(DEVICE.macAddress)) {
+        return Promise.resolve({ data: { live: false, ports: CACHED, asOf: null } })
+      }
+      return new Promise(() => {}) // device B's own check never resolves
+    })
+
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const snapshots = []
+    const onRender = () => { snapshots.push(container.textContent) }
+
+    const { rerender } = render(
+      <Profiler id="probe" onRender={onRender}><PortTable device={DEVICE} /></Profiler>,
+      { container }
+    )
+    // Let device A's live:false response resolve and commit the stale banner.
+    await waitFor(() => expect(container.textContent).toMatch(/node did not answer/))
+
+    snapshots.length = 0
+    rerender(
+      <Profiler id="probe" onRender={onRender}><PortTable device={DEVICE_B} /></Profiler>
+    )
+
+    expect(snapshots.length).toBeGreaterThan(0)
+    for (const snapshot of snapshots) {
+      const hasStaleBanner = snapshot.includes('node did not answer')
+      const hasDeviceBRow = snapshot.includes('199sACNOutputOK')
+      expect(hasStaleBanner && hasDeviceBRow).toBe(false)
+    }
+  })
 })

@@ -16,17 +16,26 @@ export default function PortTable({ device }) {
   // device's own cached patch whenever the tag disagrees, so a stale row
   // is never committed even for one frame.
   const [portsState, setPortsState] = useState({ mac: device.macAddress, ports: cached || [] });
-  // null = hide the banner. Otherwise { asOf } — asOf may itself be null
-  // when the backend has no recorded last-seen time; that must still
-  // render the banner, never collapse back to the hidden state.
-  const [stale, setStale] = useState(null);
+  // Tagged the same way as `portsState` above, and for the same reason:
+  // DeviceDetail renders this component without a `key`, so on the render
+  // that applies a newly-selected device's props (before the effect below
+  // has committed), `stale` would otherwise still hold the OUTGOING
+  // device's value. That paints the new device's fresh rows underneath the
+  // previous device's "node did not answer" banner — the inverse of the
+  // `portsState` bug, and the same feature-spec violation: presenting data
+  // as something it is not, just in the other direction (fresh data shown
+  // as stale instead of stale data shown as current).
+  // `stale.value` is null to hide the banner, otherwise { asOf } — asOf may
+  // itself be null when the backend has no recorded last-seen time; that
+  // must still render the banner, never collapse back to the hidden state.
+  const [stale, setStale] = useState({ mac: device.macAddress, value: null });
 
   useEffect(() => {
     // Paint the cached patch immediately on selection, then correct it. The
     // stored copy comes from the 300s sweep, so it is exactly what is wrong
     // while somebody is repatching the node in front of you.
     setPortsState({ mac: device.macAddress, ports: device.vendorData?.ports || [] });
-    setStale(null);
+    setStale({ mac: device.macAddress, value: null });
     if (!device.vendorData?.ports?.length) return;
 
     let cancelled = false;
@@ -41,7 +50,7 @@ export default function PortTable({ device }) {
         // back with it. Collapsing a missing/null asOf to the same "hide
         // the banner" sentinel as live:true would present a stale patch
         // as current, which is exactly what this feature must not do.
-        setStale(res.data.live ? null : { asOf: res.data.asOf ?? null });
+        setStale({ mac: device.macAddress, value: res.data.live ? null : { asOf: res.data.asOf ?? null } });
       })
       // Keep showing the cached patch. A failed refresh is not a reason to
       // throw away the last thing we knew.
@@ -55,18 +64,23 @@ export default function PortTable({ device }) {
   // before the effect has run), fall back to this device's own cached
   // patch rather than the previous device's live/cached rows.
   const ports = portsState.mac === device.macAddress ? portsState.ports : cached;
+  // Same fallback for `stale`: if the tag doesn't match the current device,
+  // the previous device's stale/live status tells us nothing about this
+  // one, so hide the banner rather than mislabel a freshly-selected,
+  // not-yet-queried device as one that failed to answer.
+  const staleValue = stale.mac === device.macAddress ? stale.value : null;
 
   return (
     <div style={{ background: 'var(--color-surface)', borderRadius: 4, padding: 8, marginBottom: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 4 }}>
         <div style={{ color: 'var(--color-text-muted)', fontSize: 11, letterSpacing: 1 }}>PORTS</div>
-        {stale !== null && (
+        {staleValue !== null && (
           <div style={{ color: 'var(--color-warn)', fontSize: 10 }}>
             {/* `timeAgo(null)` returns 'never', which is wrong here: the
                 node did answer at some point (that's how we have a cached
                 patch) — we just don't have a recorded last-seen time for
                 it. Say so honestly instead of inventing or implying one. */}
-            node did not answer · {stale.asOf ? `as of ${timeAgo(stale.asOf)}` : 'time unknown'}
+            node did not answer · {staleValue.asOf ? `as of ${timeAgo(staleValue.asOf)}` : 'time unknown'}
           </div>
         )}
       </div>
