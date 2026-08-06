@@ -2,6 +2,14 @@ import logging
 import re
 import requests
 import subprocess
+from datetime import datetime
+
+# `_utc_iso` is the repo's one serializer for a naive-UTC instant (trailing Z,
+# never a bare offset-less string — see its docstring for the 4h-in-the-future
+# bug that motivated it). No cycle: `models` imports only `db` from the package
+# root, and nothing in `models` or the package root imports `vendors` — every
+# caller of this module imports it lazily inside a function.
+from ..models import _utc_iso
 
 try:
     import puresnmp
@@ -270,27 +278,127 @@ def _enrich_ubiquiti(ip: str) -> dict:
     return {}
 
 
+# /model/status enum codes, decoded ONLY where a value has actually been seen
+# on hardware or confirmed by the operator. [VERIFIED 2026-08-05] all 68 ports
+# across one XND-8 and 15 PDXND-4-1s read status 3 / direction 1 / protocol 2,
+# so there is no second sample of any of these fields anywhere on the rig.
+# Art-Net's protocol code is operator-confirmed, not observed.
+#
+# Do NOT add speculative entries. An unmapped code renders as 'code N', which
+# is what will surface the real value the first time a port is set to input,
+# disabled, or loses signal.
+_PORT_PROTOCOL = {1: 'Art-Net', 2: 'sACN'}
+_PORT_DIRECTION = {1: 'Output'}
+_PORT_STATUS = {3: 'OK'}
+
+
+def _port_enum(table: dict, code) -> str:
+    """Decoded label for `code`, or the literal 'code N' when unmapped."""
+    return table.get(code, f'code {code}')
+
+
+# The universe a port outputs is the column an operator is actually reading —
+# it is the answer to "which port is feeding this rig". A node that omits it
+# used to pass None straight through, and PortTable renders null as nothing, so
+# the cell went BLANK. A blank cell is unreadable in exactly the wrong way: it
+# looks like a rendering fault, or like universe 0, or like the row is still
+# loading. Same principle as the 'code N' convention one function up — never
+# blank, never guessed — applied to the value rather than to an enum.
+_UNIVERSE_UNREPORTED = 'not reported'
+
+
+def _port_universe(value):
+    """The universe as the node reported it, or a visible 'not reported'."""
+    return _UNIVERSE_UNREPORTED if value is None else value
+
+
+def read_port_status(ip: str) -> dict:
+    """Per-port universe/protocol/direction/status from /model/status.
+
+    Served identically by the Swisson XND-8 (8 ports) and the ACPD PDXND-4-1
+    (4 ports) — the same shared contract as /model/device. Array index is the
+    port number, zero-based, so it is reported here 1-based.
+
+    Note /model/port is NOT a per-port endpoint: it ignores ?index=, ?port=
+    and ?portIndex=, always returns one record, and reports a protocol that
+    contradicts this one. Do not cross-reference the two.
+
+    Returns {} on any failure, so the scanner's carry-forward in
+    `_process_discovered_device` leaves a previously stored patch intact — one
+    missed poll must not erase it.
+
+    A successful read is stamped with `portsAsOf`. That timestamp is the whole
+    point: it rides into vendor_data on the sweep at no cost, and it is the
+    ONLY honest provenance for the patch. NetworkDevice.last_seen cannot stand
+    in for it — the 20s keep-alive re-probe refreshes last_seen without
+    enriching at all, so a node whose HTTP stack is wedged but which still
+    answers ping would otherwise show an hours-old patch under a 10s-old
+    timestamp, and somebody can repatch that node from its front panel inside
+    that window.
+    """
+    try:
+        r = requests.get(f'http://{ip}/model/status', timeout=3)
+        if r.status_code != 200:
+            return {}
+        ports = r.json().get('ports')
+    except Exception:
+        return {}
+    if not isinstance(ports, list) or not ports:
+        return {}
+    # A node answering HTTP 200 with a `ports` array does not guarantee each
+    # element is a well-formed port object. A non-dict element raises
+    # AttributeError on `p.get(...)`, and an unhashable enum value (a list or
+    # dict where an int code is expected) raises TypeError from
+    # `table.get(code, ...)`. Either used to escape uncaught, propagate out of
+    # enrich_device, and abort the rest of that subnet's sweep — including its
+    # stale-device prune — every cycle until the node was fixed. Per-port
+    # parsing is best-effort like the request above it: any failure here is
+    # just as much "this node can't be trusted right now" as a timeout is.
+    try:
+        parsed = [
+            {
+                'port': i + 1,
+                'universe': _port_universe(p.get('universe')),
+                'protocol': _port_enum(_PORT_PROTOCOL, p.get('protocol')),
+                'direction': _port_enum(_PORT_DIRECTION, p.get('direction')),
+                'status': _port_enum(_PORT_STATUS, p.get('status')),
+            }
+            for i, p in enumerate(ports)
+        ]
+    except Exception:
+        return {}
+    # Stamped only on the success path, so `portsAsOf` can never appear
+    # without the `ports` it describes.
+    return {'ports': parsed, 'portsAsOf': _utc_iso(datetime.utcnow())}
+
+
 def _enrich_model_device_api(ip: str) -> dict:
     """Read the /model/device report served by Swisson and ACPD nodes alike.
 
     Named for the contract rather than a vendor, because two vendors' hardware
     answers it with identical field names. portCount is derived from the RDM
     UID list — a PDXND-4-1 reports four, one per DMX port.
+
+    /model/status is read alongside it for the per-port patch. The two are
+    merged independently: a node that answers one and not the other still
+    contributes what it has.
     """
+    data = {}
     try:
         r = requests.get(f'http://{ip}/model/device', timeout=3)
         if r.status_code == 200:
-            data = r.json()
-            return {
-                'model': data.get('modelName'),
-                'firmware': data.get('swVersionStr'),
-                'hwVersion': data.get('hwVersionStr'),
-                'portCount': len(data.get('uids', [])),
-                'longName': data.get('longArtNetName'),
+            body = r.json()
+            data = {
+                'model': body.get('modelName'),
+                'firmware': body.get('swVersionStr'),
+                'hwVersion': body.get('hwVersionStr'),
+                'portCount': len(body.get('uids', [])),
+                'longName': body.get('longArtNetName'),
             }
     except Exception:
         pass
-    return {}
+    data.update(read_port_status(ip))
+    return data
 
 
 def _enrich_starlink(ip: str) -> dict:

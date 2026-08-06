@@ -2,7 +2,7 @@ import ipaddress
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from . import db
-from .models import NetworkSubnet, NetworkDevice, LocationSnapshot, LocationDevice
+from .models import NetworkSubnet, NetworkDevice, LocationSnapshot, LocationDevice, _utc_iso
 from .scanner import validate_sweep_hints
 
 net = Blueprint('network', __name__, url_prefix='/api/network')
@@ -194,6 +194,58 @@ def update_device(mac):
         device.notes = data['notes']
     db.session.commit()
     return jsonify(device.to_dict())
+
+
+@net.get('/devices/<mac>/ports')
+def device_ports(mac):
+    """Per-port patch for a DMX node, read live, falling back to the sweep.
+
+    Enrichment only runs on the 300s discovery sweep, so the stored copy can be
+    five minutes behind — and it is out of date at exactly the moment an
+    operator is repatching the node and looking at this panel. So the node is
+    re-read on demand.
+
+    Strictly read-only: it never writes vendor_data. A live value that
+    disagrees with the stored one is not evidence the sweep was wrong, and
+    writing here would race the scanner.
+    """
+    from . import vendors
+
+    device = db.session.get(NetworkDevice, mac)
+    if device is None:
+        return jsonify({'error': 'not found'}), 404
+
+    if device.last_ip:
+        live = vendors.read_port_status(device.last_ip)
+        if live.get('ports'):
+            # A live read has a well-defined "as of": right now. Always
+            # returning asOf keeps the shape identical to the fallback
+            # branch below instead of leaving consumers to treat a missing
+            # key and an explicit null as two different kinds of "no value".
+            return jsonify({
+                'ports': live['ports'],
+                'live': True,
+                'asOf': _utc_iso(datetime.utcnow()),
+            })
+
+    # CHANGE: asOf is the stored `portsAsOf` — the moment /model/status was
+    # last read successfully — not `last_seen`. last_seen tracks ICMP
+    # liveness: quick_reprobe refreshes it every 20s and explicitly does NOT
+    # enrich (pinned by test_reprobe_never_sweeps_or_enriches). Returning it
+    # here presented the ping clock as the patch's provenance, so a node whose
+    # HTTP stack is wedged but which still answers ping showed an hours-old
+    # patch labelled "as of 10s ago" — and somebody can repatch that node from
+    # its front panel while the operator believes the table.
+    #
+    # Rows swept before this change carry no portsAsOf, so this is None for
+    # them; the panel degrades to "time unknown", which is the truth. No
+    # migration — the next sweep of a reachable node fills it in.
+    stored = device.vendor_data or {}
+    return jsonify({
+        'ports': stored.get('ports') or [],
+        'live': False,
+        'asOf': stored.get('portsAsOf'),
+    })
 
 
 @net.delete('/devices/<mac>')
