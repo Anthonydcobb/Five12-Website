@@ -2,7 +2,7 @@
 
 - **Date:** 2026-08-05
 - **Author:** Claude Code, with Anthony
-- **Status:** design approved, not implemented
+- **Status:** implemented 2026-08-05, verified on the rig — see Verification below
 - **Scope:** Network tab only. The Devices tab and the Stardust output cards are
   explicitly out of scope and unchanged.
 
@@ -69,7 +69,15 @@ matching the GUI screenshot taken at the same moment.
 **The ACPD PDXND-4-1 serves the identical contract**, four entries instead of
 eight — confirmed against all 15 units (`10.9.15.101`–`.114` and `.121`). This
 mirrors `/model/device`, which `_enrich_model_device_api` already shares between
-the two vendors for exactly this reason. One reader covers 16 devices.
+the two vendors for exactly this reason.
+
+> **Corrected 2026-08-05 after implementation.** This section originally said
+> "one reader covers 16 devices", from a survey that had seen only one Swisson
+> plus the ACPD rack. The first full sweep on the shipped code found **29
+> nodes, 168 ports**: 13 × XND-8, 1 × **XND-4** (`10.31.2.46`, same contract,
+> four ports — a model the survey never saw), and 15 × PDXND-4-1. The reader's
+> coverage is nearly twice what was designed for, at no extra cost, because
+> the contract is shared rather than per-model.
 
 ### Endpoints checked
 
@@ -87,9 +95,12 @@ cross-reference the two.
 
 ### Enum decoding, and its limits
 
-Every one of the **68 ports across all 16 reachable nodes reads
+Every one of the **168 ports across all 29 reachable nodes reads
 `status:3, direction:1, protocol:2`.** The rig offers no second sample of any of
-the three fields. Confirmed meanings:
+the three fields. (The original survey said 68 ports across 16 nodes; the full
+sweep after implementation raised the count without turning up a single new
+code, so the conclusion below rests on more evidence than it did, not less.)
+Confirmed meanings:
 
 | Field | Code | Meaning | Evidence |
 |---|---|---|---|
@@ -212,6 +223,35 @@ pattern):
 - Renders nothing when the device has no `ports`.
 - Stale marker appears on `live: false`.
 - A `code N` status renders the raw string, not a blank cell.
+
+## Verification
+
+> **Run 2026-08-05 — `verified on actual gear`.**
+
+- The reader was exercised against 8 real nodes directly, including the XND-4
+  and one unreachable address (`10.0.0.95`), which correctly yielded `{}`.
+- `GET /api/network/devices/28:36:38:C0:39:C0/ports` returned `live: true` with
+  all 8 ports; the ACPD at `10.9.15.101` returned `live: true` with 4.
+- A full discovery sweep populated `vendor_data.ports` on **29 nodes**.
+- In the running app, the Swisson XND-8 detail pane rendered 8 rows —
+  universes 21 / 42 / 91 / 104 / 44 / 41 / 41 / 1, matching the node's own web
+  GUI — and the ACPD rendered 4. Status cells green, no stale banner, no
+  console errors.
+- Regression check: a Stardust unit still shows `UNIVERSES OUTPUTTING` with
+  "None reported" and its Art-Net note, and renders **no** port table.
+
+**One consequence worth knowing.** The panel renders only for a device that
+already has `vendor_data.ports`, so immediately after deploying this, no node
+shows a table until the next discovery sweep — up to 300 seconds, or one press
+of **Scan Now**. This follows from painting the cached patch before the live
+one, and is the intended trade: an operator never sees an empty box flash
+before data arrives.
+
+**The stale-backend trap this caught.** Before the restart, the running backend
+predated these commits, so the new route 404'd into the SPA fallback while the
+device itself answered fine on the same machine. The test suite was fully green
+throughout. That gap between "the tests pass" and "the app can do it" is why
+this verification step exists as a task rather than an afterthought.
 
 ## Open question, deliberately left open
 
