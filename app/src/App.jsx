@@ -40,12 +40,12 @@ export default function App() {
             <Route path="/labels" element={<LabelsPage />} />
             <Route path="/network" element={<NetworkMonitor />} />
             <Route path="/devices" element={<Devices />} />
-            {/* Restored 2026-08-06. NodesPage.jsx existed on disk but was
-                never imported or routed, so its Swisson XND port-config UI
-                was unreachable even though the backend behind it
-                (/api/nodes/scan and /api/nodes/<ip>/config) was live and
-                working. Found while removing the dead GigaCore config path
-                from the same page. */}
+            {/* Restored 2026-08-06 for its network scanner, which is the
+                working half of this page: ARP cache, Ubiquiti UDP discovery,
+                HTTP probes, reverse DNS and health checks over /api/nodes/scan.
+                Its port-config UI and the /api/nodes/<ip>/config routes behind
+                it were removed the same day — both were written against HTTP
+                contracts that do not exist on this hardware. */}
             <Route path="/nodes" element={<NodesPage />} />
             <Route path="/ip-config" element={<IPConfig />} />
           </Routes>
