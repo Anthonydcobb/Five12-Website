@@ -78,37 +78,18 @@ function HealthPanel({ health, elapsed, total }) {
 }
 
 // ── Device card (lighting nodes + Ubiquiti) ───────────────────────────────────
-function DeviceCard({ device, onConfigure, selected }) {
+function DeviceCard({ device }) {
   const m = typeMeta(device.type);
+  // Cards no longer have a selected state: selection existed only to open the
+  // config panel, which is gone. The hover colours stay — they still tell you
+  // what kind of device you are pointing at.
   const colorMap = {
-    cyan:  selected ? 'border-cyan-500'  : 'border-gray-700 hover:border-cyan-700',
-    green: selected ? 'border-green-500' : 'border-gray-700 hover:border-green-700',
-    blue:  selected ? 'border-blue-500'  : 'border-gray-700 hover:border-blue-400',
-    amber: selected ? 'border-amber-500' : 'border-gray-700 hover:border-amber-700',
-    gray:  selected ? 'border-gray-500'  : 'border-gray-700',
+    cyan:  'border-gray-700 hover:border-cyan-700',
+    green: 'border-gray-700 hover:border-green-700',
+    blue:  'border-gray-700 hover:border-blue-400',
+    amber: 'border-gray-700 hover:border-amber-700',
+    gray:  'border-gray-700',
   };
-  // NOTHING is configurable from this page today, and the button is gone
-  // rather than disabled — a greyed-out control still reads as "this will work
-  // once you find the right credentials", which is not true for any device
-  // here. [VERIFIED on the rig 2026-08-06:]
-  //
-  //   GigaCore — an Ethernet switch. Twelve RJ45 ports, no DMX, so there is no
-  //   universe to set. Its backend branch was removed.
-  //
-  //   Swisson XND — genuinely has DMX ports with universes, but the backend
-  //   read scraped `port_N_universe value="..."` out of the device's HTML,
-  //   and the XND is a JS app that renders from /model/* — the values were
-  //   never in the markup. It returns {} every time. The write POSTed a form
-  //   to http://<ip>/config, which answers 404. Both were written against
-  //   guessed contracts; their own docstrings said "verify first".
-  //
-  // The scan above is the working half of this page and is worth having on its
-  // own. Reading a Swisson's ports IS solved — /model/status, which is what
-  // the Network tab's DMX table already runs on. Writing one is the open
-  // problem, and it is a write to a live DMX node, so it needs designing
-  // rather than a guessed form POST.
-  const canConfigure = false;
-
   return (
     <div className={`bg-gray-800 border rounded-lg p-4 transition-colors ${colorMap[m.color]}`}>
       <div className="flex items-start justify-between gap-2 mb-2">
@@ -143,18 +124,6 @@ function DeviceCard({ device, onConfigure, selected }) {
         </p>
       )}
 
-      {canConfigure && (
-        <button
-          onClick={() => onConfigure(device)}
-          className={`mt-3 w-full py-1.5 rounded text-sm font-medium transition-colors ${
-            selected
-              ? 'bg-blue-600 hover:bg-blue-500 text-white'
-              : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-          }`}
-        >
-          {selected ? 'Configuring…' : 'Configure'}
-        </button>
-      )}
     </div>
   );
 }
@@ -177,212 +146,13 @@ function HostRow({ device }) {
   );
 }
 
-// ── Config panel (GigaCore / Swisson) ─────────────────────────────────────────
-function CredRow({ creds, onChange }) {
-  return (
-    <div className="flex gap-2 items-center mt-2">
-      <input value={creds.user} onChange={e => onChange({ ...creds, user: e.target.value })}
-        placeholder="username"
-        className="w-28 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-blue-500" />
-      <input type="password" value={creds.pass} onChange={e => onChange({ ...creds, pass: e.target.value })}
-        placeholder="password"
-        className="w-28 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-blue-500" />
-    </div>
-  );
-}
-
-function PortRow({ port, editing, onEdit, onSave, saving }) {
-  const [universe,  setUniverse]  = useState(String(port.universe  ?? ''));
-  const [protocol,  setProtocol]  = useState(port.protocol  ?? 'sacn');
-  const [mergeMode, setMergeMode] = useState(port.mergeMode ?? 'htp');
-
-  if (editing) return (
-    <tr className="border-b border-gray-700 last:border-0 bg-gray-900/40">
-      <td className="py-2 px-3 text-gray-400 font-mono text-sm w-14">P{port.port}</td>
-      <td className="py-2 px-3">
-        <input value={universe} onChange={e => setUniverse(e.target.value)}
-          className="w-20 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-blue-500" />
-      </td>
-      <td className="py-2 px-3">
-        <select value={protocol} onChange={e => setProtocol(e.target.value)}
-          className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
-          <option value="sacn">sACN</option>
-          <option value="artnet">Art-Net</option>
-        </select>
-      </td>
-      <td className="py-2 px-3">
-        <select value={mergeMode} onChange={e => setMergeMode(e.target.value)}
-          className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-500">
-          <option value="htp">HTP</option>
-          <option value="ltp">LTP</option>
-        </select>
-      </td>
-      <td className="py-2 px-3 flex gap-1">
-        <button onClick={() => onSave(port.port, { universe: parseInt(universe,10)||1, protocol, mergeMode })}
-          disabled={saving}
-          className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded">
-          {saving ? '…' : 'Save'}
-        </button>
-        <button onClick={() => onEdit(null)} className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">Cancel</button>
-      </td>
-    </tr>
-  );
-
-  return (
-    <tr className="border-b border-gray-700 last:border-0">
-      <td className="py-2 px-3 text-gray-400 font-mono text-sm w-14">P{port.port}</td>
-      <td className="py-2 px-3 font-mono text-sm">{port.universe ?? '—'}</td>
-      <td className="py-2 px-3">
-        <span className={`text-xs px-1.5 py-0.5 rounded ${
-          String(port.protocol).toLowerCase().includes('sacn')
-            ? 'bg-purple-900/50 text-purple-300 border border-purple-700/40'
-            : 'bg-amber-900/50 text-amber-300 border border-amber-700/40'
-        }`}>{port.protocol || '—'}</span>
-      </td>
-      <td className="py-2 px-3 text-xs text-gray-400">{port.mergeMode || '—'}</td>
-      <td className="py-2 px-3">
-        <button onClick={() => onEdit(port.port)} className="text-xs px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded">Edit</button>
-      </td>
-    </tr>
-  );
-}
-
-function ConfigPanel({ node, onClose }) {
-  const [creds,    setCreds]    = useState({ user: 'admin', pass: 'admin' });
-  const [config,   setConfig]   = useState(null);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState(null);
-  const [editPort, setEditPort] = useState(null);
-  const [saving,   setSaving]   = useState(false);
-  const [saveErr,  setSaveErr]  = useState(null);
-  const [showRaw,  setShowRaw]  = useState(false);
-
-  const load = async () => {
-    setLoading(true); setError(null); setConfig(null);
-    try {
-      const { data } = await axios.get(`/api/nodes/${node.ip}/config`, {
-        params: { type: node.type, user: creds.user, pass: creds.pass },
-      });
-      setConfig(data);
-    } catch (e) {
-      setError(e.response?.data?.error || 'Failed to read config');
-    } finally { setLoading(false); }
-  };
-
-  const savePort = async (portId, values) => {
-    setSaving(true); setSaveErr(null);
-    try {
-      await axios.put(`/api/nodes/${node.ip}/config`, {
-        type: node.type, portId, ...values,
-        user: creds.user, pass: creds.pass, token: config?.token ?? '',
-      });
-      setEditPort(null);
-      load();
-    } catch (e) {
-      setSaveErr(e.response?.data?.error || 'Save failed');
-    } finally { setSaving(false); }
-  };
-
-  const ports = config?.ports ?? [];
-
-  return (
-    <div className="bg-gray-800 border border-blue-500 rounded-lg p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <h3 className="font-semibold">
-            <TypeBadge type={node.type} />
-            <span className="text-gray-400 font-mono text-sm ml-2">{node.ip}</span>
-          </h3>
-          {node.title && <p className="text-xs text-gray-500 mt-0.5">{node.title}</p>}
-        </div>
-        <button onClick={onClose} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
-      </div>
-
-      <div className="flex items-end gap-3 mb-4">
-        <div>
-          <span className="text-xs text-gray-500">Credentials</span>
-          <CredRow creds={creds} onChange={setCreds} />
-        </div>
-        <button onClick={load} disabled={loading}
-          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded text-sm mb-0.5">
-          {loading ? 'Reading…' : config ? 'Refresh' : 'Read Config'}
-        </button>
-      </div>
-
-      {error && (
-        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-xs rounded px-3 py-2 mb-3">
-          {error}
-        </div>
-      )}
-      {saveErr && (
-        <div className="bg-red-900/30 border border-red-700/50 text-red-300 text-xs rounded px-3 py-2 mb-3">{saveErr}</div>
-      )}
-
-      {config && (
-        <>
-          <div className="flex items-center gap-2 mb-3">
-            <span className={`text-xs px-2 py-0.5 rounded-full border ${
-              config.method === 'rest'
-                ? 'bg-green-900/40 text-green-300 border-green-700/40'
-                : 'bg-yellow-900/40 text-yellow-300 border-yellow-700/40'
-            }`}>{config.method === 'rest' ? 'REST API' : 'Web scrape'}</span>
-            {config.device?.model    && <span className="text-xs text-gray-500">{config.device.model}</span>}
-            {config.device?.firmware && <span className="text-xs text-gray-600">fw {config.device.firmware}</span>}
-          </div>
-
-          {ports.length > 0 ? (
-            <div className="overflow-x-auto rounded border border-gray-700 mb-3">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-700 bg-gray-900/50 text-xs text-gray-500 uppercase tracking-wider">
-                    <th className="text-left py-2 px-3">Port</th>
-                    <th className="text-left py-2 px-3">Universe</th>
-                    <th className="text-left py-2 px-3">Protocol</th>
-                    <th className="text-left py-2 px-3">Merge</th>
-                    <th className="py-2 px-3"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ports.map(p => (
-                    <PortRow key={p.port} port={p}
-                      editing={editPort === p.port} onEdit={setEditPort}
-                      onSave={savePort} saving={saving && editPort === p.port} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-gray-500 text-sm mb-3">No port data parsed — check raw response below.</p>
-          )}
-
-          {(node.type === 'swisson' || ports.length === 0) && (
-            <div>
-              <button onClick={() => setShowRaw(v => !v)}
-                className="text-xs text-gray-500 hover:text-gray-300 underline mb-2">
-                {showRaw ? 'Hide' : 'Show'} raw response
-              </button>
-              {showRaw && (
-                <pre className="bg-gray-900 text-gray-400 text-xs rounded p-3 overflow-auto max-h-64 border border-gray-700">
-                  {JSON.stringify(config, null, 2)}
-                </pre>
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function NodesPage() {
   const [result,   setResult]   = useState(null);
   const [scanning, setScanning] = useState(false);
-  const [selected, setSelected] = useState(null);
 
   const scan = useCallback(async () => {
     setScanning(true);
-    setSelected(null);
     try {
       const { data } = await axios.get('/api/nodes/scan');
       setResult(data);
@@ -401,9 +171,6 @@ export default function NodesPage() {
   const ubiquiti  = devices.filter(d => d.type === 'ubiquiti');
   const routers   = devices.filter(d => d.type === 'router');
   const hosts     = devices.filter(d => d.type === 'host');
-
-  const handleConfigure = (node) =>
-    setSelected(prev => prev?.ip === node.ip ? null : node);
 
   function Section({ title, count, children }) {
     if (count === 0) return null;
@@ -453,22 +220,15 @@ export default function NodesPage() {
             <Section title="Lighting Nodes" count={lighting.length}>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                 {lighting.map(d => (
-                  <DeviceCard key={d.ip} device={d}
-                    selected={selected?.ip === d.ip} onConfigure={handleConfigure} />
+                  <DeviceCard key={d.ip} device={d} />
                 ))}
               </div>
             </Section>
 
-            {/* Config panel inline */}
-            {selected && (
-              <ConfigPanel node={selected} onClose={() => setSelected(null)} />
-            )}
-
             <Section title="Ubiquiti" count={ubiquiti.length}>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                 {ubiquiti.map(d => (
-                  <DeviceCard key={d.ip} device={d}
-                    selected={false} onConfigure={() => {}} />
+                  <DeviceCard key={d.ip} device={d} />
                 ))}
               </div>
             </Section>
