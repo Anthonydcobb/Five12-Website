@@ -410,14 +410,28 @@ def delete_location(loc_id):
 def import_snapshot():
     """Import a saved NETGEAR AV UI Overview page.
 
-    The switch's own page prints its serial and base MAC, so a snapshot
-    identifies its own subject -- an operator pasting seven pages in a row
-    never has to keep track of which is which, and cannot land switch 60's
-    profiles on switch 76.
+    The switch is identified by its MANAGEMENT IP, not by the base MAC the
+    page prints.
 
-    Refuses rather than guesses. An unmatched MAC does NOT create a row: a
+    [VERIFIED 2026-08-06 on the rig] those are different addresses. The page's
+    "Base MAC Address" is the chassis MAC; the management interface ARPs with a
+    different one, so the scanner's row never carries the value the page
+    reports. Every observed pair differs by exactly 3 -- switch 60 3A:02/3A:05,
+    switch 73 3C:DE/3C:E1, switch 52 47:02/47:05, switch 76 3C:1A/3C:1D -- but
+    that offset is NOT used here. Four samples of one firmware is not a rule,
+    and deriving an identity from a guessed arithmetic relationship is exactly
+    the silent misattribution this route exists to prevent. Matching on base
+    MAC refused every switch on the rig; the unit tests missed it because they
+    fabricated the device row from the page's own base MAC, the one value
+    guaranteed to agree with itself.
+
+    The page's baseMac is still stored in vendor_data for reference -- it is
+    the chassis identity and worth having -- it is simply not the matcher.
+
+    Refuses rather than guesses. An unmatched IP does NOT create a row: a
     switch the scanner has never seen is a discovery problem, not something to
-    invent a record for out of a pasted document.
+    invent a record for out of a pasted document. An IP claimed by more than
+    one row is refused too, because picking one would be a coin toss.
 
     Merges rather than replaces, so the operator's label and notes, and any
     live SNMP fields already present, survive. The next sweep merges SNMP over
@@ -432,29 +446,38 @@ def import_snapshot():
     payload = request.get_json(silent=True) or {}
     parsed = parse_snapshot(payload.get('html') or '')
 
-    mac = (parsed.get('baseMac') or '').upper().replace('-', ':')
-    if not mac or not parsed.get('serial'):
+    ip = (parsed.get('managementIp') or '').strip()
+    if not ip or not parsed.get('serial'):
         return jsonify({
             'error': 'unrecognised_page',
-            'detail': 'No NETGEAR serial and base MAC found. Paste the rendered '
+            'detail': 'No NETGEAR serial and management IP found. Paste the rendered '
                       'Configure -> Overview page (document.documentElement.outerHTML), '
                       'not a view-source of the page shell.',
         }), 422
 
-    device = db.session.get(NetworkDevice, mac)
-    if device is None:
+    matches = (db.session.query(NetworkDevice)
+               .filter(NetworkDevice.last_ip == ip).all())
+    if not matches:
         return jsonify({
             'error': 'unknown_device',
-            'detail': f'No device known with MAC {mac}. Let the scanner discover '
-                      f'the switch first, then import.',
+            'detail': f'No device known at {ip}. Let the scanner discover the '
+                      f'switch first, then import.',
         }), 404
+    if len(matches) > 1:
+        macs = ', '.join(sorted(d.mac_address for d in matches))
+        return jsonify({
+            'error': 'ambiguous_device',
+            'detail': f'{len(matches)} devices are recorded at {ip} ({macs}). '
+                      f'Nothing was changed -- resolve the duplicate first.',
+        }), 409
+    device = matches[0]
 
     stored = device.vendor_data or {}
     known_serial = stored.get('serial')
     if known_serial and known_serial != parsed['serial']:
         return jsonify({
             'error': 'serial_conflict',
-            'detail': f'{mac} is recorded with serial {known_serial}, but this page '
+            'detail': f'{ip} is recorded with serial {known_serial}, but this page '
                       f'reports {parsed["serial"]}. Nothing was changed.',
         }), 409
 
@@ -464,7 +487,8 @@ def import_snapshot():
     db.session.commit()
 
     return jsonify({
-        'macAddress': mac,
+        'macAddress': device.mac_address,
+        'managementIp': ip,
         'systemName': parsed.get('systemName'),
         'profileCount': len(parsed.get('profiles', [])),
         'portCount': len(parsed.get('netgearPorts', [])),
