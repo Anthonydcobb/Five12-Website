@@ -42,13 +42,21 @@ file entirely. The port graphic at the top of the same page does list all 12,
 so captured-versus-expected coverage is detectable, but the missing rows cannot
 be recovered from the file.
 
-**And the page cannot identify itself.** It carries none of the Overview page's
-identity fields — no `device_manageip`, `device_name`, `device_model`, no
+**And the page cannot safely identify itself.** It carries none of the Overview
+page's identity *ids* — no `device_manageip`, `device_name`, `device_model`, no
 serial. The switch's own management IP (172.16.3.73) appears only inside
 attributes and scripts, never as text. A *neighbour's* IP (172.16.3.52, "FMB
 Switch 52") **does** appear as visible text, in a `.port-item`, because it is
 the LLDP peer on a port. The only IP a text parser can honestly read off this
 page therefore belongs to a different switch.
+
+It does, however, carry the switch's model and display name together in one
+element: `#unit_model` reads `M4250-10G2F-PoE+ ( FMB Switch 73 )`, and the same
+string repeats in that element's `title` attribute. That is deliberately NOT
+used as the identifier. The display name is operator-editable, is not
+guaranteed unique across the rig, and matching on it would reintroduce exactly
+the inference this route exists to avoid. It is, however, a good **confirmation**
+signal — see Possible follow-up.
 
 Two consequences follow directly, and they set the whole design:
 
@@ -164,6 +172,22 @@ Every defect is reintroduced once to confirm the test written for it fails
 without the fix. A test that cannot fail is a green light with nothing behind
 it — the lesson of the popover order guard, which passed for a day while
 comparing a sorted list against itself.
+
+## Possible follow-up — use `#unit_model` as a confirmation
+
+Identity comes from the operator's selected device, which leaves one gap the
+current design does not close: an operator viewing switch 69 who pastes switch
+73's page gets switch 73's profiles filed against switch 69, silently.
+
+`#unit_model` closes it. Parse the name out of
+`M4250-10G2F-PoE+ ( FMB Switch 73 )` and compare it with the stored
+`systemName` on the selected device. A mismatch means the page and the
+selection disagree about which switch this is, and that is worth refusing —
+not because the name is a good identifier, but because it is an independent
+witness to a choice the operator has already made.
+
+Not built yet. It needs its own decision about whether a mismatch refuses or
+warns, and about switches whose stored `systemName` is empty.
 
 ## Out of scope
 
