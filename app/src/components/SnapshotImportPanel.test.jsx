@@ -29,7 +29,8 @@ describe('SnapshotImportPanel', () => {
     fireEvent.click(screen.getByText(/^import$/i))
 
     await waitFor(() => expect(onImported).toHaveBeenCalled())
-    expect(axios.post).toHaveBeenCalledWith('/api/network/snapshot', { html: '<html>x</html>' })
+    expect(axios.post).toHaveBeenCalledWith('/api/network/snapshot',
+      { html: '<html>x</html>', macAddress: 'AA' })
     expect(screen.getByText(/FMB Switch 60/)).toBeTruthy()
     expect(screen.getByText(/5 profiles/)).toBeTruthy()
   })
@@ -57,5 +58,50 @@ describe('SnapshotImportPanel', () => {
     fireEvent.click(screen.getByText(/^import$/i))
 
     await waitFor(() => expect(screen.getByText(/host details were not readable/i)).toBeTruthy())
+  })
+
+  // A Port Configuration page carries no identity of its own, so the MAC of
+  // the switch the operator is looking at is the only thing that says which
+  // device the capture belongs to.
+  const paste = () => {
+    fireEvent.click(screen.getByText(/import switch snapshot/i))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '<html>x</html>' } })
+    fireEvent.click(screen.getByText(/^import$/i))
+  }
+
+  it('sends the selected device MAC with the paste', async () => {
+    axios.post.mockResolvedValue({ data: { portsUpdated: 10 } })
+    render(<SnapshotImportPanel device={NETGEAR} onImported={() => {}} />)
+    paste()
+    await waitFor(() => expect(axios.post).toHaveBeenCalledWith(
+      '/api/network/snapshot', { html: '<html>x</html>', macAddress: 'AA' },
+    ))
+  })
+
+  it('names the ports a partial capture missed', async () => {
+    axios.post.mockResolvedValue({ data: {
+      portsUpdated: 10, portsInCaptureNotInBase: [11, 12], disagreements: [],
+    } })
+    render(<SnapshotImportPanel device={NETGEAR} onImported={() => {}} />)
+    paste()
+    await waitFor(() => expect(screen.getByText(/11, 12/)).toBeTruthy())
+  })
+
+  it('surfaces a profile disagreement as a warning', async () => {
+    axios.post.mockResolvedValue({ data: {
+      portsUpdated: 10, portsInCaptureNotInBase: [],
+      disagreements: [{ port: 3, field: 'profile', popover: 'WRONG', portConfig: 'HogNet' }],
+    } })
+    render(<SnapshotImportPanel device={NETGEAR} onImported={() => {}} />)
+    paste()
+    await waitFor(() => expect(screen.getByText(/Port 3/i)).toBeTruthy())
+  })
+
+  it('does not show the Overview summary for a portconfig result', async () => {
+    axios.post.mockResolvedValue({ data: { portsUpdated: 10, portsInCaptureNotInBase: [] } })
+    render(<SnapshotImportPanel device={NETGEAR} onImported={() => {}} />)
+    paste()
+    await waitFor(() => expect(screen.getByText(/10 ports updated/i)).toBeTruthy())
+    expect(screen.queryByText(/profiles,/)).toBeNull()
   })
 })

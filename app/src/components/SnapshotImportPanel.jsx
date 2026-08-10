@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const HINT = 'In the switch UI at Configure → Overview, open the browser console and run '
-  + 'copy(document.documentElement.outerHTML), then paste here.';
+const HINT = 'In the switch UI at Configure → Overview (or Port Configuration), open the '
+  + 'browser console and run copy(document.documentElement.outerHTML), then paste here. '
+  + 'A Port Configuration page only carries the rows you scrolled into view.';
 
 export default function SnapshotImportPanel({ device, onImported }) {
   const [open, setOpen] = useState(false);
@@ -17,7 +18,10 @@ export default function SnapshotImportPanel({ device, onImported }) {
     setBusy(true);
     setError(null);
     setResult(null);
-    axios.post('/api/network/snapshot', { html })
+    // A Port Configuration page carries no identity of its own -- and the only
+    // IP readable as text on it belongs to the LLDP neighbour. The switch the
+    // operator has open is the only honest answer to "which device is this?".
+    axios.post('/api/network/snapshot', { html, macAddress: device.macAddress })
       .then(res => {
         setResult(res.data);
         setHtml('');
@@ -68,12 +72,34 @@ export default function SnapshotImportPanel({ device, onImported }) {
 
           {result && (
             <div style={{ marginTop: 6, fontSize: 10, color: 'var(--color-online)' }}>
-              Imported {result.systemName || result.macAddress} — {result.profileCount} profiles,
-              {' '}{result.portCount} ports.
-              {result.hostDataAvailable === false && (
-                <span style={{ color: 'var(--color-brand-hi)' }}>
-                  {' '}Per-port host details were not readable from this page.
-                </span>
+              {result.portCount !== undefined && (
+                <>
+                  Imported {result.systemName || result.macAddress} — {result.profileCount} profiles,
+                  {' '}{result.portCount} ports.
+                  {result.hostDataAvailable === false && (
+                    <span style={{ color: 'var(--color-brand-hi)' }}>
+                      {' '}Per-port host details were not readable from this page.
+                    </span>
+                  )}
+                </>
+              )}
+
+              {result.portsUpdated !== undefined && (
+                <>
+                  Port configuration: {result.portsUpdated} ports updated.
+                  {result.portsInCaptureNotInBase?.length > 0 && (
+                    <span style={{ color: 'var(--color-text-muted)' }}>
+                      {' '}Not in the snapshot: {result.portsInCaptureNotInBase.join(', ')}.
+                    </span>
+                  )}
+                  {result.disagreements?.map(d => (
+                    <div key={`${d.port}-${d.field}`} style={{ color: 'var(--color-brand-hi)' }}>
+                      Port {d.port}: the snapshot says {d.field} “{d.popover}”, this page says
+                      {' '}“{d.portConfig}”. The snapshot value came from the page's popovers,
+                      which are matched by document order — treat this page as correct.
+                    </div>
+                  ))}
+                </>
               )}
             </div>
           )}
