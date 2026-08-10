@@ -441,10 +441,18 @@ def import_snapshot():
     from datetime import datetime
 
     from .models import _utc_iso
-    from .vendors.netgear_snapshot import parse_snapshot
+    from .vendors.netgear_snapshot import detect_page_type, parse_snapshot
 
     payload = request.get_json(silent=True) or {}
-    parsed = parse_snapshot(payload.get('html') or '')
+    html = payload.get('html') or ''
+
+    # A Port Configuration page is a different document with different rules --
+    # it cannot identify itself, and it only carries the rows the operator
+    # scrolled into view. It gets its own handler.
+    if detect_page_type(html) == 'portconfig':
+        return _import_portconfig(html, payload.get('macAddress'))
+
+    parsed = parse_snapshot(html)
 
     ip = (parsed.get('managementIp') or '').strip()
     if not ip or not parsed.get('serial'):
@@ -494,4 +502,101 @@ def import_snapshot():
         'portCount': len(parsed.get('netgearPorts', [])),
         'hostDataAvailable': parsed.get('netgearPortHostsAvailable', False),
         'snapshotAsOf': parsed['snapshotAsOf'],
+    })
+
+
+def _import_portconfig(html, mac):
+    """Fold a Port Configuration capture into an existing snapshot.
+
+    SUPPLEMENT ONLY. The page's table is a virtual scroller, so a capture holds
+    only the rows that were scrolled into view -- 10 of 12 on the fixture
+    switch. Ports it omits are left exactly as they were.
+
+    Identity is the caller's `macAddress` and never the page. The page carries
+    no identity fields, and the only IP readable as text on it belongs to the
+    LLDP NEIGHBOUR, so inferring identity here would file one switch's
+    configuration against another -- the precise failure this route exists to
+    refuse.
+
+    Results land under their own `netgearPortConfig` key rather than merging
+    into `netgearPorts`, because the Overview import above writes
+    {**stored, **parsed} and would otherwise discard every structurally-sourced
+    profile on the next re-import.
+    """
+    from datetime import datetime
+
+    from .models import _utc_iso
+    # Imported here as well as in import_snapshot: this is a separate function
+    # and does not see that one's local imports.
+    from .vendors.netgear_snapshot import parse_portconfig
+
+    if not mac:
+        return jsonify({
+            'error': 'device_required',
+            'detail': 'A Port Configuration page does not say which switch it '
+                      'came from. Import it from the switch you want to update.',
+        }), 400
+
+    device = (db.session.query(NetworkDevice)
+              .filter(NetworkDevice.mac_address == mac).one_or_none())
+    if device is None:
+        return jsonify({
+            'error': 'unknown_device',
+            'detail': f'No device known with MAC {mac}. Nothing was changed.',
+        }), 404
+
+    stored = device.vendor_data or {}
+    base = stored.get('netgearPorts') or []
+    if not base:
+        return jsonify({
+            'error': 'no_base_snapshot',
+            'detail': 'Import the Configure -> Overview page for this switch '
+                      'first. A Port Configuration page only fills in the '
+                      'ports it captured, so it needs a full snapshot to '
+                      'supplement.',
+        }), 409
+
+    rows = parse_portconfig(html)
+    by_port = {p['port']: p for p in base}
+
+    disagreements = []
+    link_differs = []
+    absent = []
+    kept = []
+    for row in rows:
+        prior = by_port.get(row['port'])
+        if prior is None:
+            absent.append(row['port'])
+            continue
+        # profile/template on `prior` came from the popovers. A disagreement is
+        # evidence the document-order association misattributed this port.
+        for field in ('profile', 'template'):
+            if prior.get(field) and row[field] and prior[field] != row[field]:
+                disagreements.append({
+                    'port': row['port'], 'field': field,
+                    'popover': prior[field], 'portConfig': row[field],
+                })
+        # Link state and PoE are a SECONDARY note, deliberately kept out of
+        # `disagreements`. Both sides read them structurally, so a difference
+        # says nothing about the popover association -- and the two pages are
+        # saved minutes apart, so a port can legitimately have changed state
+        # between them. Reported separately and labelled as such.
+        if prior.get('linkUp') is not None and prior['linkUp'] != row['linkUp']:
+            link_differs.append(row['port'])
+        kept.append({'port': row['port'], 'profile': row['profile'],
+                     'template': row['template']})
+
+    as_of = _utc_iso(datetime.utcnow())
+    device.vendor_data = {**stored,
+                          'netgearPortConfig': kept,
+                          'portConfigAsOf': as_of}
+    db.session.commit()
+
+    return jsonify({
+        'macAddress': device.mac_address,
+        'portsUpdated': len(kept),
+        'portsInCaptureNotInBase': absent,
+        'disagreements': disagreements,
+        'linkStateDiffers': link_differs,
+        'portConfigAsOf': as_of,
     })
