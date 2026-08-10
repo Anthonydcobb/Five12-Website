@@ -251,6 +251,32 @@ def detect_page_type(html) -> str | None:
     return None
 
 
+def parse_portconfig_identity(html) -> dict:
+    """The model and display name the Port Configuration page claims.
+
+    `#unit_model` reads `M4250-10G2F-PoE+ ( FMB Switch 73 )`, model and name in
+    one string. [VERIFIED 2026-08-10] on two switches, 73 and 69.
+
+    This is NOT an identifier and must never be used as one. A display name is
+    operator-editable and nothing makes it unique across a rig. It is a
+    CONFIRMATION: the caller already knows which switch it means, and this says
+    whether the page agrees.
+
+    Returns {} when the page does not say, which the caller must treat as
+    "cannot check", never as "mismatch".
+    """
+    if not isinstance(html, str) or not html:
+        return {}
+    soup = BeautifulSoup(html, _PARSER)
+    text = _text(soup.select_one('#unit_model'))
+    if not text:
+        return {}
+    m = re.match(r'^(?P<model>.+?)\s*\(\s*(?P<name>.+?)\s*\)\s*$', text)
+    if not m:
+        return {}
+    return {'model': m.group('model').strip(), 'systemName': m.group('name').strip()}
+
+
 def parse_portconfig(html) -> list:
     """Per-port profile and template from a Port Configuration page.
 

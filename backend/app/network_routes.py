@@ -528,7 +528,8 @@ def _import_portconfig(html, mac):
     from .models import _utc_iso
     # Imported here as well as in import_snapshot: this is a separate function
     # and does not see that one's local imports.
-    from .vendors.netgear_snapshot import parse_portconfig
+    from .vendors.netgear_snapshot import (parse_portconfig,
+                                           parse_portconfig_identity)
 
     if not mac:
         return jsonify({
@@ -555,6 +556,23 @@ def _import_portconfig(html, mac):
                       'ports it captured, so it needs a full snapshot to '
                       'supplement.',
         }), 409
+
+    # The page says which switch it came from. That name is not the identity --
+    # it is operator-editable and not unique -- but it is an independent
+    # witness to the choice the caller already made, and it closes the one gap
+    # an explicit MAC cannot: pasting switch 73's page while viewing switch 69.
+    # A page that does not say, or a device with no stored name, means the
+    # check CANNOT RUN. That is not a mismatch, and must not refuse.
+    claimed = parse_portconfig_identity(html).get('systemName')
+    known = stored.get('systemName')
+    if claimed and known and claimed != known:
+        return jsonify({
+            'error': 'device_mismatch',
+            'detail': f'You are importing into {known}, but this page came from '
+                      f'{claimed}. Nothing was changed. Select {claimed} and '
+                      f'import again, or re-save the page from {known}.',
+        }), 409
+    confirmed = claimed if (claimed and known) else None
 
     rows = parse_portconfig(html)
     by_port = {p['port']: p for p in base}
@@ -594,6 +612,8 @@ def _import_portconfig(html, mac):
 
     return jsonify({
         'macAddress': device.mac_address,
+        # null means the check could not run, not that it passed.
+        'confirmedName': confirmed,
         'portsUpdated': len(kept),
         'portsInCaptureNotInBase': absent,
         'disagreements': disagreements,

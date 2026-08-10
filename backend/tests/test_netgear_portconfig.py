@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from app.vendors.netgear_snapshot import detect_page_type, parse_portconfig
+from app.vendors.netgear_snapshot import (detect_page_type, parse_portconfig,
+                                          parse_portconfig_identity)
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 PORTCONFIG = FIXTURES / 'netgear_m4250_portconfig.html'
@@ -63,3 +64,20 @@ def test_never_raises_on_junk():
     assert parse_portconfig('') == []
     assert parse_portconfig(None) == []
     assert parse_portconfig('<div class="port-configuration-row"></div>') == []
+
+
+# The page names itself in #unit_model as "<model> ( <display name> )". That is
+# NOT the identifier -- the display name is operator-editable and not
+# guaranteed unique -- but it is an independent witness to which switch the
+# operator meant, which is the one thing the explicit-MAC design cannot check.
+
+def test_reads_the_model_and_name_the_page_claims(portconfig_html):
+    ident = parse_portconfig_identity(portconfig_html)
+    assert ident['systemName'] == 'FMB Switch 73'
+    assert ident['model'] == 'M4250-10G2F-PoE+'
+
+
+def test_identity_is_empty_when_the_page_does_not_say(portconfig_html):
+    assert parse_portconfig_identity('') == {}
+    assert parse_portconfig_identity(None) == {}
+    assert parse_portconfig_identity('<div id="unit_model">no parens here</div>') == {}

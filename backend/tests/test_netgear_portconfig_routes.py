@@ -37,6 +37,9 @@ def switch(db):
                            last_ip=MGMT_IP)
     device.vendor_data = {
         'serial': 'ABC123',
+        # The fixture page claims to be "FMB Switch 73". Matching stored name
+        # means the page and the operator's selection agree.
+        'systemName': 'FMB Switch 73',
         'netgearPorts': [
             {'port': 1, 'profile': 'Default', 'template': 'Default', 'linkUp': True},
             {'port': 3, 'profile': 'WRONG', 'template': 'Data', 'linkUp': False},
@@ -122,6 +125,51 @@ def test_reports_captured_ports_absent_from_the_base(client, switch, portconfig_
                       json={'html': portconfig_html, 'macAddress': SCANNER_MAC})
     # The base holds ports 1, 3, 12. The capture holds 1..10.
     assert res.get_json()['portsInCaptureNotInBase'] == [2, 4, 5, 6, 7, 8, 9, 10]
+
+
+def test_refuses_when_the_page_names_a_different_switch(client, switch, portconfig_html):
+    """The gap the explicit-MAC design cannot close on its own: an operator
+    looking at switch 69 who pastes switch 73's page. The page says which
+    switch it came from, and disagreeing with the selection is a refusal --
+    filing one switch's profiles against another is the worst outcome here."""
+    device = _db.session.query(NetworkDevice).filter_by(mac_address=SCANNER_MAC).one()
+    device.vendor_data = {**device.vendor_data, 'systemName': 'FMB Switch 69'}
+    _db.session.commit()
+
+    res = client.post('/api/network/snapshot',
+                      json={'html': portconfig_html, 'macAddress': SCANNER_MAC})
+    assert res.status_code == 409
+    body = res.get_json()
+    assert body['error'] == 'device_mismatch'
+    # Both names appear, so the operator can see which way round it is.
+    assert 'FMB Switch 69' in body['detail']
+    assert 'FMB Switch 73' in body['detail']
+    # Nothing was written.
+    after = _db.session.query(NetworkDevice).filter_by(mac_address=SCANNER_MAC).one()
+    assert 'netgearPortConfig' not in (after.vendor_data or {})
+
+
+def test_imports_when_the_names_agree(client, switch, portconfig_html):
+    res = client.post('/api/network/snapshot',
+                      json={'html': portconfig_html, 'macAddress': SCANNER_MAC})
+    assert res.status_code == 200
+    assert res.get_json()['confirmedName'] == 'FMB Switch 73'
+
+
+def test_proceeds_when_no_stored_name_exists_to_compare(client, switch, portconfig_html):
+    """Absence of evidence is not evidence of mismatch. A switch imported
+    before systemName was stored must still accept a portconfig page, and the
+    response says the check did not run."""
+    device = _db.session.query(NetworkDevice).filter_by(mac_address=SCANNER_MAC).one()
+    vd = dict(device.vendor_data)
+    vd.pop('systemName', None)
+    device.vendor_data = vd
+    _db.session.commit()
+
+    res = client.post('/api/network/snapshot',
+                      json={'html': portconfig_html, 'macAddress': SCANNER_MAC})
+    assert res.status_code == 200
+    assert res.get_json()['confirmedName'] is None
 
 
 def test_an_overview_page_still_imports_unchanged(client, db):
