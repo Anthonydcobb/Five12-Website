@@ -29,12 +29,50 @@ exposed (v2, behind confirmation, per the research doc).
 """
 
 import math
+import os
+import sys
 import time
 
 from . import DeviceAdapter, check_thresholds, tcp_reachable
 
 DISH_HOST = '192.168.100.1'   # fixed address on any Starlink LAN [VERIFIED]
 DISH_PORT = 9200
+
+#: Directory holding a clone of sparky8512/starlink-grpc-tools.
+#:
+#: The module cannot be pip-installed (see the header), so the only way to make
+#: `import starlink_grpc` work is to have its directory on sys.path. Setting
+#: PYTHONPATH at launch does that, but only for whoever remembers -- start.ps1
+#: does not set it, so live telemetry would silently revert to unavailable the
+#: next time anyone started the app normally. This makes the location
+#: configuration instead of a launch-time incantation.
+#:
+#: Unset by default: an operator who does not want live telemetry gets exactly
+#: the behaviour they had before, and nothing is added to sys.path.
+GRPC_PATH_ENV = 'FIVE12_STARLINK_GRPC_PATH'
+
+
+def _ensure_grpc_path():
+    '''Put the starlink-grpc-tools clone on sys.path, if configured.
+
+    Returns the directory added or already present, else None.
+
+    Deliberately narrow: it will not add a path that does not exist, because a
+    typo'd directory silently doing nothing is indistinguishable from the
+    feature being off, and the operator would have no way to tell which. A
+    configured-but-missing directory is reported instead -- see _real_status.
+
+    Idempotent, so repeated status reads do not grow sys.path.
+    '''
+    raw = (os.getenv(GRPC_PATH_ENV) or '').strip().strip('"')
+    if not raw:
+        return None
+    path = os.path.abspath(raw)
+    if not os.path.isdir(path):
+        return None
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    return path
 
 ALERT_RULES = [
     ('obstructionPct', 'gt', 5, 'Obstruction at {value}% — check sky view', 'warn'),
@@ -80,17 +118,31 @@ class StarlinkAdapter(DeviceAdapter):
         return status
 
     def _real_status(self):
+        configured = os.getenv(GRPC_PATH_ENV)
+        resolved = _ensure_grpc_path()
         try:
             import starlink_grpc  # from starlink-grpc-tools
         except ImportError:
-            return {
-                'available': False,
-                'reason': "Module 'starlink_grpc' not importable. It is not on "
-                          "PyPI: clone sparky8512/starlink-grpc-tools and add it "
-                          "to PYTHONPATH, then "
-                          "'pip install grpcio grpcio-tools protobuf yagrc'. "
-                          "Sim mode needs none of this.",
-            }
+            # Distinguish the three states rather than emitting one message for
+            # all of them. "Set it" and "you set it to somewhere that isn't
+            # there" need different actions, and an operator staring at a
+            # generic string cannot tell which they are in.
+            if configured and not resolved:
+                reason = (f"{GRPC_PATH_ENV} is set to '{configured}', but that "
+                          f"directory does not exist.")
+            elif not configured:
+                reason = (f"Module 'starlink_grpc' not importable. It is not on "
+                          f"PyPI: clone sparky8512/starlink-grpc-tools, then set "
+                          f"{GRPC_PATH_ENV} to that directory. Also "
+                          f"'pip install grpcio grpcio-tools protobuf yagrc'. "
+                          f"Sim mode needs none of this.")
+            else:
+                reason = (f"{GRPC_PATH_ENV} points at '{resolved}' but "
+                          f"'import starlink_grpc' still failed. Check the clone "
+                          f"contains starlink_grpc.py and that "
+                          f"'pip install grpcio grpcio-tools protobuf yagrc' ran "
+                          f"on the interpreter serving this app.")
+            return {'available': False, 'reason': reason}
         try:
             groups = starlink_grpc.status_data()  # (status, obstruction, alerts)
             g_status, g_obstruct, g_alerts = groups
