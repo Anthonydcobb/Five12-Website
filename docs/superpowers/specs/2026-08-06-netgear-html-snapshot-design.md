@@ -2,7 +2,8 @@
 
 - **Date:** 2026-08-06
 - **Author:** Claude Code, with Anthony
-- **Status:** approved, not yet implemented
+- **Status:** implemented and merged 2026-08-07, verified on the rig — see
+  Verification below
 - **Scope:** Network tab only. Read-only. No change to the Devices tab, the DMX
   node port table, or any existing enrichment path.
 
@@ -58,7 +59,7 @@ to remove for Swisson and ACPD nodes.
 
 A saved copy of the switch's Overview page is pasted into the Network tab. A
 pure parser turns it into the same `vendorData` shape the tab already renders,
-matched to the right switch by the serial and MAC printed in the page itself.
+matched to the right switch by the management IP printed in the page itself.
 
 ### Components
 
@@ -194,17 +195,37 @@ reading next to a two-day-old profile table and be honest about both.
 
 ### Matching a snapshot to a switch
 
-The page prints its own serial (`device_serial`) and base MAC (`device_mac`).
-Matching is on those, against existing `NetworkDevice` rows.
+Matching is on the **management IP** (`device_manageip`), against
+`NetworkDevice.last_ip`.
 
-- Both match one device → import.
-- Neither matches any device → refuse, and say so. No row is created. A switch
-  the scanner has never seen is a discovery problem, not something to invent a
+This design originally matched on the serial plus the base MAC the page prints,
+and that was wrong in a way only the rig could reveal. The page's "Base MAC
+Address" is the CHASSIS MAC; the management interface ARPs with a different one,
+so the scanner's row never carries the value the page reports. Matching on base
+MAC refused all fifteen switches on the rig — including switches sitting in the
+device table at the very IP the page named. The unit tests passed throughout
+because they fabricated the device row from the page's own base MAC, the one
+value guaranteed to agree with itself.
+
+Observed pairs, page → scanner row: switch 60 `3A:02`→`3A:05`, switch 73
+`3C:DE`→`3C:E1`, switch 52 `47:02`→`47:05`, switch 76 `3C:1A`→`3C:1D`, switch 69
+`46:52`→`46:55`. The offset is a consistent +3 and is deliberately NOT used:
+five samples of one firmware is not a rule, and deriving an identity from a
+guessed arithmetic relationship is precisely the silent misattribution this
+route exists to prevent.
+
+- Exactly one device at that IP → import.
+- No device at that IP → refuse, and say so. No row is created. A switch the
+  scanner has never seen is a discovery problem, not something to invent a
   record for from a pasted document.
-- They match different devices, or the target already holds a snapshot with a
-  different serial → refuse and report the conflict.
+- More than one device at that IP → refuse as ambiguous. Picking one would be a
+  coin toss.
+- The device already holds a different serial → refuse and report the conflict.
 
-The refusal path is what makes it safe to paste seven pages in a row without
+The page's base MAC is still stored in `vendorData` for reference — it is the
+chassis identity and worth having — it is simply not the matcher.
+
+The refusal path is what makes it safe to paste fifteen pages in a row without
 tracking which is which.
 
 ### UI
@@ -227,8 +248,10 @@ data or a crash:
 | Condition | Result |
 |---|---|
 | Not a NETGEAR AV UI page | Refused before parsing, with what was expected |
-| Serial/MAC absent or unmatched | Refused, nothing written |
-| Serial/MAC match a different switch | Refused, conflict reported |
+| Serial or management IP absent | Refused before matching |
+| No device at that management IP | Refused, no row created |
+| More than one device at that IP | Refused as ambiguous |
+| Stored serial disagrees with the page | Refused, conflict reported |
 | Popover count ≠ port count | Ports imported without host data, noted in UI |
 | A `#device_*` id missing | That field absent; rest of the import proceeds |
 | Profile table missing or empty | Profiles absent; device details and ports proceed |
@@ -280,3 +303,25 @@ why it is separate. When it lands it populates the same `vendorData` fields
 defined here, with `source: 'av-ui-api'` instead of `'html-snapshot'`, and the
 precedence rule extends by one rank: live API > SNMP > snapshot. The parser,
 the tables, and the profile colors all carry over unchanged.
+
+
+## Verification
+
+Unit and route tests cover the parser, the identity rules and the precedence
+rule, but the defect that mattered most was invisible to all of them — see
+Matching above. What was checked against live hardware:
+
+- **Import succeeds** — the Overview page of FMB Switch 69 (`172.16.3.69`) was
+  captured from the live switch and imported through the panel. Profiles and
+  per-port data populated. [VERIFIED 2026-08-07]
+- **Import refuses correctly** — the page for a switch absent from the device
+  table was posted to the route; it returned `unknown_device` naming the address,
+  and a read-only query confirmed no row had been created. [VERIFIED 2026-08-07]
+
+Not verified on hardware: the ambiguous-IP refusal, and the serial-conflict
+refusal. Both are covered by route tests only.
+
+Known gap: once a serial is stored for an IP, a page reporting a different
+serial is refused permanently, with no override short of editing the database.
+Narrow in practice — a replaced switch normally arrives at a new address — but
+undocumented elsewhere, so it is recorded here.
