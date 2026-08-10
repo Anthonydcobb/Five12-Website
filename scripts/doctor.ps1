@@ -20,6 +20,17 @@
          not set them.
       6. All four show NICs had drifted to the Windows "Public" category.
 
+    A seventh joined them on 2026-08-10, from the same family:
+
+      7. `npm run dev` was started from a worktree while port 5173 was already
+         held by a Vite serving a different checkout. Vite does not set
+         strictPort, so the new server moved to the next free port without a
+         word, the old one kept answering 5173, and the operator spent most of
+         a session hunting a UI panel that was not in the bundle being served.
+         "A server is listening on the port" is not "the server is running my
+         code" — the port is bound in the healthy state and the broken one
+         alike, so the serving checkout is the only usable evidence.
+
     Each check below maps to one of those. Every failure prints the exact
     command that fixes it.
 
@@ -54,6 +65,9 @@ param(
     [switch]$Full,
     [switch]$Detailed,
     [int]$Port = 5000,
+    # Vite. Only meaningful in dev mode, which is the only mode that runs this
+    # script — start.ps1 calls the doctor from its dev branch.
+    [int]$DevPort = 5173,
     [string]$PythonExe = 'C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe',
     [string]$ExpectedRoot = 'C:\dev\Five12-TheApp',
     # The branch everything integrates through. HEAD is compared against this as
@@ -269,6 +283,40 @@ try {
 catch { $flaskProcs = @() }
 
 $checks += Test-Five12FlaskProcesses -PortOwners $portOwners -FlaskProcesses $flaskProcs -Port $Port -PreLaunch:$PreLaunch
+
+# ---------------------------------------------------------------------------
+# Fault 7 — the dev server on 5173 serving a DIFFERENT checkout. The serving
+# project root is only written down in one place: the absolute path of the
+# vite binary on the process command line. Vite exposes no endpoint naming its
+# root, and a process working directory is not readable from Win32_Process.
+# ---------------------------------------------------------------------------
+
+$devPortOwners = @()
+try {
+    $devPortOwners = @(Get-NetTCPConnection -LocalPort $DevPort -State Listen -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.OwningProcess })
+}
+catch { $devPortOwners = @() }
+
+$viteProcs = @()
+try {
+    # Anchored on the vite binary, not on the string 'vite': vitest runs from
+    # `vitest\vitest.mjs` in the same node_modules and a substring match would
+    # report a test run as the dev server.
+    $viteProcs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -match '[\\/]vite[\\/]bin[\\/]vite\.(js|mjs)|[\\/]vite\.(js|mjs)(\s|"|$)' } |
+            ForEach-Object {
+                [pscustomobject]@{
+                    ProcessId       = $_.ProcessId
+                    ParentProcessId = $_.ParentProcessId
+                    CommandLine     = $_.CommandLine
+                }
+            })
+}
+catch { $viteProcs = @() }
+
+$checks += Test-Five12ViteServer -PortOwners $devPortOwners -ViteProcesses $viteProcs `
+    -Port $DevPort -ExpectedRoot (Join-Path $repoRoot 'app') -PreLaunch:$PreLaunch
 
 # ---------------------------------------------------------------------------
 # Fault 5 — feature gates. Never guess: ask the running backend, and otherwise

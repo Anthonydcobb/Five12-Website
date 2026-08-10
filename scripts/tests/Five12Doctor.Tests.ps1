@@ -440,6 +440,106 @@ Describe 'Fault 2 - flask process hygiene' {
     }
 }
 
+Describe 'Fault 7 - the dev server serving the wrong checkout' {
+
+    # The real command lines, copied from Win32_Process on the rig on
+    # 2026-08-10 while the fault was live. Synthesising these would defeat the
+    # point: the whole check turns on the exact shape npm gives the vite binary
+    # (a `.bin\\..\` hop, doubled separators, node invoked unqualified).
+    $wrongCheckout = '"node"   "C:\dev\five12-wt\netgear-snapshot\app\node_modules\.bin\\..\vite\bin\vite.js" '
+    $rightCheckout = '"node"   "C:\dev\Five12-TheApp\app\node_modules\.bin\\..\vite\bin\vite.js" '
+    $appRoot = 'C:\dev\Five12-TheApp\app'
+
+    It 'reads the serving checkout off the real command line' {
+        (ConvertFrom-Five12ViteCommandLine -CommandLine $wrongCheckout) |
+            Should Be 'C:\dev\five12-wt\netgear-snapshot\app'
+    }
+
+    It 'is not fooled by npm own node_modules earlier in the command line' {
+        # npm-cli.js sits under C:\Program Files\nodejs\node_modules. A lazy
+        # match from the first drive letter would report THAT as the checkout
+        # and then compare a nonsense path, so this pins the anchor.
+        $cl = '"C:\Program Files\nodejs\node.exe" "C:\Program Files\nodejs/node_modules/npm/bin/npm-cli.js" ' +
+              '"C:\dev\Five12-TheApp\app\node_modules\vite\bin\vite.js"'
+        (ConvertFrom-Five12ViteCommandLine -CommandLine $cl) | Should Be 'C:\dev\Five12-TheApp\app'
+    }
+
+    It 'says it cannot tell rather than guessing' {
+        (ConvertFrom-Five12ViteCommandLine -CommandLine 'node vite') | Should Be ''
+        (ConvertFrom-Five12ViteCommandLine -CommandLine '') | Should Be ''
+    }
+
+    It 'passes when no dev server is running at all' {
+        # App mode never starts one. A preflight that cries about a normal
+        # state is a preflight that gets switched off.
+        $r = Test-Five12ViteServer -PortOwners @() -ViteProcesses @() -ExpectedRoot $appRoot
+        $r.Status | Should Be 'OK'
+    }
+
+    It 'passes when the dev server serves this checkout' {
+        $procs = @([pscustomobject]@{ ProcessId = 36600; ParentProcessId = 36756; CommandLine = $rightCheckout })
+        $r = Test-Five12ViteServer -PortOwners @(36600) -ViteProcesses $procs -ExpectedRoot $appRoot
+        $r.Status | Should Be 'OK'
+    }
+
+    It 'FAILS when port 5173 is served from a different checkout' {
+        # The fault itself. The port is bound, the page loads, the app looks
+        # healthy — and the bundle is another branch's. Binding cannot be the
+        # evidence, because it is identical in both states.
+        $procs = @([pscustomobject]@{ ProcessId = 36600; ParentProcessId = 36756; CommandLine = $wrongCheckout })
+        $r = Test-Five12ViteServer -PortOwners @(36600) -ViteProcesses $procs -ExpectedRoot $appRoot
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'five12-wt'
+        ($r.Fix -join ' ') | Should Match 'Stop-Process -Id 36600'
+    }
+
+    It 'matches paths case-insensitively and ignores a trailing separator' {
+        $cl = '"node" "c:\dev\FIVE12-theapp\App\node_modules\.bin\\..\vite\bin\vite.js"'
+        $procs = @([pscustomobject]@{ ProcessId = 1; ParentProcessId = 2; CommandLine = $cl })
+        $r = Test-Five12ViteServer -PortOwners @(1) -ViteProcesses $procs -ExpectedRoot 'C:\dev\Five12-TheApp\app\'
+        $r.Status | Should Be 'OK'
+    }
+
+    It 'WARNs when something that is not Vite holds the port' {
+        $r = Test-Five12ViteServer -PortOwners @(4242) -ViteProcesses @() -ExpectedRoot $appRoot
+        $r.Status | Should Be 'WARN'
+        ($r.Details -join ' ') | Should Match 'not a Vite dev server'
+        ($r.Fix -join ' ') | Should Match 'Get-Process -Id 4242'
+    }
+
+    It 'escalates a foreign port owner to FAIL before a launch' {
+        $r = Test-Five12ViteServer -PortOwners @(4242) -ViteProcesses @() -ExpectedRoot $appRoot -PreLaunch
+        $r.Status | Should Be 'FAIL'
+    }
+
+    It 'FAILS pre-launch even when the running server is the RIGHT checkout' {
+        # vite.config.mjs does not set strictPort, so the launch start.ps1 is
+        # about to make would slide to 5174 without a word while start.ps1
+        # prints http://localhost:5173. Correct-but-duplicate is still broken.
+        $procs = @([pscustomobject]@{ ProcessId = 36600; ParentProcessId = 36756; CommandLine = $rightCheckout })
+        $r = Test-Five12ViteServer -PortOwners @(36600) -ViteProcesses $procs -ExpectedRoot $appRoot -PreLaunch
+        $r.Status | Should Be 'FAIL'
+        ($r.Details -join ' ') | Should Match 'strictPort'
+        ($r.Fix -join ' ') | Should Match 'Stop-Process -Id 36600'
+    }
+
+    It 'WARNs when the port owner is Vite but names no checkout' {
+        $procs = @([pscustomobject]@{ ProcessId = 7; ParentProcessId = 8; CommandLine = 'node vite --host' })
+        $r = Test-Five12ViteServer -PortOwners @(7) -ViteProcesses $procs -ExpectedRoot $appRoot
+        $r.Status | Should Be 'WARN'
+        ($r.Fix -join ' ') | Should Match 'curl http://localhost:5173'
+    }
+
+    It 'does not judge a Vite that is not on the port' {
+        # A worktree dev server on 5174 is somebody else's business. Only the
+        # process holding the port decides what the browser gets.
+        $procs = @([pscustomobject]@{ ProcessId = 36600; ParentProcessId = 36756; CommandLine = $wrongCheckout })
+        $r = Test-Five12ViteServer -PortOwners @() -ViteProcesses $procs -ExpectedRoot $appRoot
+        $r.Status | Should Be 'INFO'
+        ($r.Details -join ' ') | Should Match 'some other port'
+    }
+}
+
 Describe 'Fault 5 - bluetooth feature gates' {
 
     It 'states both gates ON from a running backend' {

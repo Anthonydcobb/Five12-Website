@@ -649,6 +649,186 @@ function Test-Five12FlaskProcesses {
 }
 
 # ---------------------------------------------------------------------------
+# Fault 7 (2026-08-10) — the dev server on 5173 was serving a DIFFERENT
+# checkout. `npm run dev` was started from a worktree while port 5173 was
+# already held by a Vite from C:\dev\Five12-TheApp\app on another branch. Vite
+# does not set strictPort, so the new server moved to the next free port
+# without complaint, the old one kept answering 5173, and start.ps1 printed
+# "Frontend: http://localhost:5173" either way. Most of a session went to
+# hunting a UI panel that was genuinely not in the bundle being served.
+#
+# The lesson this encodes: "a server is listening on the port" is not "the
+# server is running my code." The port is bound in both the healthy and the
+# broken state, so binding cannot be the evidence — the serving checkout is.
+# ---------------------------------------------------------------------------
+
+function ConvertFrom-Five12ViteCommandLine {
+    <#
+    .SYNOPSIS
+        The checkout a Vite dev server is serving, read off its command line.
+    .DESCRIPTION
+        `npm run dev` spawns node with the absolute path of the vite binary
+        inside the invoking checkout's own node_modules, e.g.
+
+          "node" "C:\dev\five12-wt\netgear-snapshot\app\node_modules\.bin\..\vite\bin\vite.js"
+
+        Everything left of `\node_modules\` is the project root. That is the
+        one place the serving checkout is written down: Vite exposes no
+        endpoint that names its root, and the process working directory is not
+        readable from Win32_Process.
+    .OUTPUTS
+        The project root, or '' when the command line does not reveal one.
+        Empty is a real answer — the caller reports "cannot tell" rather than
+        guessing, because a wrong guess here is the fault itself.
+    #>
+    param([string]$CommandLine)
+
+    if ([string]::IsNullOrWhiteSpace($CommandLine)) { return '' }
+
+    # Anchored on the vite binary so an unrelated node_modules earlier in the
+    # command line (npm's own, under C:\Program Files\nodejs) cannot win.
+    # [^"] keeps a match from spanning out of one quoted argument into another.
+    $anchored = [regex]::Match(
+        $CommandLine,
+        '(?<root>[A-Za-z]:[\\/][^"]*?)[\\/]node_modules[\\/][^"]*vite[\\/]bin[\\/]vite\.(js|mjs)',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($anchored.Success) { return $anchored.Groups['root'].Value }
+
+    # A packaging change that moves the binary should degrade to "cannot tell",
+    # not to silence, so try once more without requiring vite/bin/vite.js.
+    $loose = [regex]::Match(
+        $CommandLine,
+        '(?<root>[A-Za-z]:[\\/][^"]*?)[\\/]node_modules[\\/][^"]*vite',
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($loose.Success) { return $loose.Groups['root'].Value }
+
+    return ''
+}
+
+function Test-Five12ViteServer {
+    <#
+    .SYNOPSIS
+        Whatever is answering the dev port must be serving THIS checkout.
+    .PARAMETER PortOwners
+        PIDs listening on $Port.
+    .PARAMETER ViteProcesses
+        Objects with ProcessId, ParentProcessId, CommandLine.
+    .PARAMETER ExpectedRoot
+        The frontend directory of the canonical checkout, e.g.
+        C:\dev\Five12-TheApp\app.
+    .PARAMETER PreLaunch
+        Set when start.ps1 is about to run `npm run dev`. Then ANY listener on
+        the port is a conflict, including a correct one: the second Vite finds
+        the port taken, silently moves to the next free one, and start.ps1
+        still prints 5173.
+    .NOTES
+        Absent is OK, not a warning. App mode never starts a dev server, and a
+        preflight that cries about a normal state is a preflight that gets
+        switched off — which is the failure mode this whole script exists to
+        prevent.
+    #>
+    param(
+        $PortOwners = @(),
+        $ViteProcesses = @(),
+        [int]$Port = 5173,
+        [string]$ExpectedRoot = '',
+        [switch]$PreLaunch
+    )
+
+    $details = @()
+    $fixes = @()
+    $statuses = @()
+
+    $normalize = {
+        param($p)
+        if ([string]::IsNullOrWhiteSpace($p)) { return '' }
+        # Vite's own command line contains `\.bin\\..\` — doubled separators are
+        # normal here, not a sign of a malformed path.
+        $s = $p -replace '/', '\'
+        $s = $s -replace '\\{2,}', '\'
+        return ($s.TrimEnd('\')).ToLowerInvariant()
+    }
+    $normExpected = & $normalize $ExpectedRoot
+
+    $owners = @($PortOwners | Where-Object { $null -ne $_ } | Select-Object -Unique)
+    $procs = @($ViteProcesses)
+    $vitePids = @($procs | ForEach-Object { $_.ProcessId })
+
+    # Only a Vite that actually holds the port can be what the browser reaches.
+    # One serving some other port is somebody else's work, not this launch's.
+    $listening = @($procs | Where-Object { $owners -contains $_.ProcessId })
+    $idle = @($procs | Where-Object { $owners -notcontains $_.ProcessId })
+    $foreign = @($owners | Where-Object { $vitePids -notcontains $_ })
+
+    $servedRoots = @()
+    # PIDs already carrying a Stop-Process fix. Select-Object -Unique cannot
+    # dedupe these because each line ends in a different trailing comment, and
+    # the same PID told twice to stop reads as two separate problems.
+    $stopAdvised = @()
+    foreach ($p in $listening) {
+        $root = ConvertFrom-Five12ViteCommandLine -CommandLine $p.CommandLine
+        if (-not $root) {
+            $statuses += 'WARN'
+            $details += "PID $($p.ProcessId) holds port $Port but its command line does not name a checkout"
+            $fixes += "curl http://localhost:$Port/src/pages/NetworkMonitor.jsx   # read the served source and confirm it is yours"
+            continue
+        }
+        $servedRoots += $root
+        if ((& $normalize $root) -ne $normExpected) {
+            $statuses += 'FAIL'
+            $details += "port $Port is served from $root, not $ExpectedRoot — the browser is showing another checkout's bundle"
+            $fixes += "Stop-Process -Id $($p.ProcessId)   # the dev server serving $root"
+            $fixes += "cd $ExpectedRoot; npm run dev"
+            $stopAdvised += $p.ProcessId
+        }
+    }
+
+    if ($foreign.Count -gt 0) {
+        # Not fatal on its own: without strictPort, Vite just moves to 5174 and
+        # keeps working. It is fatal to the URL start.ps1 prints, which is why
+        # PreLaunch escalates it.
+        $statuses += $(if ($PreLaunch) { 'FAIL' } else { 'WARN' })
+        $details += "port $Port is held by PID $($foreign -join ', '), which is not a Vite dev server"
+        foreach ($f in $foreign) {
+            $fixes += "Get-Process -Id $f | Select-Object Id,ProcessName,Path   # identify it before stopping anything"
+        }
+    }
+
+    if ($PreLaunch -and $owners.Count -gt 0 -and $foreign.Count -eq 0) {
+        $statuses += 'FAIL'
+        $details += "a dev server already holds port $Port (PID $($owners -join ', ')); vite.config.mjs does not set strictPort, so the one about to launch would move to another port while start.ps1 still points you at $Port"
+        foreach ($o in $owners) {
+            if ($stopAdvised -contains $o) { continue }
+            $fixes += "Stop-Process -Id $o   # then launch, or just use the dev server already running"
+        }
+    }
+
+    foreach ($p in $idle) {
+        $statuses += 'INFO'
+        $root = ConvertFrom-Five12ViteCommandLine -CommandLine $p.CommandLine
+        $where = $(if ($root) { $root } else { 'an unknown checkout' })
+        $details += "PID $($p.ProcessId) is a Vite serving $where on some other port — not what port $Port answers with"
+    }
+
+    $status = Get-Five12WorstStatus -Statuses $statuses
+
+    if ($owners.Count -eq 0 -and $procs.Count -eq 0) {
+        $message = "no dev server on port $Port"
+    }
+    elseif ($owners.Count -eq 0) {
+        $message = "$($procs.Count) Vite process(es), none on port $Port"
+    }
+    elseif ($servedRoots.Count -gt 0) {
+        $message = "port $Port serves $($servedRoots[0])"
+    }
+    else {
+        $message = "port $Port is held by PID $($owners -join ', ')"
+    }
+
+    return New-Five12Check -Name 'Dev server' -Status $status -Message $message -Details $details -Fix ($fixes | Select-Object -Unique)
+}
+
+# ---------------------------------------------------------------------------
 # Fault 5 — FIVE12_BLE_TOOLS / FIVE12_BLE_WRITE default off and the launcher
 # did not set them, so the panel said "Bluetooth tools are switched off"
 # ---------------------------------------------------------------------------
@@ -1156,6 +1336,8 @@ Export-ModuleMember -Function @(
     'Test-Five12EnvKeys',
     'Test-Five12Database',
     'Test-Five12FlaskProcesses',
+    'ConvertFrom-Five12ViteCommandLine',
+    'Test-Five12ViteServer',
     'Test-Five12FeatureGates',
     'Format-Five12PSLiteral',
     'Get-Five12HasGateway',
