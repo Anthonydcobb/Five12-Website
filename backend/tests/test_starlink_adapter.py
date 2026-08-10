@@ -192,6 +192,46 @@ def test_a_payload_with_no_readiness_evidence_does_not_claim_online():
     assert s['state'] == 'UNKNOWN'
 
 
+def test_an_active_outage_is_offline_even_when_nothing_else_complains():
+    """The dish reports an outage in progress as a nested `outage` field, and
+    during an obstruction outage `disablement_code` stays OKAY and every
+    ready_state stays true. Deriving online from those two alone reports READY
+    while the dish is dropping out — precisely the moment the panel matters.
+
+    This is also how sparky8512's wrapper derives its `state`: the absence of
+    this field is the only thing behind its literal 'CONNECTED'.
+    """
+    assert 'outage' not in DISH, 'the captured dish was not in an outage'
+
+    s = _status_from(_edited_status(outage={
+        'cause': 'OBSTRUCTED',
+        'start_timestamp_ns': '1786363474730245843',
+        'duration_ns': '84269976877',
+    }))
+
+    assert s['online'] is False
+    assert s['state'] == 'OBSTRUCTED'
+
+
+def test_an_outage_with_no_named_cause_still_reads_as_an_outage():
+    """protobuf omits an enum field at its zero value, so `cause` can be
+    missing from a perfectly real outage."""
+    s = _status_from(_edited_status(outage={'start_timestamp_ns': '1'}))
+
+    assert s['online'] is False
+    assert s['state'] == 'OUTAGE'
+
+
+def test_a_disablement_outranks_an_active_outage():
+    """Both can be set at once. The disablement is the root cause; the outage
+    is its symptom, and the operator needs the former."""
+    s = _status_from(_edited_status(disablement_code='NO_ACTIVE_ACCOUNT',
+                                    outage={'cause': 'NO_PINGS'}))
+
+    assert s['state'] == 'NO_ACTIVE_ACCOUNT'
+    assert s['online'] is False
+
+
 def test_a_dish_without_actuators_is_not_reported_as_stowed():
     """The old code derived stowed from the state field that does not exist.
     This dish reports HAS_ACTUATORS_NO, so it physically cannot stow."""

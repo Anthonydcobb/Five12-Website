@@ -7,12 +7,14 @@ at runtime, so there is no third-party package to install and no generated stub
 to go stale. Only get_status and get_history are ever sent; that module's
 allowlist is a safety boundary, not a convenience.
 
-Why not sparky8512's `starlink_grpc`, which this adapter used to import: it is
-not on PyPI, and its repo ships neither setup.py nor pyproject.toml, so both
-`pip install starlink-grpc-tools` and `pip install git+https://…` fail — both
-were tried on 2026-08-10. It works only as a clone on PYTHONPATH, a deployment
-step that cannot be expressed in requirements.txt and that nothing verifies at
-startup. Reflection needs no clone.
+Why not the community wrapper this adapter used to import: it is not on PyPI
+and its repository ships no packaging metadata, so both a plain `pip install`
+and `pip install git+https://…` fail — both were tried on 2026-08-10. It works
+only as a clone on PYTHONPATH, a deployment step that cannot be expressed in
+requirements.txt and that nothing verifies at startup. Reflection needs no
+clone. Its name is deliberately not written here: this docstring once carried
+a pip line for it that could never have run, and the suite now fails if one
+comes back.
 
 Field names below come from a payload captured verbatim on 2026-08-10 and kept
 in `tests/fixtures/`. A firmware update can move them, so every read is a
@@ -22,9 +24,12 @@ Two things that capture settled, both of which the design got wrong from a
 truncated sample:
 
 - **There is no `state` field.** `device_state` carries uptime and nothing
-  else, so the old `state == 'CONNECTED'` test could never have been true.
-  Connection state is derived from `disablement_code` and `ready_states`.
-  `'CONNECTED'` is not a word this dish says.
+  else, so the old `state == 'CONNECTED'` test could never have matched this
+  payload. `'CONNECTED'` is not a word the dish sends: the community wrapper
+  synthesises it whenever the dish reports no `outage` field, which is the
+  only thing behind it. State here is derived from `disablement_code`, that
+  same `outage` field, and `ready_states`, and reports the dish's own word for
+  a fault rather than an invented one.
 - **`dish_get_history` carries two clocks.** `outages[]` is stamped on an
   uncorrected clock reading 2016; `event_log.events[]` is on wall clock, ten
   years and change ahead. Everything time-based reads the event log, and the
@@ -78,18 +83,31 @@ def _int(value):
 def _connection_state(dish):
     """Returns (state, online). The dish reports neither directly.
 
-    There is no `state` field, so this derives one from the two that do carry
-    it, and reports the dish's own word for the fault rather than inventing a
-    vocabulary — the panel prints `state` verbatim beside the online dot.
+    Three fields carry it, checked worst-first so the operator sees the root
+    cause rather than a symptom:
+
+    1. `disablement_code` — the dish is administratively down (no account, and
+       similar). Outranks everything: an outage under a disablement is its
+       consequence.
+    2. `outage` — an outage in progress, present only while one is happening.
+       Load-bearing on its own: during an obstruction outage the disablement
+       code stays OKAY and every ready_state stays true, so without this the
+       panel would read READY while the link is dropping out.
+    3. `ready_states` — a subsystem that has not come up.
 
     Missing evidence is never read as healthy: a firmware that drops these
     fields yields UNKNOWN and offline, not a green dot on no information.
     """
     code = dish.get('disablement_code')
+    outage = dish.get('outage')
     ready = dish.get('ready_states') or {}
 
     if code and code != 'OKAY':
         return code, False
+    if outage:
+        # `cause` is absent when it is the zero-valued enum: protobuf omits it,
+        # and an unnamed outage is still an outage.
+        return outage.get('cause') or 'OUTAGE', False
     if not ready or not code:
         return 'UNKNOWN', False
 
