@@ -1,78 +1,57 @@
 """Starlink dish adapter — read-only gRPC telemetry.
 
-[VERIFIED] Dishy runs an unauthenticated gRPC server on 192.168.100.1:9200
-(HTTP/2, server reflection on). Community tooling: sparky8512's
-sparky8512's starlink-grpc-tools provides the `starlink_grpc` module. It is NOT
-on PyPI and the repo ships no setup.py or pyproject.toml, so neither
-`pip install starlink-grpc-tools` nor `pip install git+https://...` works --
-both were tried and both fail. Clone the repo and put it on PYTHONPATH.
-No official API — reverse-engineered but stable/widely used.
+[VERIFIED 2026-08-10 on the rig] The dish runs an unauthenticated gRPC server
+on 192.168.100.1:9200 with server reflection enabled. Telemetry comes from
+`starlink_grpc_client`, which builds the schema from the dish's own descriptors
+at runtime, so there is no third-party package to install and no generated stub
+to go stale. Only get_status and get_history are ever sent; that module's
+allowlist is a safety boundary, not a convenience.
 
-[VERIFIED 2026-08-10] on the app interpreter (Python 3.12), this sequence gives
-a working `import starlink_grpc` and a live read:
+Why not sparky8512's `starlink_grpc`, which this adapter used to import: it is
+not on PyPI, and its repo ships neither setup.py nor pyproject.toml, so both
+`pip install starlink-grpc-tools` and `pip install git+https://…` fail — both
+were tried on 2026-08-10. It works only as a clone on PYTHONPATH, a deployment
+step that cannot be expressed in requirements.txt and that nothing verifies at
+startup. Reflection needs no clone.
 
-    pip install grpcio grpcio-tools protobuf yagrc typing-extensions
-    git clone https://github.com/sparky8512/starlink-grpc-tools.git
-    set PYTHONPATH=<clone dir>
+Field names below come from a payload captured verbatim on 2026-08-10 and kept
+in `tests/fixtures/`. A firmware update can move them, so every read is a
+.get() with a default and the panel tolerates gaps.
 
-status_data() then returned state=CONNECTED with 23 status fields from the dish
-at 192.168.100.1. The remaining entries in the repo's own requirements.txt
-(paho-mqtt, influxdb, pypng, croniter, python-dateutil) are for its dish_grpc_*
-scripts and are NOT needed to import the module.
+Two things that capture settled, both of which the design got wrong from a
+truncated sample:
 
-Field names below follow starlink_grpc's status_data() output.
-[NEEDS VERIFICATION on your firmware] — a Starlink update can shift fields,
-so every read is .get() with a default and the panel tolerates gaps.
+- **There is no `state` field.** `device_state` carries uptime and nothing
+  else, so the old `state == 'CONNECTED'` test could never have been true.
+  Connection state is derived from `disablement_code` and `ready_states`.
+  `'CONNECTED'` is not a word this dish says.
+- **`dish_get_history` carries two clocks.** `outages[]` is stamped on an
+  uncorrected clock reading 2016; `event_log.events[]` is on wall clock, ten
+  years and change ahead. Everything time-based reads the event log, and the
+  last-hour window is measured against the dish's own
+  `event_log.current_timestamp_ns` rather than this host's clock.
 
-Read-only by design. The API also supports reboot/stow — deliberately NOT
-exposed (v2, behind confirmation, per the research doc).
+Read-only by design. The endpoint also accepts destructive commands, which is
+exactly why the client refuses to name them.
 """
 
+import logging
 import math
-import os
-import sys
 import time
 
 from . import DeviceAdapter, check_thresholds, tcp_reachable
+from . import starlink_grpc_client
+
+log = logging.getLogger(__name__)
+
+#: event_log reasons read `EVENT_REASON_OUTAGE_OBSTRUCTED`; the panel prints
+#: the cause verbatim and only the last word carries meaning.
+_EVENT_REASON_PREFIX = 'EVENT_REASON_OUTAGE_'
+_EVENT_SEVERITY_PREFIX = 'EVENT_SEVERITY_'
+_HOUR_NS = 3600 * 10 ** 9
 
 DISH_HOST = '192.168.100.1'   # fixed address on any Starlink LAN [VERIFIED]
 DISH_PORT = 9200
-
-#: Directory holding a clone of sparky8512/starlink-grpc-tools.
-#:
-#: The module cannot be pip-installed (see the header), so the only way to make
-#: `import starlink_grpc` work is to have its directory on sys.path. Setting
-#: PYTHONPATH at launch does that, but only for whoever remembers -- start.ps1
-#: does not set it, so live telemetry would silently revert to unavailable the
-#: next time anyone started the app normally. This makes the location
-#: configuration instead of a launch-time incantation.
-#:
-#: Unset by default: an operator who does not want live telemetry gets exactly
-#: the behaviour they had before, and nothing is added to sys.path.
-GRPC_PATH_ENV = 'FIVE12_STARLINK_GRPC_PATH'
-
-
-def _ensure_grpc_path():
-    '''Put the starlink-grpc-tools clone on sys.path, if configured.
-
-    Returns the directory added or already present, else None.
-
-    Deliberately narrow: it will not add a path that does not exist, because a
-    typo'd directory silently doing nothing is indistinguishable from the
-    feature being off, and the operator would have no way to tell which. A
-    configured-but-missing directory is reported instead -- see _real_status.
-
-    Idempotent, so repeated status reads do not grow sys.path.
-    '''
-    raw = (os.getenv(GRPC_PATH_ENV) or '').strip().strip('"')
-    if not raw:
-        return None
-    path = os.path.abspath(raw)
-    if not os.path.isdir(path):
-        return None
-    if path not in sys.path:
-        sys.path.insert(0, path)
-    return path
 
 ALERT_RULES = [
     ('obstructionPct', 'gt', 5, 'Obstruction at {value}% — check sky view', 'warn'),
@@ -80,6 +59,89 @@ ALERT_RULES = [
     ('latencyMs', 'gt', 120, 'Latency {value} ms — degraded', 'warn'),
     ('outagesLastHour', 'gt', 2, '{value} outages in the last hour', 'warn'),
 ]
+
+
+def _num(value, scale=1.0, digits=2):
+    """Scale and round, or None. Absent fields must not become zeroes — a tile
+    reading 0 Mbps is a claim, and a missing field is not one."""
+    return round(value * scale, digits) if isinstance(value, (int, float)) else None
+
+
+def _int(value):
+    """uptime_s arrives as a string: protobuf renders 64-bit ints that way."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _connection_state(dish):
+    """Returns (state, online). The dish reports neither directly.
+
+    There is no `state` field, so this derives one from the two that do carry
+    it, and reports the dish's own word for the fault rather than inventing a
+    vocabulary — the panel prints `state` verbatim beside the online dot.
+
+    Missing evidence is never read as healthy: a firmware that drops these
+    fields yields UNKNOWN and offline, not a green dot on no information.
+    """
+    code = dish.get('disablement_code')
+    ready = dish.get('ready_states') or {}
+
+    if code and code != 'OKAY':
+        return code, False
+    if not ready or not code:
+        return 'UNKNOWN', False
+
+    not_ready = sorted(name for name, up in ready.items() if not up)
+    if not_ready:
+        return 'NOT READY: ' + ', '.join(not_ready), False
+    return 'READY', True
+
+
+def _stowed(alignment):
+    """No field reports stow state.
+
+    A dish reporting no actuators cannot stow, which is the only claim the
+    payload supports. Anything else is unknown, and None says so.
+    """
+    if alignment.get('has_actuators') == 'HAS_ACTUATORS_NO':
+        return False
+    return None
+
+
+def _outages(history):
+    """Returns (outages_in_the_last_hour, newest-first log).
+
+    Read from `event_log.events`, deliberately not from `outages[]`: the two
+    describe the same kind of event but `outages[]` is stamped on an
+    uncorrected clock reading 2016, which would put every entry a decade in the
+    past and leave the last-hour count permanently at zero.
+
+    The window is measured against the dish's own `current_timestamp_ns` so it
+    does not drift with host clock skew.
+    """
+    event_log = history.get('event_log') or {}
+    now_ns = event_log.get('current_timestamp_ns')
+
+    stamped = []
+    for event in event_log.get('events') or []:
+        start = _int(event.get('start_timestamp_ns'))
+        if start is not None:
+            stamped.append((start, event))
+    stamped.sort(key=lambda pair: pair[0], reverse=True)
+
+    entries = [{
+        'ts': start / 1e9,
+        'durationS': round((_int(event.get('duration_ns')) or 0) / 1e9, 3),
+        'cause': (event.get('reason') or 'UNKNOWN').replace(_EVENT_REASON_PREFIX, ''),
+        'severity': (event.get('severity') or '').replace(_EVENT_SEVERITY_PREFIX, ''),
+    } for start, event in stamped]
+
+    last_hour = None
+    if _int(now_ns) is not None:
+        last_hour = sum(1 for start, _ in stamped if _int(now_ns) - start <= _HOUR_NS)
+    return last_hour, entries
 
 
 class StarlinkAdapter(DeviceAdapter):
@@ -118,58 +180,57 @@ class StarlinkAdapter(DeviceAdapter):
         return status
 
     def _real_status(self):
-        configured = os.getenv(GRPC_PATH_ENV)
-        resolved = _ensure_grpc_path()
         try:
-            import starlink_grpc  # from starlink-grpc-tools
-        except ImportError:
-            # Distinguish the three states rather than emitting one message for
-            # all of them. "Set it" and "you set it to somewhere that isn't
-            # there" need different actions, and an operator staring at a
-            # generic string cannot tell which they are in.
-            if configured and not resolved:
-                reason = (f"{GRPC_PATH_ENV} is set to '{configured}', but that "
-                          f"directory does not exist.")
-            elif not configured:
-                reason = (f"Module 'starlink_grpc' not importable. It is not on "
-                          f"PyPI: clone sparky8512/starlink-grpc-tools, then set "
-                          f"{GRPC_PATH_ENV} to that directory. Also "
-                          f"'pip install grpcio grpcio-tools protobuf yagrc'. "
-                          f"Sim mode needs none of this.")
-            else:
-                reason = (f"{GRPC_PATH_ENV} points at '{resolved}' but "
-                          f"'import starlink_grpc' still failed. Check the clone "
-                          f"contains starlink_grpc.py and that "
-                          f"'pip install grpcio grpcio-tools protobuf yagrc' ran "
-                          f"on the interpreter serving this app.")
-            return {'available': False, 'reason': reason}
-        try:
-            groups = starlink_grpc.status_data()  # (status, obstruction, alerts)
-            g_status, g_obstruct, g_alerts = groups
+            status = starlink_grpc_client.call('get_status')
         except Exception as exc:  # noqa: BLE001 — device offline, grpc errors, proto drift
             return {'available': False, 'reason': f'dish unreachable: {exc}'}
 
-        def num(d, key, scale=1.0):
-            v = d.get(key)
-            return round(v * scale, 2) if isinstance(v, (int, float)) else None
+        dish = (status or {}).get('dish_get_status') or {}
 
-        state = g_status.get('state', 'UNKNOWN')
+        # A second, independent read. The dish's live state is worth showing
+        # even when history fails, so this one is allowed to lose on its own.
+        try:
+            history = (starlink_grpc_client.call('get_history') or {}).get(
+                'dish_get_history') or {}
+        except Exception as exc:  # noqa: BLE001 — same failure modes, lesser stakes
+            log.debug('starlink get_history failed, keeping live status: %s', exc)
+            history = None
+
+        outages_last_hour, outage_log = (
+            (None, []) if history is None else _outages(history))
+
+        state, online = _connection_state(dish)
+        info = dish.get('device_info') or {}
+        gps = dish.get('gps_stats') or {}
+        obstruction = dish.get('obstruction_stats') or {}
+        alignment = dish.get('alignment_stats') or {}
+
         return {
             'available': True,
             'source': 'grpc',
             'state': state,
-            'online': state == 'CONNECTED',
-            'uptimeS': g_status.get('uptime'),
-            'downMbps': num(g_status, 'downlink_throughput_bps', 1 / 1e6),
-            'upMbps': num(g_status, 'uplink_throughput_bps', 1 / 1e6),
-            'latencyMs': num(g_status, 'pop_ping_latency_ms'),
-            'snr': g_status.get('snr'),
-            'snrAboveNoiseFloor': g_status.get('is_snr_above_noise_floor'),
-            'obstructionPct': num(g_obstruct, 'fraction_obstructed', 100),
-            'stowed': g_status.get('state') == 'STOWED',
-            'hardwareAlerts': [k for k, v in (g_alerts or {}).items() if v],
-            'outagesLastHour': None,   # needs history_data(); v2
-            'outageLog': [],
+            'online': online,
+            'uptimeS': _int((dish.get('device_state') or {}).get('uptime_s')),
+            'downMbps': _num(dish.get('downlink_throughput_bps'), 1 / 1e6),
+            'upMbps': _num(dish.get('uplink_throughput_bps'), 1 / 1e6),
+            'latencyMs': _num(dish.get('pop_ping_latency_ms')),
+            'snr': None,        # dropped from the dish's payload years ago
+            'snrAboveNoiseFloor': dish.get('is_snr_above_noise_floor'),
+            'obstructionPct': _num(obstruction.get('fraction_obstructed'), 100),
+            'obstructionValidS': _num(obstruction.get('valid_s')),
+            'stowed': _stowed(alignment),
+            'hardwareAlerts': [k for k, v in (dish.get('alerts') or {}).items() if v],
+            'outagesLastHour': outages_last_hour,
+            'outageLog': outage_log,
+            'hardwareVersion': info.get('hardware_version'),
+            'softwareVersion': info.get('software_version'),
+            'bootcount': info.get('bootcount'),
+            'softwareUpdateState': dish.get('software_update_state'),
+            'gpsValid': gps.get('gps_valid'),
+            'gpsSats': gps.get('gps_sats'),
+            'ethSpeedMbps': dish.get('eth_speed_mbps'),
+            'mobilityClass': dish.get('mobility_class'),
+            'disablementCode': dish.get('disablement_code'),
         }
 
     # ── simulator: realistic drift, occasional outage ──

@@ -48,7 +48,7 @@
 - Consumes: nothing from earlier tasks.
 - Produces: `call(request_name, host='192.168.100.1', port=9200, timeout=10.0) -> dict` and `ALLOWED_REQUESTS: frozenset`. Task 2 imports both.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `backend/tests/test_starlink_grpc_client.py`:
 
@@ -144,7 +144,7 @@ def test_the_reflection_request_uses_field_four_for_a_symbol():
     assert req.endswith(b'SpaceX.API.Device.Device')
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 From `C:\dev\Five12-TheApp\backend`:
 
@@ -154,7 +154,7 @@ python -m pytest tests/test_starlink_grpc_client.py -v
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'app.integrations.starlink_grpc_client'`.
 
-- [ ] **Step 3: Write the client**
+- [x] **Step 3: Write the client**
 
 Create `backend/app/integrations/starlink_grpc_client.py`:
 
@@ -350,7 +350,7 @@ def call(request_name, host=DISH_HOST, port=DISH_PORT, timeout=10.0):
         handle(message, timeout=timeout), preserving_proto_field_name=True)
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 python -m pytest tests/test_starlink_grpc_client.py -v
@@ -359,7 +359,7 @@ python -m pytest tests/test_starlink_grpc_client.py -v
 
 Expected: 6 PASS on **both**. The 3.14 interpreter has no grpcio; nothing in the tests or at the module's import scope may need it — `grpc` and `google.protobuf` are imported inside functions for exactly this reason.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/app/integrations/starlink_grpc_client.py backend/tests/test_starlink_grpc_client.py
@@ -379,7 +379,7 @@ git commit -m "feat(starlink): read-only gRPC client via server reflection"
 - Consumes: `starlink_grpc_client.call(name) -> dict`, `ALLOWED_REQUESTS`.
 - Produces: `_real_status()` returning every key the panel already reads, plus `hardwareVersion`, `softwareVersion`, `bootcount`, `softwareUpdateState`, `gpsValid`, `gpsSats`, `ethSpeedMbps`, `mobilityClass`, `disablementCode`, `obstructionValidS`. Task 3 renders the new ones.
 
-- [ ] **Step 1: Capture the real payloads — and settle one open question**
+- [x] **Step 1: Capture the real payloads — and settle one open question**
 
 Run this from `C:\dev\Five12-TheApp\backend` with the **app interpreter**:
 
@@ -393,7 +393,7 @@ Create `backend/tests/fixtures/` first if it does not exist.
 
 If no single field carries it, derive `online` from `disablement_code == 'OKAY'` and all `ready_states` values being true, and **set `state` to a short string you can justify from the payload** — do not invent `'CONNECTED'` if the dish never says it. Record what you found in your report. The panel prints `status.state` verbatim next to the online dot, so this is operator-facing.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `backend/tests/test_starlink_adapter.py`:
 
@@ -520,7 +520,7 @@ def test_the_dependency_message_names_installable_packages():
     assert 'starlink_grpc' not in src.replace('starlink_grpc_client', '')
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 ```bash
 python -m pytest tests/test_starlink_adapter.py -v
@@ -528,7 +528,7 @@ python -m pytest tests/test_starlink_adapter.py -v
 
 Expected: FAIL — the adapter still imports `starlink_grpc` and returns the not-installed reason, so the mapping assertions fail and `test_the_dependency_message_names_installable_packages` fails on the source scan.
 
-- [ ] **Step 4: Rewrite `_real_status` and the module docstring**
+- [x] **Step 4: Rewrite `_real_status` and the module docstring**
 
 In `backend/app/integrations/starlink.py`, replace the `_real_status` method. Map from the **captured fixture's actual field names**, using the `state`/`online` decision made in Step 1:
 
@@ -638,7 +638,7 @@ Replace it with an accurate statement: telemetry comes from
 `starlink_grpc_client`, which needs `grpcio` and `protobuf` — both on PyPI and
 both installed on this rig (1.83.0 / 7.35.1).
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 python -m pytest tests/test_starlink_adapter.py -v
@@ -647,7 +647,7 @@ python -m pytest tests/test_starlink_adapter.py -v
 
 Expected: 8 PASS on both.
 
-- [ ] **Step 6: Run the whole backend suite**
+- [x] **Step 6: Run the whole backend suite**
 
 ```bash
 python -m pytest tests/ -q
@@ -655,7 +655,7 @@ python -m pytest tests/ -q
 
 Expected: no new failures.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/app/integrations/starlink.py backend/tests/test_starlink_adapter.py backend/tests/fixtures/
