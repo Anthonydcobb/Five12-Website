@@ -78,8 +78,13 @@ One paste box. The operator never classifies the page they saved.
 
 A portconfig import posts `{html, macAddress}`. The MAC is already this
 application's device key — `/api/network/devices/<mac>/ports` uses it — so no
-new identifier is introduced. The panel offers only switches that already hold
-an Overview snapshot.
+new identifier is introduced.
+
+`SnapshotImportPanel` is already scoped to one device (it takes a `device` prop
+and renders nothing unless `device.deviceType === 'netgear'`), so the operator
+has necessarily selected a switch before pasting. The explicit choice therefore
+costs one request field and no new UI. The `no_base_snapshot` refusal, not the
+panel, is what enforces that a base snapshot exists.
 
 ### Storage
 
@@ -134,8 +139,12 @@ popover association.
 | Device has no Overview snapshot yet | 409 | `no_base_snapshot` |
 
 A successful import returns 200 with `portsUpdated`,
-`portsInCaptureNotInBase`, `disagreements`, and `portConfigAsOf`. The panel
-surfaces the server's `detail` verbatim, as it already does.
+`portsInCaptureNotInBase`, `disagreements`, `linkStateDiffers`, and
+`portConfigAsOf`. `disagreements` carries only the profile/template
+mismatches — the popover-association evidence. `linkStateDiffers` is the
+secondary, time-sensitive note and is kept in its own field so the two are
+never read as equally meaningful. The panel surfaces the server's `detail`
+verbatim, as it already does.
 
 ## Verification
 
