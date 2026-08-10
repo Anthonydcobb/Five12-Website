@@ -234,6 +234,61 @@ def _parse_ports(soup) -> list:
     return out
 
 
+def detect_page_type(html) -> str | None:
+    """Which AV UI page this is, or None.
+
+    Cheap string tests before any parse: the route is handed whatever JSON
+    supplied, and building a soup for a 440KB page only to reject it is waste.
+    Order matters -- the portconfig page also contains port graphics, but only
+    it carries `.port-configuration-row`.
+    """
+    if not isinstance(html, str) or not html:
+        return None
+    if 'port-configuration-row' in html:
+        return 'portconfig'
+    if 'device_manageip' in html:
+        return 'overview'
+    return None
+
+
+def parse_portconfig(html) -> list:
+    """Per-port profile and template from a Port Configuration page.
+
+    Structural, unlike _merge_popovers: the port number and its profile live in
+    the SAME row, so nothing here depends on document order.
+
+    [VERIFIED 2026-08-10] The table is a `vue-recycle-scroller`. A saved page
+    holds only the rows rendered at capture time -- 10 of 12 in the fixture --
+    so the caller must treat the result as a SUPPLEMENT and never as the set of
+    ports that exist.
+    """
+    if not isinstance(html, str) or not html:
+        return []
+    soup = BeautifulSoup(html, _PARSER)
+    out = []
+    for row in soup.select('.port-configuration-row'):
+        number = _int_in(_text(row.select_one('.port-cell .lan-font')))
+        if number is None:
+            continue
+        cells = row.select('.scrollable-cells > .cell')
+        # Profile Name and Profile Template are the last two columns. Indexing
+        # from the END keeps this working if a firmware adds a column earlier
+        # in the row, which is the likelier change.
+        if len(cells) < 2:
+            continue
+        content = row.select_one('.port-cell .lan-content')
+        classes = content.get('class', []) if content else []
+        out.append({
+            'port': number,
+            'profile': _text(cells[-2]),
+            'template': _text(cells[-1]),
+            'linkUp': bool(_LINK_UP_CLASSES & set(classes)),
+            'poe': row.select_one('.port-poe') is not None,
+        })
+    out.sort(key=lambda r: r['port'])
+    return out
+
+
 # Popover row label -> output key. Labels render as 'IP Address :'.
 _POPOVER_FIELDS = {
     'Host': 'host',
