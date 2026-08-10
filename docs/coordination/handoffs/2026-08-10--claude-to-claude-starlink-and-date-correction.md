@@ -11,35 +11,51 @@
 Two things are outstanding that are *not* the Starlink feature, and one of
 them is an error in already-merged code. Do those before adding features.
 
-### 1. Dates are wrong in merged, pushed work — correct them
+### 1. Dates — RESOLVED 2026-08-10, and this section was itself wrong
 
-The session that produced the DMX and GigaCore features believed the date was
-**2026-08-05 / 2026-08-06**. It was **2026-08-10** throughout. The
-measurements in those documents are real and were taken on the rig; only the
-dates on them are wrong.
+> **Amended 2026-08-10 by the next session.** The claim below — that the DMX
+> and GigaCore dates on `main` were wrong — did not survive checking. Git
+> author dates are the ground truth and they say those stamps are **accurate**.
+> Only the Starlink artifacts were misdated. Corrected accordingly; the merged
+> `[VERIFIED 2026-08-05]` / `[VERIFIED 2026-08-06]` stamps were **left alone**,
+> because rewriting them would have replaced true evidence with false evidence.
 
-Affected, and now on `main`:
+What the original section claimed: that the session believed it was
+2026-08-05/06 when it was 2026-08-10 throughout, and that every dated stamp on
+`main` needed correcting.
 
-- `docs/superpowers/specs/2026-08-05-dmx-node-port-universes-design.md`
-- `docs/superpowers/plans/2026-08-05-dmx-node-port-universes.md`
-- `docs/superpowers/specs/2026-08-06-gigacore-port-device-map-design.md`
-- `docs/superpowers/plans/2026-08-06-gigacore-port-device-map.md`
-- `docs/superpowers/specs/2026-08-06-starlink-dish-reflection-client-design.md`
-- `docs/superpowers/plans/2026-08-06-starlink-dish-reflection-client.md`
-- **In code**, which matters most, because this repo treats a dated
-  verification claim as evidence:
-  - `backend/app/vendors/__init__.py` — `[VERIFIED 2026-08-06] against five
-    GigaCore12s, ~2s each`, and the `/model/status` enum comment's
-    `[VERIFIED 2026-08-05] all 68 ports…`
-  - `backend/tests/test_switch_ports.py`, `test_switch_lookup.py`,
-    `test_node_config_routes.py` — docstrings citing 2026-08-06
-  - `backend/app/integrations/starlink_grpc_client.py` — `[VERIFIED 2026-08-06
-    on the rig]`
+What `git log --format='%h %ai'` actually shows:
 
-Renaming the spec/plan files changes paths other documents reference; grep for
-the old names before renaming, or leave filenames and correct only the
-in-document dates. **Correcting the in-code `[VERIFIED]` dates is the part
-that is not optional.**
+| Artifact | First added (author date) | Stamp | Verdict |
+|---|---|---|---|
+| `specs/2026-08-05-dmx-node-port-universes-design.md` | 2026-08-05 19:07 | 2026-08-05 | correct |
+| `plans/2026-08-05-dmx-node-port-universes.md` | 2026-08-05 19:10 | 2026-08-05 | correct |
+| `specs/2026-08-06-gigacore-port-device-map-design.md` | 2026-08-06 09:43 | 2026-08-06 | correct |
+| `plans/2026-08-06-gigacore-port-device-map.md` | 2026-08-06 15:25 | 2026-08-06 | correct |
+| `backend/app/vendors/netgear_snapshot.py` | 2026-08-06 19:10 | 2026-08-06 | correct |
+| Starlink spec / plan / client / tests | **2026-08-10 08:34–08:43** | 2026-08-06 | **wrong** |
+
+The likely source of the confusion: the NETGEAR commits were *authored*
+2026-08-06/07 but *committed* to `main` at 2026-08-10 08:25 by the rebase, so
+`git log` without `%ai` shows them all as 08-10. Reading committer dates as
+author dates makes a week of real work look like one mis-stamped session.
+
+Corrected (Starlink only), all on this branch:
+
+- `specs/2026-08-06-starlink-dish-reflection-client-design.md` → renamed
+  `2026-08-10-…`, `Date:` and the `Measured` banner updated
+- `plans/2026-08-06-starlink-dish-reflection-client.md` → renamed
+  `2026-08-10-…`, five in-document dates and the spec reference updated
+- `backend/app/integrations/starlink_grpc_client.py` — `[VERIFIED 2026-08-10 on
+  the rig]` and the `ALLOWED_REQUESTS` comment
+- `backend/tests/test_starlink_grpc_client.py` — the `MUTATING` capture date
+
+Renaming was safe: the only references to the old filenames were inside the
+plan itself and this handoff.
+
+**Nothing on `main` was touched.** `backend/app/vendors/__init__.py`,
+`network_routes.py`, `netgear_snapshot.py` and the GigaCore/DMX test docstrings
+keep their original dates, which match when the measurements were taken.
 
 ### 2. Task 1 of the Starlink plan has unfixed review findings
 
@@ -80,8 +96,8 @@ unused. `_message_classes` breaking after the first stream response is
 
 ## Starlink: what is done and what remains
 
-Plan: `docs/superpowers/plans/2026-08-06-starlink-dish-reflection-client.md`
-Spec: `docs/superpowers/specs/2026-08-06-starlink-dish-reflection-client-design.md`
+Plan: `docs/superpowers/plans/2026-08-10-starlink-dish-reflection-client.md`
+Spec: `docs/superpowers/specs/2026-08-10-starlink-dish-reflection-client-design.md`
 
 - **Task 1 — DONE** (`e7c1799`), findings above unfixed.
 - **Task 2 — not started.** Capture real payloads to

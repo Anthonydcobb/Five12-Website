@@ -1,6 +1,6 @@
 # Starlink dish telemetry via gRPC reflection — design
 
-- **Date:** 2026-08-06
+- **Date:** 2026-08-10
 - **Author:** Claude Code, with Anthony
 - **Status:** design approved, not implemented
 - **Scope:** `StarlinkAdapter`'s real-status path and the tiles the existing
@@ -51,7 +51,7 @@ anything about it.
 
 ## What the hardware actually serves
 
-> **Measured 2026-08-06 — `verified on actual gear`.** Every figure below is
+> **Measured 2026-08-10 — `verified on actual gear`.** Every figure below is
 > from live calls against the dish on this rig.
 
 **Reflection is enabled.** `192.168.100.1:9200` answers

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12 (app interpreter), `grpcio` 1.83.0, `protobuf` 7.35.1, pytest. React 18 frontend, vitest.
 
-**Spec:** `docs/superpowers/specs/2026-08-06-starlink-dish-reflection-client-design.md`
+**Spec:** `docs/superpowers/specs/2026-08-10-starlink-dish-reflection-client-design.md`
 
 ## Global Constraints
 
@@ -72,7 +72,7 @@ import pytest
 MODULE = 'app.integrations.starlink_grpc_client'
 
 # Every mutating request name observed in the dish's own Request oneof on
-# 2026-08-06. None may appear in the client's source.
+# 2026-08-10. None may appear in the client's source.
 MUTATING = (
     'reboot', 'dish_stow', 'factory_reset', 'dish_factory_reset',
     'dish_inhibit_rf', 'dish_inhibit_gps', 'software_update', 'set_sku',
@@ -161,7 +161,7 @@ Create `backend/app/integrations/starlink_grpc_client.py`:
 ```python
 """Read-only gRPC client for the Starlink dish, via server reflection.
 
-[VERIFIED 2026-08-06 on the rig] The dish at 192.168.100.1:9200 enables gRPC
+[VERIFIED 2026-08-10 on the rig] The dish at 192.168.100.1:9200 enables gRPC
 server reflection. One `file_containing_symbol` lookup for
 `SpaceX.API.Device.Device` returns the full transitive descriptor set — 19
 files — so the schema is built at runtime and no generated stubs are shipped
@@ -184,7 +184,7 @@ DISH_HOST = '192.168.100.1'
 DISH_PORT = 9200
 
 #: The only requests this application will ever send. Both verified to return
-#: real data on 2026-08-06. Widening this set is a safety decision, not a
+#: real data on 2026-08-10. Widening this set is a safety decision, not a
 #: convenience one — see the module docstring.
 ALLOWED_REQUESTS = frozenset({'get_status', 'get_history'})
 
@@ -743,7 +743,7 @@ git commit -m "feat(starlink): show device info and update state on the panel"
 Tests prove the mapping. They cannot prove the running backend can reach the dish, and on this branch's sibling features that gap has caught a stale backend twice.
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-08-06-starlink-dish-reflection-client-design.md` (status + Verification section)
+- Modify: `docs/superpowers/specs/2026-08-10-starlink-dish-reflection-client-design.md` (status + Verification section)
 
 - [ ] **Step 1: Confirm the client works from this machine**
 
@@ -780,7 +780,7 @@ The other Devices tabs (Bolero, Stardust, Cintenna, Astera) still render. The Ne
 
 - [ ] **Step 6: Update the spec and commit**
 
-Set the status line to `implemented 2026-08-06`, add a Verification section recording what steps 1 and 4 actually showed, and commit.
+Set the status line to `implemented 2026-08-10`, add a Verification section recording what steps 1 and 4 actually showed, and commit.
 
 ---
 

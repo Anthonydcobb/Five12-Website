@@ -17,7 +17,7 @@ import pytest
 MODULE = 'app.integrations.starlink_grpc_client'
 
 # Every mutating request name observed in the dish's own Request oneof on
-# 2026-08-06. None may appear in the client's source.
+# 2026-08-10. None may appear in the client's source.
 MUTATING = (
     'reboot', 'dish_stow', 'factory_reset', 'dish_factory_reset',
     'dish_inhibit_rf', 'dish_inhibit_gps', 'software_update', 'set_sku',

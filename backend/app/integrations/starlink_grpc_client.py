@@ -1,6 +1,6 @@
 """Read-only gRPC client for the Starlink dish, via server reflection.
 
-[VERIFIED 2026-08-06 on the rig] The dish at 192.168.100.1:9200 enables gRPC
+[VERIFIED 2026-08-10 on the rig] The dish at 192.168.100.1:9200 enables gRPC
 server reflection. One `file_containing_symbol` lookup for
 `SpaceX.API.Device.Device` returns the full transitive descriptor set — 19
 files — so the schema is built at runtime and no generated stubs are shipped
@@ -23,7 +23,7 @@ DISH_HOST = '192.168.100.1'
 DISH_PORT = 9200
 
 #: The only requests this application will ever send. Both verified to return
-#: real data on 2026-08-06. Widening this set is a safety decision, not a
+#: real data on 2026-08-10. Widening this set is a safety decision, not a
 #: convenience one — see the module docstring.
 ALLOWED_REQUESTS = frozenset({'get_status', 'get_history'})
 
