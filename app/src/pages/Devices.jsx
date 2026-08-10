@@ -118,6 +118,11 @@ function StarlinkPanel() {
         <span className="text-[9px] font-mono text-text-muted">uptime {fmtUptime(status.uptimeS)}</span>
       </div>
       <AlertChips alerts={status.alerts} />
+      {status.softwareUpdateState === 'REBOOT_REQUIRED' && (
+        <div className="text-[10px] font-mono text-warn">
+          ⚠ software update installed — dish reboot required
+        </div>
+      )}
       <div className="flex gap-2 flex-wrap">
         <Tile label="Down" value={status.downMbps} unit="Mbps" accent="var(--color-gel)" />
         <Tile label="Up" value={status.upMbps} unit="Mbps" accent="var(--color-online)" />
@@ -148,8 +153,18 @@ function StarlinkPanel() {
           ))}
         </div>
       )}
+      <div className="text-[9px] font-mono text-text-muted flex gap-3 flex-wrap">
+        {status.hardwareVersion && <span>hw {status.hardwareVersion}</span>}
+        {status.softwareVersion && <span>sw {status.softwareVersion}</span>}
+        {status.bootcount != null && <span>boots {status.bootcount}</span>}
+        {status.gpsValid != null && (
+          <span>gps {status.gpsValid ? `${status.gpsSats ?? '?'} sats` : 'invalid'}</span>
+        )}
+        {status.ethSpeedMbps != null && <span>eth {status.ethSpeedMbps} Mbps</span>}
+        {status.mobilityClass && <span>{status.mobilityClass.toLowerCase()}</span>}
+      </div>
       <div className="text-[8px] text-text-muted font-mono">
-        read-only · reverse-engineered gRPC (community protos) — fields may shift with dish firmware
+        read-only · schema read from the dish itself over gRPC reflection — fields may shift with dish firmware
       </div>
     </div>
   );

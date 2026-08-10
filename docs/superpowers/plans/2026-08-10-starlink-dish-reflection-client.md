@@ -673,13 +673,13 @@ git commit -m "feat(starlink): map live dish telemetry, fill the outage tiles"
 - Consumes: the adapter keys added in Task 2.
 - Produces: no new exports.
 
-- [ ] **Step 1: Note why this task has no unit test**
+- [x] **Step 1: Note why this task has no unit test**
 
 `StarlinkPanel` is not exported from `Devices.jsx`, and `Devices.jsx` has no test file. Exporting a component solely so a test can reach it changes the module's surface to serve the test rather than the app, and standing up a harness for one presentational panel buys little: the additions here are guarded field renders with no logic.
 
 This task is therefore verified by the build plus Task 4's on-screen check. Record that reasoning in your report so it reads as a decision rather than an omission — and if you disagree, say so rather than quietly adding an export.
 
-- [ ] **Step 2: Add the device-info line and update chip**
+- [x] **Step 2: Add the device-info line and update chip**
 
 In `app/src/pages/Devices.jsx`, inside `StarlinkPanel`, immediately after the
 existing `<AlertChips alerts={status.alerts} />` line, add:
@@ -711,7 +711,7 @@ And immediately before the closing `</div>` of the panel's outer
 Every field is guarded, so a dish on older firmware that omits any of them
 renders a shorter line rather than blanks or `undefined`.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 From `C:\dev\Five12-TheApp\app`:
 
@@ -721,7 +721,7 @@ npm run build
 
 Expected: `✓ built`.
 
-- [ ] **Step 4: Run the frontend suite for regressions**
+- [x] **Step 4: Run the frontend suite for regressions**
 
 ```bash
 npm test
@@ -729,7 +729,7 @@ npm test
 
 Expected: no new failures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add app/src/pages/Devices.jsx
