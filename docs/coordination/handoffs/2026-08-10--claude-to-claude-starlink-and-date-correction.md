@@ -57,7 +57,29 @@ plan itself and this handoff.
 `network_routes.py`, `netgear_snapshot.py` and the GigaCore/DMX test docstrings
 keep their original dates, which match when the measurements were taken.
 
-### 2. Task 1 of the Starlink plan has unfixed review findings
+### 2. Task 1's review findings — FIXED 2026-08-10
+
+> **Resolved.** All four Importants and the three minors are fixed, test-first;
+> each fix has a test that was watched failing first. Suite is **796 passed, 7
+> skipped on both interpreters** (783 + 13 new). Detail kept below because the
+> reasoning still explains the shape of the code.
+>
+> - **1, channel leak** — `call()` now opens the channel once and closes it in
+>   a `finally`. Three tests: success, failure, and warm-cache paths.
+> - **2, cold-cache race** — the fetch moved inside `_cache_lock` via
+>   `_classes_for()`. The race reproduced first as `[1, 1] == [1]`.
+> - **3, silent truncation** — `MalformedReflectionResponse`, raised naming the
+>   wire type and offset, outer and inner. `_read_varint` and a new `_slice()`
+>   guard raise it too, instead of `IndexError` and a short read.
+> - **4, a stub would pass** — `_file_descriptors` now has direct coverage
+>   against a synthetic `ServerReflectionResponse`, and `call()`'s happy path
+>   runs end to end against a fake channel and an injected `google.protobuf`.
+> - Minors: unused `importlib.util` import removed; the one-request-one-response
+>   `break` in `_message_classes` documented rather than changed.
+>
+> Original text follows, unchanged.
+
+#### Original finding (for context)
 
 `backend/app/integrations/starlink_grpc_client.py` is committed and its six
 tests pass on both interpreters, but a review raised four Importants that were
