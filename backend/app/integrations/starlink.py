@@ -2,8 +2,23 @@
 
 [VERIFIED] Dishy runs an unauthenticated gRPC server on 192.168.100.1:9200
 (HTTP/2, server reflection on). Community tooling: sparky8512's
-starlink-grpc-tools ("pip install starlink-grpc-tools" -> module
-`starlink_grpc`). No official API — reverse-engineered but stable/widely used.
+sparky8512's starlink-grpc-tools provides the `starlink_grpc` module. It is NOT
+on PyPI and the repo ships no setup.py or pyproject.toml, so neither
+`pip install starlink-grpc-tools` nor `pip install git+https://...` works --
+both were tried and both fail. Clone the repo and put it on PYTHONPATH.
+No official API — reverse-engineered but stable/widely used.
+
+[VERIFIED 2026-08-10] on the app interpreter (Python 3.12), this sequence gives
+a working `import starlink_grpc` and a live read:
+
+    pip install grpcio grpcio-tools protobuf yagrc typing-extensions
+    git clone https://github.com/sparky8512/starlink-grpc-tools.git
+    set PYTHONPATH=<clone dir>
+
+status_data() then returned state=CONNECTED with 23 status fields from the dish
+at 192.168.100.1. The remaining entries in the repo's own requirements.txt
+(paho-mqtt, influxdb, pypng, croniter, python-dateutil) are for its dish_grpc_*
+scripts and are NOT needed to import the module.
 
 Field names below follow starlink_grpc's status_data() output.
 [NEEDS VERIFICATION on your firmware] — a Starlink update can shift fields,
@@ -70,8 +85,11 @@ class StarlinkAdapter(DeviceAdapter):
         except ImportError:
             return {
                 'available': False,
-                'reason': "Python package 'starlink-grpc-tools' not installed "
-                          "(pip install starlink-grpc-tools grpcio)",
+                'reason': "Module 'starlink_grpc' not importable. It is not on "
+                          "PyPI: clone sparky8512/starlink-grpc-tools and add it "
+                          "to PYTHONPATH, then "
+                          "'pip install grpcio grpcio-tools protobuf yagrc'. "
+                          "Sim mode needs none of this.",
             }
         try:
             groups = starlink_grpc.status_data()  # (status, obstruction, alerts)

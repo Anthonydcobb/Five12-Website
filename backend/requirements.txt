@@ -32,9 +32,14 @@ beautifulsoup4==4.14.3
 puresnmp==1.11.0.post1
 t61codec==2.0.0
 verlib==0.1
-# Optional — Starlink live telemetry (sim mode works without these):
-# starlink-grpc-tools
+# Optional — Starlink live telemetry (sim mode works without any of this).
+# starlink_grpc is NOT on PyPI and its repo has no packaging metadata, so it
+# cannot be a requirement line at all: clone sparky8512/starlink-grpc-tools and
+# put it on PYTHONPATH. These are the pip deps that module needs:
 # grpcio
+# grpcio-tools
+# protobuf
+# yagrc
 websocket-client==1.9.0
 
 # Bluetooth LE — CRMX/TimoTwo discovery (only imported when FIVE12_BLE_TOOLS=1)
