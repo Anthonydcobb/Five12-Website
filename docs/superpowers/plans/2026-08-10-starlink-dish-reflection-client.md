@@ -745,7 +745,7 @@ Tests prove the mapping. They cannot prove the running backend can reach the dis
 **Files:**
 - Modify: `docs/superpowers/specs/2026-08-10-starlink-dish-reflection-client-design.md` (status + Verification section)
 
-- [ ] **Step 1: Confirm the client works from this machine**
+- [x] **Step 1: Confirm the client works from this machine**
 
 ```bash
 cd C:\dev\Five12-TheApp\backend && "C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; sys.path.insert(0,'.'); from app.integrations.starlink import StarlinkAdapter; s=StarlinkAdapter()._real_status(); print({k: s[k] for k in ('available','state','online','latencyMs','obstructionPct','outagesLastHour','softwareUpdateState')})"
@@ -753,7 +753,7 @@ cd C:\dev\Five12-TheApp\backend && "C:\Users\antho\AppData\Local\Programs\Python
 
 Expected: `available: True` and a plausible obstruction percentage. At design time the dish read ~52% obstructed with `REBOOT_REQUIRED`.
 
-- [ ] **Step 2: Restart the backend**
+- [x] **Step 2: Restart the backend**
 
 It will predate these commits. **Ask Anthony first — it is a live rig.** The command `start.ps1` uses:
 
@@ -762,7 +762,7 @@ $env:FIVE12_BLE_TOOLS='1'; $env:FIVE12_BLE_WRITE='1'; cd backend;
 & "C:\Users\antho\AppData\Local\Programs\Python\Python312\python.exe" -m flask run --port 5000 --no-reload
 ```
 
-- [ ] **Step 3: Confirm the API serves it**
+- [x] **Step 3: Confirm the API serves it**
 
 ```bash
 curl -s http://localhost:5000/api/devices/starlink/status
@@ -770,15 +770,15 @@ curl -s http://localhost:5000/api/devices/starlink/status
 
 Expected: `"available": true` with the mapped keys. If it says the package is not installed, the backend is stale.
 
-- [ ] **Step 4: Confirm on screen**
+- [x] **Step 4: Confirm on screen**
 
 Open the Devices tab, Starlink panel. Expect: state and uptime, the tiles populated, **the obstruction tile in warn colour** (it is over the 5% rule), an outage count and log with readable causes, the device-info line, and the reboot-required chip if the dish still reports it.
 
-- [ ] **Step 5: Confirm nothing else moved**
+- [x] **Step 5: Confirm nothing else moved**
 
 The other Devices tabs (Bolero, Stardust, Cintenna, Astera) still render. The Network tab's DMX and switch tables are unaffected.
 
-- [ ] **Step 6: Update the spec and commit**
+- [x] **Step 6: Update the spec and commit**
 
 Set the status line to `implemented 2026-08-10`, add a Verification section recording what steps 1 and 4 actually showed, and commit.
 

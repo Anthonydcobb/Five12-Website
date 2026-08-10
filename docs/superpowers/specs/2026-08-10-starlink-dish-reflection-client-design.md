@@ -2,7 +2,7 @@
 
 - **Date:** 2026-08-10
 - **Author:** Claude Code, with Anthony
-- **Status:** design approved, not implemented
+- **Status:** implemented 2026-08-10, verified on the rig — see Verification below
 - **Scope:** `StarlinkAdapter`'s real-status path and the tiles the existing
   panel already declares. The panel's layout, the adapter's public contract,
   the history/sparkline plumbing and the simulator path are all unchanged.
@@ -249,3 +249,40 @@ Where the router serves its gRPC endpoint. `9200` is closed on `192.168.1.1`
 and its HTTP is a single-page app with no API behind it. Until that is found
 and a real `wifi_get_clients` response is seen, the Wi-Fi half of the original
 request cannot be designed honestly, and this spec does not attempt it.
+
+## Verification
+
+> **Run 2026-08-10 — `verified on actual gear`.** Backend and dev server both
+> started from this branch's worktree; the dish read is live, not a fixture.
+
+`GET /api/devices/starlink/status` returned 25 keys, `source: grpc`:
+
+    state READY · online true · uptime 6266s · down 0.17 / up 8.56 Mbps
+    latency 19.57 ms · obstruction 36.55% · outages last hour 13
+    REBOOT_REQUIRED · hw rev4_panda_prod2 · sw 2026.05.05.mr79639.1
+    boots 144 · gps valid, 14 sats · eth 1000 Mbps · MOBILE · stowed false
+
+On the Devices tab, Starlink panel: green dot beside **READY**, uptime
+`1h 45m`, three warn chips — obstruction, outages-in-the-last-hour, and the
+reboot-required line. Tiles for Down / Up / Latency / Obstruction / Outages 1h;
+**no SNR tile**. Outage log rendered six entries at readable local times
+(`9:44:57 AM · 0.6s · NO_DOWNLINK`), confirming the event-log clock rather than
+the 2016 one, and readable causes rather than `EVENT_REASON_*` constants.
+Footer line rendered every field.
+
+Nothing else moved: the other four device panels render, and the Network tab
+showed 23 devices online with live sACN universes.
+
+### What the spec got wrong, settled by the capture
+
+- **The open question — the `state` field — does not exist.** `device_state`
+  carries only `uptime_s`. The old `state == 'CONNECTED'` could never have
+  matched. State is derived from `disablement_code`, the `outage` field and
+  `ready_states`. The community wrapper's `'CONNECTED'` is a literal it
+  synthesises when no `outage` field is present, not a word the dish sends.
+- **`dish_get_history` carries two clocks.** `outages[]` is stamped ~2016;
+  `event_log.events[]` is wall clock, 315964782 s ahead. Reading the
+  obvious-sounding one would have left the outage tile permanently at zero.
+- **Wi-Fi remains unavailable** and out of scope: `wifi_get_clients` answers
+  `UNIMPLEMENTED`, and the router at 192.168.1.1 returns an identical 5307-byte
+  `index.html` for every path. Unchanged from the design's open question.
