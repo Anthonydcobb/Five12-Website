@@ -129,7 +129,6 @@ function StarlinkPanel() {
         <Tile label="Latency" value={status.latencyMs} unit="ms" />
         <Tile label="Obstruction" value={status.obstructionPct} unit="%"
           accent={status.obstructionPct > 5 ? 'var(--color-warn)' : undefined} />
-        <Tile label="SNR" value={status.snr} unit="" />
         <Tile label="Outages 1h" value={status.outagesLastHour} unit=""
           accent={status.outagesLastHour > 0 ? 'var(--color-warn)' : undefined} />
       </div>

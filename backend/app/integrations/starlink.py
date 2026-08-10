@@ -214,7 +214,9 @@ class StarlinkAdapter(DeviceAdapter):
             'downMbps': _num(dish.get('downlink_throughput_bps'), 1 / 1e6),
             'upMbps': _num(dish.get('uplink_throughput_bps'), 1 / 1e6),
             'latencyMs': _num(dish.get('pop_ping_latency_ms')),
-            'snr': None,        # dropped from the dish's payload years ago
+            # No snr key: the dish stopped reporting a figure years ago and it
+            # is absent from the captured payload. is_snr_above_noise_floor is
+            # what it reports instead.
             'snrAboveNoiseFloor': dish.get('is_snr_above_noise_floor'),
             'obstructionPct': _num(obstruction.get('fraction_obstructed'), 100),
             'obstructionValidS': _num(obstruction.get('valid_s')),
@@ -254,7 +256,6 @@ class StarlinkAdapter(DeviceAdapter):
             'downMbps': 0.0 if in_outage else round(140 + 60 * math.sin(t / 47) + 15 * math.sin(t / 7), 1),
             'upMbps': 0.0 if in_outage else round(18 + 6 * math.sin(t / 31), 1),
             'latencyMs': None if in_outage else round(38 + 12 * math.sin(t / 23) + (25 if obstruction > 5 else 0), 1),
-            'snr': 9 if not in_outage else 2,
             'snrAboveNoiseFloor': not in_outage,
             'obstructionPct': round(max(0, obstruction), 2),
             'stowed': False,
