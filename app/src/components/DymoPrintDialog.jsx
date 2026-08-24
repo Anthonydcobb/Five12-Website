@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { dymoReady, getPrinters, renderPreview, printMerge } from '../lib/dymo';
 import { parseRangeExpr } from '../lib/rangeExpr';
 
@@ -76,13 +76,17 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   const [mapping, setMapping] = useState({});        // {var: column}
   const [printers, setPrinters] = useState([]);
   const [printer, setPrinter] = useState(localStorage.getItem(LAST_PRINTER_KEY) || '');
+  const [roll, setRoll] = useState('Left');               // TwinTurbo roll, per printer
   const [preview, setPreview] = useState(null);
+  const [previewError, setPreviewError] = useState(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [scopeMode, setScopeMode] = useState('all');   // 'all' | 'custom'
   const [rangeExpr, setRangeExpr] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [printedMsg, setPrintedMsg] = useState(null);
+  const [progress, setProgress] = useState(null);   // {printed, total} while running
+  const abortRef = useRef(null);
 
   const probe = async () => {
     setReady(null);
@@ -92,11 +96,19 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       try {
         const ps = await getPrinters();
         setPrinters(ps);
-        if (ps.length && !ps.includes(printer)) setPrinter(ps[0]);
+        if (ps.length && !ps.some(p => p.name === printer)) setPrinter(ps[0].name);
       } catch { setPrinters([]); }
     }
   };
   useEffect(() => { probe(); }, []);
+  const selectedPrinter = printers.find(p => p.name === printer);
+  useEffect(() => {
+    if (printer) setRoll(localStorage.getItem(`five12_dymo_roll:${printer}`) || 'Left');
+  }, [printer]);
+  const pickRoll = (r) => {
+    setRoll(r);
+    localStorage.setItem(`five12_dymo_roll:${printer}`, r);
+  };
   useEffect(() => {
     fetch('/api/dymo-templates').then(readJson).then(setTemplates).catch(e => setError(e.message));
   }, []);
@@ -131,7 +143,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
   }, [records.length]);
 
   const pickTemplate = async (id) => {
-    setError(null); setPreview(null);
+    setError(null); setPreview(null); setPreviewError(null);
     if (!id) { setTpl(null); return; }
     try {
       const t = await fetch(`/api/dymo-templates/${id}`).then(readJson);
@@ -165,12 +177,20 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
 
   // live preview of the currently-jogged record
   useEffect(() => {
-    if (!tpl || !records.length || ready !== true) { setPreview(null); return; }
+    if (!tpl || !records.length || ready !== true) {
+      setPreview(null); setPreviewError(null); return;
+    }
     const rec = records[Math.min(previewIndex, records.length - 1)];
     let alive = true;
     renderPreview(tpl.labelXml, rec)
-      .then(png => { if (alive) setPreview(png); })
-      .catch(() => { if (alive) setPreview(null); });
+      .then(png => { if (alive) { setPreview(png); setPreviewError(null); } })
+      .catch(err => {
+        // Never swallow this. On DYMO Connect 1.6.1.7 RenderLabel is dead (see
+        // lib/dymo.js), and a silent failure left the pane showing "preview
+        // appears when mapped" — blaming the user for a service fault.
+        console.error('DYMO label preview failed:', err);
+        if (alive) { setPreview(null); setPreviewError(err); }
+      });
     return () => { alive = false; };
   }, [tpl, records, previewIndex, ready]);
 
@@ -179,12 +199,13 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     const max = Math.max(0, records.length - 1);
     const onKey = (e) => {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (busy) return; // renderPreview is a synchronous XHR — jogging mid-run blocks the tab
       if (e.key === 'ArrowLeft') setPreviewIndex(i => Math.max(0, i - 1));
       else if (e.key === 'ArrowRight') setPreviewIndex(i => Math.max(0, Math.min(max, i + 1)));
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [records.length]);
+  }, [records.length, busy]);
 
   // clear the "Printed" confirmation once the print context changes
   useEffect(() => { setPrintedMsg(null); }, [tpl, source, csv, scopeMode, rangeExpr]);
@@ -193,21 +214,44 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
     if (printList.length > 200 &&
         !window.confirm(`Print ${printList.length} labels?`)) return;
     setBusy(true); setError(null); setPrintedMsg(null);
+    setProgress({ printed: 0, total: printList.length });
+    const ac = new AbortController();
+    abortRef.current = ac;
     try {
-      await printMerge(printer, tpl.labelXml, printList);
+      const res = await printMerge(printer, tpl.labelXml, printList, {
+        roll: selectedPrinter?.isTwinTurbo ? roll : undefined,
+        signal: ac.signal,
+        onProgress: setProgress,
+      });
       localStorage.setItem(LAST_PRINTER_KEY, printer);
-      try {
-        const srcKey = source === 'csv' ? 'csv' : 'patch';
-        await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
-      } catch (e) {
-        console.warn('mapping save failed (labels already printed):', e);
+      const unconfirmed = res.unconfirmed || 0;
+      if (res.printed + unconfirmed > 0) {
+        // labels came out — worth remembering the mapping even on a stopped run
+        try {
+          const srcKey = source === 'csv' ? 'csv' : 'patch';
+          await fetch(`/api/dymo-templates/${tpl.id}/mapping`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: srcKey, mapping }) }).then(readJson);
+        } catch (e) {
+          console.warn('mapping save failed (labels already printed):', e);
+        }
       }
-      // Keep the dialog open so the user can print again — they close it via ×/Done.
-      setPrintedMsg(`Printed ${printList.length} label${printList.length === 1 ? '' : 's'}.`);
+      if (res.reason) {
+        setError(`${res.reason} — stopped after ${res.printed} of ${res.total}.`);
+      } else if (unconfirmed > 0) {
+        // Deliberately not the green "printed" banner. These labels were
+        // submitted but the print queue never reported them finishing, so
+        // claiming them would be a claim we cannot support.
+        setError(`${res.stopped ? 'Stopped' : 'Finished'} — ${res.printed} of ${res.total} printed, ` +
+                 `${unconfirmed} unconfirmed. The print queue never reported ` +
+                 `${unconfirmed === 1 ? 'it' : 'them'} finishing — check ${unconfirmed === 1 ? 'it' : 'them'} by hand.`);
+      } else if (res.stopped) {
+        setPrintedMsg(`Stopped — ${res.printed} of ${res.total} printed.`);
+      } else {
+        setPrintedMsg(`Printed ${res.total} label${res.total === 1 ? '' : 's'}.`);
+      }
     } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setProgress(null); abortRef.current = null; }
   };
 
   return (
@@ -215,7 +259,8 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
       <div className="bg-surface border border-border rounded-lg p-6 w-[min(92vw,760px)] max-h-[88vh] overflow-auto shadow-xl">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Print DYMO Labels</h3>
-          <button onClick={onClose} className="text-text-muted hover:text-text text-lg leading-none">×</button>
+          <button onClick={onClose} disabled={busy}
+            className="text-text-muted hover:text-text text-lg leading-none disabled:opacity-40">×</button>
         </div>
 
         {error && <div className="bg-brand-dim/30 border border-brand/40 text-brand-hi text-sm rounded px-3 py-2 mb-3">{error}</div>}
@@ -306,19 +351,31 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
             </table>
             <div className="flex flex-col gap-2">
               <div className="bg-bg border border-border rounded-lg p-3 flex items-center justify-center min-h-[140px]">
-                {preview
-                  ? <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
-                  : <span className="text-text-muted text-xs">preview appears when mapped</span>}
+                {preview ? (
+                  <img alt="label preview" className="max-w-full max-h-[220px]" src={`data:image/png;base64,${preview}`} />
+                ) : previewError ? (
+                  <div className="text-center px-2" title={String(previewError.message || previewError)}>
+                    <div className="text-warn text-xs font-medium">Preview unavailable</div>
+                    <div className="text-text-muted text-[11px] mt-1 leading-snug">
+                      Quit and relaunch DYMO Connect, then reopen this dialog —
+                      its render service gets into a state where it fails every
+                      label until restarted. Printing is unaffected.
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-text-muted text-xs">preview appears when mapped</span>
+                )}
               </div>
               {records.length > 0 && (
                 <div className="flex items-center justify-center gap-2 text-sm text-text-muted">
                   <button type="button" aria-label="previous label"
                     onClick={() => setPreviewIndex(i => Math.max(0, i - 1))}
-                    disabled={previewIndex <= 0}
+                    disabled={previewIndex <= 0 || busy}
                     className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">‹</button>
                   <span className="flex items-center gap-1">
                     Label
                     <input type="number" min={1} max={records.length} value={previewIndex + 1}
+                      disabled={busy}
                       onChange={e => {
                         const n = parseInt(e.target.value, 10);
                         if (!Number.isNaN(n)) setPreviewIndex(Math.min(records.length - 1, Math.max(0, n - 1)));
@@ -328,7 +385,7 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
                   </span>
                   <button type="button" aria-label="next label"
                     onClick={() => setPreviewIndex(i => Math.min(records.length - 1, i + 1))}
-                    disabled={previewIndex >= records.length - 1}
+                    disabled={previewIndex >= records.length - 1 || busy}
                     className="px-2 py-0.5 rounded border border-border disabled:opacity-30 hover:bg-surface-2">›</button>
                 </div>
               )}
@@ -358,17 +415,39 @@ export default function DymoPrintDialog({ patchRows, selectedRows, onClose }) {
               <select value={printer} onChange={e => setPrinter(e.target.value)}
                 className="bg-bg border border-border rounded px-2 py-1 text-text">
                 {printers.length === 0 && <option value="">none found</option>}
-                {printers.map(p => <option key={p} value={p}>{p}</option>)}
+                {printers.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
               </select>
             </label>
+            {selectedPrinter?.isTwinTurbo && (
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-text-muted">Roll</span>
+                <button type="button" onClick={() => pickRoll('Left')}
+                  className={`px-3 py-1.5 rounded border ${roll==='Left' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>Left</button>
+                <button type="button" onClick={() => pickRoll('Right')}
+                  className={`px-3 py-1.5 rounded border ${roll==='Right' ? 'border-brand text-brand-hi' : 'border-border text-text-muted'}`}>Right</button>
+              </div>
+            )}
           </div>
-          <div className="flex gap-3">
-            <button onClick={onClose} className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm">Cancel</button>
-            <button onClick={doPrint}
-              disabled={busy || !tpl || !printer || printList.length === 0 || ready !== true}
-              className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
-              {busy ? 'Printing…' : (scopeMode === 'all' ? `Print all ${records.length}` : `Print ${printList.length} labels`)}
-            </button>
+          <div className="flex items-center gap-3">
+            {busy && progress && (
+              <span className="text-sm text-text-muted">
+                Printing {Math.min(progress.printed + 1, progress.total)} of {progress.total}…
+              </span>
+            )}
+            <button onClick={onClose} disabled={busy}
+              className="px-4 py-2 bg-surface-2 hover:bg-border rounded text-sm disabled:opacity-40">Cancel</button>
+            {busy ? (
+              <button onClick={() => abortRef.current?.abort()}
+                className="px-4 py-2 bg-brand-dim/40 border border-brand/40 text-brand-hi hover:bg-brand-dim/60 rounded text-sm font-medium">
+                Stop
+              </button>
+            ) : (
+              <button onClick={doPrint}
+                disabled={!tpl || !printer || printList.length === 0 || ready !== true}
+                className="px-4 py-2 bg-online hover:brightness-110 text-bg rounded text-sm font-medium disabled:opacity-40">
+                {scopeMode === 'all' ? `Print all ${records.length}` : `Print ${printList.length} labels`}
+              </button>
+            )}
           </div>
         </div>
       </div>

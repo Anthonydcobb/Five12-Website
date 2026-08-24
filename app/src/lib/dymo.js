@@ -1,5 +1,5 @@
 // app/src/lib/dymo.js — thin async wrapper over the vendored framework.
-import { mergeLabel, buildLabelSetXml, blankLabel } from './labelMerge';
+import { mergeLabel } from './labelMerge';
 
 let _fw = null;
 let _loading = null;
@@ -56,29 +56,182 @@ export async function getPrinters() {
   const f = await fw();
   return f.getPrinters()
     .filter((p) => p.printerType === 'LabelWriterPrinter')
-    .map((p) => p.name);
+    .map((p) => ({ name: p.name, isTwinTurbo: !!p.isTwinTurbo }));
 }
 
+// Can reject even when DYMO Connect looks healthy, so callers must surface the
+// failure rather than treat a missing preview as "not mapped yet" — see
+// DymoPrintDialog.
+//
+// History worth keeping: RenderLabel answered HTTP 500 with an empty body for
+// EVERY input for an entire session — stored template, minimal DesktopLabel,
+// even no parameters — while PrintLabel accepted the same XML and returned 200.
+// The Windows Application log showed the handler throwing before it read the
+// request (System.IO.FileNotFoundException on 'System.Xml.XmlSerializer'),
+// which we misread as the assembly being absent from DYMO's single-file bundle,
+// i.e. permanently broken in 1.6.1.7. It is not. The DYMO.WebApi.Win.Host
+// process had gone bad; it later died outright, and a freshly started host
+// renders the same template to a PNG on the first try. So: a 500 here means
+// RESTART THE HOST (DYMO.WebApi.Win.Host.exe, or quit and relaunch DYMO
+// Connect), not that previews are unsupported.
 export async function renderPreview(labelXml, values) {
   const f = await fw();
   return f.renderLabel(mergeLabel(labelXml, values), '', '');
 }
 
-export async function printMerge(printerName, labelXml, records) {
+// One printLabelAsync job per record, strictly sequenced: submit a label,
+// wait for the printer's queue to fully drain, only then submit the next.
+// The service returns from PrintLabel as soon as it ACCEPTS a job — not when
+// the label finishes feeding — so firing jobs back-to-back makes the
+// LabelWriter start a new job mid-feed and re-seek the label gap (the
+// "buzz"/misregistration). Batching alternatives are ruled out by evidence:
+// the service 400s on any non-empty labelSetXml (see labelMerge.js), and
+// physical tests show the embedded DataTable never drives the label count.
+//
+// Status is NOT sourced from the DYMO service — on DYMO Connect 1.6.1.7 that
+// path does not exist: the vendored DlsWebService has no getJobStatus method
+// (framework.job.getStatus() always answers Unknown/"not implemented"),
+// PrintLabel2 returns `true` rather than a job id, and the service's
+// GetJobStatus HTTP endpoint 404s identically to a nonexistent route. So we
+// submit with the simpler printLabelAsync (its return value is unused —
+// PrintLabel2's "job id" was never usable either) and read status from the
+// Windows print spooler instead, via the backend's GET /api/print-queue.
+// DYMO jobs verifiably land in the spooler under the same printer name and
+// drain in ~1.8s.
+//
+// opts.roll ('Left'|'Right') is passed only for Twin Turbo printers — it pins
+// the roll via LabelWriterPrintParams. opts.signal stops the run between
+// labels (the service has no cancel endpoint, so the label in flight always
+// completes). opts.onProgress fires after each label finishes.
+// A GAP between polls, not a period: the backend probe spawns PowerShell and
+// enumerates printers, measured at ~736 ms on the show rig, so the real cycle
+// is that plus this — about 1.1 s, not 400 ms. The loop awaits each probe
+// before sleeping, so polls cannot stack; the number below only controls how
+// long we idle between them. Budget accordingly when reading JOB_CEILING_MS:
+// 15 s is roughly a dozen polls, not thirty-seven.
+const QUEUE_POLL_GAP_MS = 400;
+const APPEAR_GRACE_MS = 2000;
+const JOB_CEILING_MS = 15000;
+// When a label could not be confirmed — the queue never drained, or the job
+// never showed up in the spooler at all — we have no evidence the feed has
+// finished. Submitting immediately is what causes the printer to start a new
+// job mid-feed. Wait out a conservative feed's worth before the next label.
+const UNCONFIRMED_SETTLE_MS = 2000;
+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+async function fetchQueue(printerName) {
+  const res = await fetch(`/api/print-queue?printer=${encodeURIComponent(printerName)}`);
+  if (!res.ok) throw new Error(`print-queue request failed (${res.status})`);
+  return res.json();
+}
+
+const PAPER_FAULT = /PaperOut|PaperProblem|PaperJam/;
+const ERROR_FAULT = /Error|Offline/;
+
+// Both the printer and the individual job can report trouble, and they don't
+// agree: Windows PrintJobStatus is a FLAGS enum whose ToString() yields names
+// like "Printing, PaperOut", so a job can carry a paper-out while Get-Printer
+// still says Normal. Checking only the printer there let a run keep feeding an
+// empty printer and finish reporting success. So both sources get both tests,
+// and paper is checked before error in both — a job reporting "Error, PaperOut"
+// should tell the operator the actionable half.
+function faultFrom(q) {
+  const ps = q.printerStatus || '';
+  const jobs = (q.jobs || []).map((j) => j.status || '');
+  if (PAPER_FAULT.test(ps) || jobs.some((s) => PAPER_FAULT.test(s))) return 'Paper out';
+  if (ERROR_FAULT.test(ps) || jobs.some((s) => ERROR_FAULT.test(s))) return 'Printer error';
+  return null;
+}
+
+// Wait for one submitted label to leave the spooler queue, reading status
+// from the backend's spooler probe rather than the (nonexistent) DYMO job
+// status.
+//
+// Returns {fault, confirmed}. CONFIRMED is the load-bearing part: it means a
+// job was actually observed in the queue and then observed to leave it. Only
+// that is evidence the label finished feeding.
+//
+// Two phases. APPEAR waits up to APPEAR_GRACE_MS for jobCount > 0, because the
+// service ACKs before the job reaches the spooler. If the grace expires with
+// no job ever seen, that is NOT a drain — "no job seen" and "the job came and
+// went" are indistinguishable from here, and treating them alike released the
+// next label on top of a feed still running. It reports unconfirmed instead.
+// DRAIN then polls until jobCount === 0.
+//
+// A fetch rejection or non-200 is treated as a transient backend hiccup and
+// just keeps polling, subject to the ceiling — it must never abort the run.
+// Hitting the ceiling reports unconfirmed: the code knows it never saw the
+// queue drain, so claiming the label would be a claim it cannot support.
+//
+// An abort stops the WAIT, not the label, so Stop needn't outlast a slow
+// label. That case stays confirmed — the service has no cancel endpoint, so
+// the in-flight label genuinely completes.
+async function awaitQueueDrain(printerName, signal) {
+  const deadline = Date.now() + JOB_CEILING_MS;
+  const appearDeadline = Date.now() + APPEAR_GRACE_MS;
+  let sawJob = false;
+
+  // Phase 1: APPEAR
+  for (;;) {
+    if (signal?.aborted) return { fault: null, confirmed: true };
+    if (Date.now() >= deadline) return { fault: null, confirmed: false };
+    let q;
+    try { q = await fetchQueue(printerName); } catch { q = null; }
+    if (q) {
+      const fault = faultFrom(q);
+      if (fault) return { fault, confirmed: false };
+      if (q.jobCount > 0) { sawJob = true; break; }
+    }
+    if (Date.now() >= appearDeadline) break;
+    await sleep(QUEUE_POLL_GAP_MS);
+  }
+
+  // The grace expired without the job ever showing up. That is "no job seen",
+  // which is NOT the same as "the job came and went" — and the two are
+  // indistinguishable from here. Falling into DRAIN would read the empty queue
+  // as a completed drain and release the next label on top of a feed that may
+  // still be running. Report it unconfirmed instead and let the caller settle.
+  if (!sawJob) return { fault: null, confirmed: false };
+
+  // Phase 2: DRAIN
+  for (;;) {
+    if (signal?.aborted) return { fault: null, confirmed: true };
+    if (Date.now() >= deadline) return { fault: null, confirmed: false };
+    let q;
+    try { q = await fetchQueue(printerName); } catch { q = null; }
+    if (q) {
+      const fault = faultFrom(q);
+      if (fault) return { fault, confirmed: false };
+      if (q.jobCount === 0) return { fault: null, confirmed: true };
+    }
+    await sleep(QUEUE_POLL_GAP_MS);
+  }
+}
+
+export async function printMerge(printerName, labelXml, records, opts = {}) {
+  const { roll, signal, onProgress } = opts;
   const f = await fw();
-  const boxNames = records.length ? Object.keys(records[0]) : [];
-  if (boxNames.length) {
-    // One continuous job for all records: empty the mapped boxes, then feed the
-    // values via a LabelSet. Boxes MUST be empty first — the DYMO service appends
-    // ObjectData onto existing text, so an empty box yields the value alone
-    // (printing the populated template directly is what doubled the text before).
-    const blankXml = blankLabel(labelXml, boxNames);
-    const setXml = buildLabelSetXml(records, boxNames);
-    f.printLabel(printerName, '', blankXml, setXml);
-    return;
-  }
-  // No mapped boxes to merge — print each record's label as-is.
+  const paramsXml = roll
+    ? f.createLabelWriterPrintParamsXml({ copies: 1, twinTurboRoll: roll })
+    : '';
+  const total = records.length;
+  let printed = 0;
+  let unconfirmed = 0;
   for (const rec of records) {
-    f.printLabel(printerName, '', mergeLabel(labelXml, rec), '');
+    if (signal?.aborted) return { printed, unconfirmed, total, stopped: true, reason: null };
+    await f.printLabelAsync(printerName, paramsXml, mergeLabel(labelXml, rec), '');
+    const { fault, confirmed } = await awaitQueueDrain(printerName, signal);
+    if (fault) return { printed, unconfirmed, total, stopped: true, reason: fault };
+    if (confirmed) {
+      printed += 1;
+    } else {
+      // Submitted, never seen to finish. Counting it as printed would be a
+      // claim we cannot support; the operator needs to check these by hand.
+      unconfirmed += 1;
+      await sleep(UNCONFIRMED_SETTLE_MS);
+    }
+    if (onProgress) onProgress({ printed, unconfirmed, total });
   }
+  return { printed, unconfirmed, total, stopped: false, reason: null };
 }
